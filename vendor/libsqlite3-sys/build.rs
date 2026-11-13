@@ -97,6 +97,19 @@ mod build_bundled {
 
     use super::{is_compiler, win_target};
 
+    /// The DoltLite-specific defines (the SQLITE_* ones show up in
+    /// `PRAGMA compile_options`). Also published to crates/dolt-exec, which
+    /// folds them into the engine digest.
+    const DOLTLITE_CFLAGS: &[&str] = &[
+        // Flags the @dolthub/doltlite binding.gyp adds.
+        "-DDOLTLITE_PROLLY=1",
+        "-DBLAKE3_NO_SSE41=1",
+        "-DBLAKE3_NO_AVX2=1",
+        "-DBLAKE3_NO_AVX512=1",
+        // celld patch 0001: new files default to the stock engine.
+        "-DDOLTLITE_DEFAULT_STOCK=1",
+    ];
+
     pub fn main(out_dir: &str, out_path: &Path) {
         let lib_name = super::lib_name();
 
@@ -171,6 +184,11 @@ mod build_bundled {
         }
         super::copy_bindings(lib_name, "bindgen_bundled_version", out_path);
         println!("cargo:include={}", work.display());
+        // Build identity for celld's engine digest (crates/dolt-exec): where
+        // the patch set lives, and the compile flags below (kept in one list
+        // so the two cannot drift).
+        println!("cargo:doltlite_patches={}", manifest.join("doltlite/patches").display());
+        println!("cargo:doltlite_cflags={}", DOLTLITE_CFLAGS.join(" "));
 
         let mut cfg = cc::Build::new();
         cfg.file(work.join("sqlite3.c"))
@@ -201,15 +219,11 @@ mod build_bundled {
             .flag("-DSQLITE_USE_URI")
             .flag("-DHAVE_USLEEP=1")
             .flag("-D_POSIX_THREAD_SAFE_FUNCTIONS") // cross compile with MinGW
-            // Flags the @dolthub/doltlite binding.gyp adds.
-            .flag("-DDOLTLITE_PROLLY=1")
             .define("DOLTLITE_VERSION", "\"0.51.11\"")
-            .flag("-DBLAKE3_NO_SSE41=1")
-            .flag("-DBLAKE3_NO_AVX2=1")
-            .flag("-DBLAKE3_NO_AVX512=1")
-            // celld patch: new files default to the stock engine.
-            .flag("-DDOLTLITE_DEFAULT_STOCK=1")
             .warnings(false);
+        for flag in DOLTLITE_CFLAGS {
+            cfg.flag(flag);
+        }
         // The BLAKE3 SIMD sources the amalgamation leaves out (binding.gyp
         // compiles the SSE2 / NEON ones; the wider ones are disabled above).
         match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {

@@ -1,0 +1,451 @@
+celld patch 0002: per-connection deterministic execution context.
+
+Why. Chronolog Spec 10 executes each replicated transaction with the engine's
+non-SQL inputs pinned: the clock, the PRNG, the timezone and the per-statement
+counters. Chronolog's addon pins them process-wide (a wrapper default VFS,
+SQLITE_TESTCTRL_PRNG_SEED, SQLITE_TESTCTRL_LOCALTIME_FAULT). celld runs many
+cells on many threads, so every one of those must be per connection. This patch
+adds sqlite3.pDetCtx, set with sqlite3_doltlite_set_det_context() and cleared
+with sqlite3_doltlite_clear_det_context() (or at close). While it is set, only
+that connection sees:
+
+  1. the clock: every 'now'/date function (sqlite3StmtCurrentTime) and every
+     Dolt timestamp (commit, merge, cherry-pick, revert, rebase commits, the
+     dolt_diff/dolt_log working-set slice time, and the tag time, which used
+     libc time(0)) goes through sqlite3DbCurrentTimeInt64() instead of
+     sqlite3OsCurrentTimeInt64(db->pVfs, ...);
+  2. a private ChaCha20 PRNG, seeded like SQLITE_TESTCTRL_PRNG_SEED seeds the
+     global one, behind random(), randomblob(), random rowids (OP_NewRowid
+     after MAX_ROWID), result-column-name dedup suffixes (which can reach
+     CREATE TABLE AS) and the "Initialize data repository" seed-commit nonce;
+     pager, WAL and VACUUM randomness keeps using the global PRNG, so it can
+     no longer perturb the deterministic stream;
+  3. UTC as the local timezone ('localtime' and 'utc' modifiers);
+  4. optionally last_insert_rowid() and changes() reset to 0.
+
+The seed commit of a NEW prolly store is written inside sqlite3_open_v2,
+before the caller holds a handle. The open-time URI parameters
+doltlite_det_ms=<unix ms> and doltlite_det_seed=<integer> pin it, so two
+independently created stores get the same genesis hash.
+
+Checked while writing this (0.51.11): dolt_commit --date already carries an
+explicit "has timestamp" flag, so --date 1970-01-01T00:00:00Z (epoch 0) is not
+treated as unset; the zero-timestamp sentinel the design note describes was in
+0.11.x. Not patched: vec1 (the ANN module seeds its k-means from the global
+PRNG, so the celld authorizer profile denies it) and the FTS5 per-connection
+locale header (fts5_locale() is denied likewise).
+
+--- a/sqlite3.c
++++ b/sqlite3.c
+@@ -6998,6 +6998,27 @@
+ SQLITE_API int sqlite3_set_clientdata(sqlite3*, const char*, void*, void(*)(void*));
+ 
+ /*
++** celld: per-connection deterministic execution context.
++**
++** While a context is set on a connection, that connection (and no other)
++** sees: a pinned clock for 'now', CURRENT_TIMESTAMP, unixepoch() and every
++** Dolt commit/tag timestamp; a private PRNG, seeded from the arguments, for
++** random(), randomblob(), random rowids and the Dolt seed-commit nonce; and
++** optionally UTC as the local timezone. See patch 0002 in celld's
++** vendor/libsqlite3-sys/doltlite/patches for the full contract.
++**
++** sqlite3_doltlite_set_det_context() returns SQLITE_OK, SQLITE_MISUSE (NULL
++** handle or unknown flag bits) or SQLITE_RANGE (unixMs outside
++** 0..253402300799999). Setting a context twice replaces the first. Clearing
++** a connection with no context is a no-op.
++*/
++#define SQLITE_DOLTLITE_DET_UTC_LOCALTIME   0x01  /* localtime == UTC */
++#define SQLITE_DOLTLITE_DET_RESET_COUNTERS  0x02  /* last_insert_rowid()=0, changes()=0 */
++SQLITE_API int sqlite3_doltlite_set_det_context(sqlite3*, sqlite3_int64 unixMs, sqlite3_uint64 seed, unsigned int flags);
++SQLITE_API int sqlite3_doltlite_clear_det_context(sqlite3*);
++SQLITE_API int sqlite3_doltlite_det_context_active(sqlite3*);
++
++/*
+ ** CAPI3REF: Constants Defining Special Destructor Behavior
+ **
+ ** These are special values for the destructor that is passed in as the
+@@ -19296,6 +19317,7 @@
+ /*
+ ** Each database connection is an instance of the following structure.
+ */
++typedef struct DetCtx DetCtx;   /* celld: per-connection deterministic context */
+ struct sqlite3 {
+   sqlite3_vfs *pVfs;            /* OS Interface */
+   struct Vdbe *pVdbe;           /* List of active virtual machines */
+@@ -19437,6 +19459,7 @@
+   i64 nDeferredImmCons;         /* Net deferred immediate constraints */
+   int *pnBytesFreed;            /* If not NULL, increment this in DbFree() */
+   DbClientData *pDbData;        /* sqlite3_set_clientdata() content */
++  DetCtx *pDetCtx;              /* celld: deterministic clock/PRNG/UTC, or 0 */
+   u64 nSpill;                   /* TEMP content spilled to disk */
+ #ifdef SQLITE_ENABLE_UNLOCK_NOTIFY
+   /* The following variables are all protected by the STATIC_MAIN
+@@ -23549,6 +23572,11 @@
+ SQLITE_PRIVATE FuncDef *sqlite3VtabOverloadFunction(sqlite3 *,FuncDef*, int nArg, Expr*);
+ SQLITE_PRIVATE void sqlite3VtabUsesAllSchemas(Parse*);
+ SQLITE_PRIVATE sqlite3_int64 sqlite3StmtCurrentTime(sqlite3_context*);
++SQLITE_PRIVATE int sqlite3DbCurrentTimeInt64(sqlite3*, sqlite3_int64*);
++SQLITE_PRIVATE void sqlite3DbRandomness(sqlite3*, int, void*);
++SQLITE_PRIVATE int sqlite3DbDetUtc(sqlite3*);
++SQLITE_PRIVATE void sqlite3DetCtxFree(sqlite3*);
++SQLITE_PRIVATE int sqlite3DetCtxFromUri(sqlite3*, const char*);
+ SQLITE_PRIVATE int sqlite3VdbeParameterIndex(Vdbe*, const char*, int);
+ SQLITE_PRIVATE int sqlite3TransferBindings(sqlite3_stmt *, sqlite3_stmt *);
+ SQLITE_PRIVATE void sqlite3ParseObjectInit(Parse*,sqlite3*);
+@@ -28358,6 +28386,27 @@
+ }
+ #endif /* SQLITE_OMIT_LOCALTIME */
+ 
++#ifndef SQLITE_OMIT_LOCALTIME
++/*
++** celld: the UTC stand-in for osLocaltime(), used while the connection's
++** deterministic context asks for UTC. Returns 0 on success.
++*/
++static int osGmtimeDet(time_t *t, struct tm *pTm){
++#if HAVE_GMTIME_R
++  return gmtime_r(t, pTm)==0;
++#elif defined(_WIN32)
++  return gmtime_s(pTm, t)!=0;
++#else
++  struct tm *pX;
++  sqlite3_mutex_enter(sqlite3MutexAlloc(SQLITE_MUTEX_STATIC_MAIN));
++  pX = gmtime(t);
++  if( pX ) *pTm = *pX;
++  sqlite3_mutex_leave(sqlite3MutexAlloc(SQLITE_MUTEX_STATIC_MAIN));
++  return pX==0;
++#endif
++}
++#endif /* SQLITE_OMIT_LOCALTIME */
++
+ 
+ #ifndef SQLITE_OMIT_LOCALTIME
+ /*
+@@ -28394,7 +28443,8 @@
+     iYearDiff = 0;
+     t = (time_t)(p->iJD/1000 -  21086676*(i64)10000);
+   }
+-  if( osLocaltime(&t, &sLocal) ){
++  if( (sqlite3DbDetUtc(sqlite3_context_db_handle(pCtx))
++         ? osGmtimeDet(&t, &sLocal) : osLocaltime(&t, &sLocal)) ){
+     sqlite3_result_error(pCtx, "local time unavailable", -1);
+     return SQLITE_ERROR;
+   }
+@@ -100016,7 +100066,7 @@
+   sqlite3_int64 *piTime = p->pVdbe!=0 ? &p->pVdbe->iCurrentTime : &iTime;
+ #endif
+   if( *piTime==0 ){
+-    rc = sqlite3OsCurrentTimeInt64(p->pOut->db->pVfs, piTime);
++    rc = sqlite3DbCurrentTimeInt64(p->pOut->db, piTime);
+     if( rc ) *piTime = 0;
+   }
+   return *piTime;
+@@ -108543,7 +108593,7 @@
+ #endif
+       cnt = 0;
+       do{
+-        sqlite3_randomness(sizeof(v), &v);
++        sqlite3DbRandomness(db, sizeof(v), &v);
+         v &= (MAX_ROWID>>1); v++;  /* Ensure that v is greater than zero */
+       }while(  ((rc = sqlite3BtreeTableMoveto(pC->uc.pCursor, (u64)v,
+                                                  0, &res))==SQLITE_OK)
+@@ -142794,7 +142844,7 @@
+ ){
+   sqlite_int64 r;
+   UNUSED_PARAMETER2(NotUsed, NotUsed2);
+-  sqlite3_randomness(sizeof(r), &r);
++  sqlite3DbRandomness(sqlite3_context_db_handle(context), sizeof(r), &r);
+   if( r<0 ){
+     /* We need to prevent a random number of 0x8000000000000000
+     ** (or -9223372036854775808) since when you do abs() of that
+@@ -142828,7 +142878,7 @@
+   }
+   p = contextMalloc(context, n);
+   if( p ){
+-    sqlite3_randomness(n, p);
++    sqlite3DbRandomness(sqlite3_context_db_handle(context), (int)n, p);
+     sqlite3_result_blob(context, (char*)p, n, sqlite3_free);
+   }
+ }
+@@ -160647,7 +160697,7 @@
+       zName = sqlite3MPrintf(db, "%.*z:%u", nName, zName, ++cnt);
+       sqlite3ProgressCheck(pParse);
+       if( cnt>3 ){
+-        sqlite3_randomness(sizeof(cnt), &cnt);
++        sqlite3DbRandomness(db, sizeof(cnt), &cnt);
+       }
+     }
+     pCol->zCnName = zName;
+@@ -200201,6 +200251,7 @@
+     if( p->xDestructor ) p->xDestructor(p->pData);
+     sqlite3_free(p);
+   }
++  sqlite3DetCtxFree(db);
+ 
+   /* Convert the connection into a zombie and then close it.
+   */
+@@ -504681,7 +504732,18 @@
+ 
+   *ppBtree = p;
+ 
+-  rc = hasMainBtree ? SQLITE_OK : registerDoltiteFunctions(db);
++  {
++    /* celld: a new store's seed ("Initialize data repository") commit is
++    ** written while registering the Dolt functions, before the caller has a
++    ** handle to call sqlite3_doltlite_set_det_context() on. The URI
++    ** parameters doltlite_det_ms / doltlite_det_seed pin it. */
++    int bDetUri = 0;
++    if( !hasMainBtree && (vfsFlags & SQLITE_OPEN_MAIN_DB)!=0 ){
++      bDetUri = sqlite3DetCtxFromUri(db, zFilename);
++    }
++    rc = hasMainBtree ? SQLITE_OK : registerDoltiteFunctions(db);
++    if( bDetUri ) sqlite3_doltlite_clear_det_context(db);
++  }
+   if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
+     *ppBtree = 0;
+     releaseOpenStoreFilename(zStoreFilename, bStoreUri);
+@@ -529323,7 +529385,7 @@
+     c.timestamp = explicitTimestamp;
+   }else{
+     i64 now;
+-    rc = sqlite3OsCurrentTimeInt64(db->pVfs, &now);
++    rc = sqlite3DbCurrentTimeInt64(db, &now);
+     if( rc!=SQLITE_OK ) goto create_commit_done;
+     c.timestamp = now/1000 - 210866760000LL;
+   }
+@@ -529398,7 +529460,7 @@
+   ProllyHash empty;
+   u64 nonce[2];
+   char zMessage[96];
+-  sqlite3_randomness(sizeof(nonce),nonce);
++  sqlite3DbRandomness(db,sizeof(nonce),nonce);
+   sqlite3_snprintf(sizeof(zMessage),zMessage,
+       "Initialize data repository (%016llx%016llx)",nonce[0],nonce[1]);
+   memset(&empty,0,sizeof(empty));
+@@ -550792,7 +550854,7 @@
+ 
+   if( doltliteRefIsWorking(zRef) || doltliteRefIsStaged(zRef) ){
+     if( !pCur->sliceTime ){
+-      rc = sqlite3OsCurrentTimeInt64(db->pVfs, &pCur->sliceTime);
++      rc = sqlite3DbCurrentTimeInt64(db, &pCur->sliceTime);
+       if( rc!=SQLITE_OK ) return rc;
+     }
+     pEnd->date = pCur->sliceTime/1000 - 10000*(i64)21086676;
+@@ -556332,7 +556394,15 @@
+     m.zTagger = doltliteGetAuthorName(db);
+     m.zEmail  = doltliteGetAuthorEmail(db);
+   }
+-  m.timestamp = (i64)time(0);
++  {
++    /* celld: tag time comes from the connection clock, not libc time(). */
++    sqlite3_int64 nowTag = 0;
++    if( sqlite3DbCurrentTimeInt64(db, &nowTag)==SQLITE_OK ){
++      m.timestamp = nowTag/1000 - 210866760000LL;
++    }else{
++      m.timestamp = (i64)time(0);
++    }
++  }
+   m.zMessage = zMessage ? zMessage : "";
+   m.zName = arg0;
+ 
+@@ -581018,7 +581088,7 @@
+   }else if( doltliteRefIsWorking(zRef) || doltliteRefIsStaged(zRef) ){
+     i64 now = 0;
+     rc = doltliteResolveCatalogHashForRef(db, zRef, &pEnd->cat);
+-    if( rc==SQLITE_OK ) rc = sqlite3OsCurrentTimeInt64(db->pVfs, &now);
++    if( rc==SQLITE_OK ) rc = sqlite3DbCurrentTimeInt64(db, &now);
+     pEnd->date = now/1000 - 10000*(i64)21086676;
+     pEnd->hasDate = 1;
+     memcpy(pEnd->zLabel, doltliteRefIsWorking(zRef) ? "WORKING" : "STAGED",
+@@ -603681,6 +603751,161 @@
+ 
+ /************** End of doltlite_http_remote.c ********************************/
+ /************** doltlite: END prolly engine + version-control layer **********/
++
++/************** celld: per-connection deterministic context ******************/
++/*
++** A connection's DetCtx holds the three engine inputs that Chronolog Spec 10
++** pins per transaction: the clock, the PRNG and the timezone. It hangs off
++** sqlite3.pDetCtx, is only read by the owning connection (under its mutex)
++** and is freed at close, so concurrent connections never see each other's
++** context. This replaces the process-global approach (a default-VFS wrapper,
++** SQLITE_TESTCTRL_PRNG_SEED and SQLITE_TESTCTRL_LOCALTIME_FAULT).
++*/
++struct DetCtx {
++  sqlite3_int64 iJulianMs;    /* Julian day number in ms, as the VFS clock */
++  unsigned int flags;         /* SQLITE_DOLTLITE_DET_* */
++  u32 s[16];                  /* ChaCha20 state, same layout as random.c */
++  u8 out[64];                 /* Output bytes */
++  u8 n;                       /* Output bytes remaining */
++};
++
++#define DET_UNIX_TO_JULIAN_MS 210866760000000LL
++#define DET_MAX_UNIX_MS 253402300799999LL
++#define DET_KNOWN_FLAGS (SQLITE_DOLTLITE_DET_UTC_LOCALTIME \
++                        |SQLITE_DOLTLITE_DET_RESET_COUNTERS)
++
++/* Seed the private ChaCha20 stream exactly as random.c seeds the global one
++** under SQLITE_TESTCTRL_PRNG_SEED: key words 0 and 1 carry the seed (the
++** low 32 bits first), everything else is zero. A seed below 2^32 therefore
++** yields the same stream as the Chronolog 0.11.29 addon. */
++static void detPrngSeed(DetCtx *p, sqlite3_uint64 seed){
++  static const u32 chacha20_init[] = {
++    0x61707865, 0x3320646e, 0x79622d32, 0x6b206574
++  };
++  memset(p->s, 0, sizeof(p->s));
++  memcpy(&p->s[0], chacha20_init, 16);
++  p->s[4] = (u32)(seed & 0xffffffffu);
++  p->s[5] = (u32)(seed >> 32);
++  p->n = 0;
++}
++
++SQLITE_API int sqlite3_doltlite_set_det_context(
++  sqlite3 *db,
++  sqlite3_int64 unixMs,
++  sqlite3_uint64 seed,
++  unsigned int flags
++){
++  DetCtx *p;
++  if( db==0 || (flags & ~(unsigned int)DET_KNOWN_FLAGS)!=0 ) return SQLITE_MISUSE;
++  if( unixMs<0 || unixMs>DET_MAX_UNIX_MS ) return SQLITE_RANGE;
++  sqlite3_mutex_enter(db->mutex);
++  p = db->pDetCtx;
++  if( p==0 ){
++    p = (DetCtx*)sqlite3_malloc64(sizeof(*p));
++    if( p==0 ){
++      sqlite3_mutex_leave(db->mutex);
++      return SQLITE_NOMEM;
++    }
++    db->pDetCtx = p;
++  }
++  memset(p, 0, sizeof(*p));
++  p->iJulianMs = unixMs + DET_UNIX_TO_JULIAN_MS;
++  p->flags = flags;
++  detPrngSeed(p, seed);
++  if( flags & SQLITE_DOLTLITE_DET_RESET_COUNTERS ){
++    db->lastRowid = 0;
++    db->nChange = 0;
++  }
++  sqlite3_mutex_leave(db->mutex);
++  return SQLITE_OK;
++}
++
++SQLITE_API int sqlite3_doltlite_clear_det_context(sqlite3 *db){
++  if( db==0 ) return SQLITE_MISUSE;
++  sqlite3_mutex_enter(db->mutex);
++  sqlite3DetCtxFree(db);
++  sqlite3_mutex_leave(db->mutex);
++  return SQLITE_OK;
++}
++
++SQLITE_API int sqlite3_doltlite_det_context_active(sqlite3 *db){
++  return db!=0 && db->pDetCtx!=0;
++}
++
++SQLITE_PRIVATE void sqlite3DetCtxFree(sqlite3 *db){
++  DetCtx *p = db->pDetCtx;
++  if( p ){
++    db->pDetCtx = 0;
++    memset(p, 0, sizeof(*p));
++    sqlite3_free(p);
++  }
++}
++
++/* Open-time pinning for a new store's genesis commit. Returns 1 when a
++** context was installed (the caller clears it once the store is seeded). */
++SQLITE_PRIVATE int sqlite3DetCtxFromUri(sqlite3 *db, const char *zFilename){
++  const char *zMs;
++  const char *zSeed;
++  sqlite3_int64 ms = 0;
++  sqlite3_uint64 seed = 0;
++  if( zFilename==0 ) return 0;
++  zMs = sqlite3_uri_parameter(zFilename, "doltlite_det_ms");
++  if( zMs==0 || zMs[0]==0 ) return 0;
++  zSeed = sqlite3_uri_parameter(zFilename, "doltlite_det_seed");
++  if( sqlite3Atoi64(zMs, &ms, sqlite3Strlen30(zMs), SQLITE_UTF8)!=SQLITE_OK ){
++    return 0;
++  }
++  if( zSeed ){
++    sqlite3_int64 s2 = 0;
++    if( sqlite3Atoi64(zSeed, &s2, sqlite3Strlen30(zSeed), SQLITE_UTF8)==SQLITE_OK ){
++      seed = (sqlite3_uint64)s2;
++    }
++  }
++  return sqlite3_doltlite_set_det_context(db, ms, seed,
++                                SQLITE_DOLTLITE_DET_UTC_LOCALTIME)==SQLITE_OK;
++}
++
++/* The connection clock: the pinned time while a context is set, otherwise
++** the VFS clock. Every date function and every Dolt timestamp goes here. */
++SQLITE_PRIVATE int sqlite3DbCurrentTimeInt64(sqlite3 *db, sqlite3_int64 *pTime){
++  if( db->pDetCtx ){
++    *pTime = db->pDetCtx->iJulianMs;
++    return SQLITE_OK;
++  }
++  return sqlite3OsCurrentTimeInt64(db->pVfs, pTime);
++}
++
++SQLITE_PRIVATE int sqlite3DbDetUtc(sqlite3 *db){
++  return db!=0 && db->pDetCtx!=0
++      && (db->pDetCtx->flags & SQLITE_DOLTLITE_DET_UTC_LOCALTIME)!=0;
++}
++
++/* sqlite3_randomness() for code that has a connection: the private stream
++** while a context is set, the global PRNG otherwise. */
++SQLITE_PRIVATE void sqlite3DbRandomness(sqlite3 *db, int N, void *pBuf){
++  DetCtx *p = db ? db->pDetCtx : 0;
++  unsigned char *zBuf = (unsigned char*)pBuf;
++  if( p==0 || N<=0 || pBuf==0 ){
++    sqlite3_randomness(N, pBuf);
++    return;
++  }
++  while( 1 /* exit by break */ ){
++    if( N<=p->n ){
++      memcpy(zBuf, &p->out[p->n-N], N);
++      p->n -= N;
++      break;
++    }
++    if( p->n>0 ){
++      memcpy(zBuf, p->out, p->n);
++      N -= p->n;
++      zBuf += p->n;
++    }
++    p->s[12]++;
++    chacha_block((u32*)p->out, p->s);
++    p->n = 64;
++  }
++}
++/************** celld: end per-connection deterministic context **************/
+ /* Return the source-id for this library */
+ SQLITE_API const char *sqlite3_sourceid(void){ return SQLITE_SOURCE_ID; }
+ #endif /* SQLITE_AMALGAMATION */
+--- a/sqlite3.h
++++ b/sqlite3.h
+@@ -6484,6 +6484,27 @@
+ SQLITE_API int sqlite3_set_clientdata(sqlite3*, const char*, void*, void(*)(void*));
+ 
+ /*
++** celld: per-connection deterministic execution context.
++**
++** While a context is set on a connection, that connection (and no other)
++** sees: a pinned clock for 'now', CURRENT_TIMESTAMP, unixepoch() and every
++** Dolt commit/tag timestamp; a private PRNG, seeded from the arguments, for
++** random(), randomblob(), random rowids and the Dolt seed-commit nonce; and
++** optionally UTC as the local timezone. See patch 0002 in celld's
++** vendor/libsqlite3-sys/doltlite/patches for the full contract.
++**
++** sqlite3_doltlite_set_det_context() returns SQLITE_OK, SQLITE_MISUSE (NULL
++** handle or unknown flag bits) or SQLITE_RANGE (unixMs outside
++** 0..253402300799999). Setting a context twice replaces the first. Clearing
++** a connection with no context is a no-op.
++*/
++#define SQLITE_DOLTLITE_DET_UTC_LOCALTIME   0x01  /* localtime == UTC */
++#define SQLITE_DOLTLITE_DET_RESET_COUNTERS  0x02  /* last_insert_rowid()=0, changes()=0 */
++SQLITE_API int sqlite3_doltlite_set_det_context(sqlite3*, sqlite3_int64 unixMs, sqlite3_uint64 seed, unsigned int flags);
++SQLITE_API int sqlite3_doltlite_clear_det_context(sqlite3*);
++SQLITE_API int sqlite3_doltlite_det_context_active(sqlite3*);
++
++/*
+ ** CAPI3REF: Constants Defining Special Destructor Behavior
+ **
+ ** These are special values for the destructor that is passed in as the

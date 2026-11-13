@@ -572,6 +572,125 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
     - The engine digest changes with patch 0003 (it hashes the patch set), as
       it must.
 
+13. **Dolt remotes between cells (F7; 2026-11-13).** User-facing contract:
+    `docs/services/dolt-remotes.md`. Consumer: decentralized GAD (Vibestudio
+    `docs/dolt-redesign.md`, user decision of 2026-11-13): participants work
+    in parallel on their own forks of one Dolt database and merge back by
+    fetch, push and merge, and no single object serializes the work. This
+    section was written before the code; the decisions below are what was
+    built, and the last item says what was not.
+    - **Naming.** A cell names another as a *remote*: a name and a ref, the
+      ref being the routable id of a Durable Object, `Class:<hex id>` (the
+      scope string of a `DurableObjectId`; same deployment only). The record is
+      `_cf_DOLT_REMOTES(name, ref, token)` in the holder's own store: a `_cf_*`
+      table, so it is never in a commit, survives `reset` and `merge`, is
+      cleared by fork, restore and import (a fork is a new identity and must not
+      inherit its source's authority), and is replicated with the cell. The
+      engine also gets an ordinary `dolt_remote` entry (url `celld:<ref>`, no
+      secret) so `dolt_remotes` lists it and removing the remote removes its
+      tracking branches. Names match `[A-Za-z][A-Za-z0-9_-]{0,63}` (the
+      engine's own rule is stricter than ours on punctuation only).
+    - **Capability: a class declares it.** `celld.durable_objects.<Class>.
+      doltRemotes: true` (§3a; same unknown-key refusal and manifest round trip
+      as `residency`, gated by `dolt-remotes-v1`, refused on a class that is
+      not a Dolt class). Without it `ctx.storage.dolt.remote` does not exist
+      and a request to serve or accept answers 403, so a class that never
+      asked for remotes can never be fetched from, whatever grants it holds. A
+      Dolt facet inherits the declaration of its root's class. Rejected: a
+      per-call flag (a capability is a property of the deployment, like codegen
+      and residency).
+    - **Authorization: an explicit grant held by the source.** "Same class" is
+      too coarse (every fork is the same class, so any fork could read its
+      source and every sibling) and a list in the `celld` block cannot name
+      cells that are made at run time. A header naming the caller cannot be
+      believed, since any code holding a stub can write any header. So the
+      *source* cell issues a **grant**: `remote.grant({ label, fetch, push,
+      branches, expiresAt })` returns `{ id, token }`; the token is 256 random
+      bits, shown once, and the source keeps only its SHA-256 in
+      `_cf_DOLT_GRANTS` (a bearer capability, revocable by `revoke(id)`, which
+      deletes the row; it travels to the holder by any channel the application
+      has, as a fork's id does). The grant says what the holder may do:
+      `branches` (name patterns, `*` as the only wildcard) it may fetch, and
+      `push` (patterns) it may update. The source never reveals a branch no
+      pattern names: the refs it serves are rebuilt from the named branches'
+      commits only (no working set, no tag, no remote, no tracking ref), so
+      neither uncommitted data nor `_cf_*` rows can leave in a pack.
+    - **The wire is three requests and one framing, transport-neutral.**
+      `refs`, `fetch`, `push`; request `[u8 1][u8 op][u32 n][json][bytes]`,
+      response `[u8 status][u32 n][json][bytes]`. One host function answers a
+      request for a cell (`dolt_remote::serve`), so the transport is a
+      carrier of two byte strings. Built-in carrier: an internal request to the
+      source's Durable Object (`https://celld.internal/__celld/dolt-remote`),
+      answered by the runtime before the object's instance, as fork and restore
+      are. It goes through the same dispatch as any stub call: the same node,
+      another node of the fleet (the inter-node channel signs and carries it),
+      or an object that must be activated first. No second cross-node path
+      exists. Pluggable carrier: `fetch(name, { transport })` takes any
+      `async (bytes) => bytes`, and `remote.serve(bytes)` is the handler, so
+      the P2P binding is a few lines of glue in the application (item 9).
+    - **Consistency of a fetch.** The source answers from its own turn, from
+      its own connection outside any transaction, so the pack holds committed
+      roots only, and the response leaves through the source's output gate like
+      any response, which waits for every write the source has made to be proved
+      durable. A fetch therefore never hands out state its source could lose.
+      Nothing reads the source's file from outside its owner, so there is no
+      second reader to block or corrupt the writer: the source pays one turn,
+      bounded by the delta (the pack is the chunks reachable from the granted
+      branches that the receiver's `haves` do not cover). Rejected: opening the
+      live file read-only from another thread (it would bypass the owner's
+      fencing and the output gate, and cannot serve a cell on another node).
+    - **The transfer is DoltLite's own fetch** (patch 0004, `dolt_pack_build`,
+      `dolt_pack_fetch`, `dolt_pack_haves`): the pack is a read-only
+      `DoltliteRemote` over the received bytes, and the engine's
+      `doltliteFetchInto` runs on it, so every chunk is hashed against its
+      address, the whole graph is validated before a tracking ref lands, and the
+      install is one refs commit. The receiver writes through **its own
+      connection in its own turn**, so what lands in its file is captured as LTX
+      and shipped exactly like a commit (no side door, no second writer); the
+      operation counts as a write for the output gate. Result: remote-tracking
+      branches `name/branch`, ordinary refs that `merge`, `diff`, `log` and
+      `dolt_at_*` read.
+    - **Push is "ask the target to fetch".** The pusher asks for the target's
+      branch tips (`refs`), builds a pack of its branch against them, and sends
+      it with the grant token (`push`). The *target* installs the pack as
+      tracking branches `pushed-<grant id>/<branch>` and then moves the branch
+      **in its own turn**: only a fast-forward (the new tip descends from the
+      current one) is accepted, never a force; a branch that is checked out is
+      moved only when its working set has no application changes (otherwise
+      `ERR_DOLT_TARGET_DIRTY`); a non-fast-forward is refused with
+      `ERR_DOLT_NON_FAST_FORWARD` and the current tip, so the pusher fetches,
+      merges and pushes again. The single writer of the target is never
+      bypassed, the grant's `push` patterns are the only authority, and many
+      pushers contend only for the target's turn, which is a hash comparison
+      and a ref move.
+    - **Composition with F1.** `pull(name, branch, { resolve, message,
+      author, date })` is `fetch` and then `merge("name/branch", ...)`, the
+      resolver running in the merge's own transaction (§3b.12). Convergence by
+      construction: whoever pushes a merge commit makes it the branch's tip, and
+      everyone else's next fetch fast-forwards to the same hash (the
+      example's replicas end with identical hashes on every cell). Two parties
+      that merge the same two commits independently get the same hash only if
+      they pass the same message, author, date and parent order; the example
+      does not rely on it.
+    - **P2P across workspaces: specified, with the carrier left to the
+      application.** The three requests are carrier-neutral by design, so a
+      stream of the Iroh binding (§3b.11) carries them as they are: the serving
+      object's `onp2pstream` reads one request, calls `remote.serve`, writes the
+      response; the holder passes `transport` to `fetch`/`push`/`pull`. A grant
+      may also name the peer (`peer: "<endpoint id>"`), and then `serve`
+      refuses a request whose carrier did not present that key (the carrier
+      passes the authenticated peer to `serve`). The e2e scenario runs the
+      loopback of this (a custom carrier inside one node); the cross-workspace
+      run on two real nodes is not part of this change.
+    - **Not built.** A Dolt *facet* is a holder (fetch, pull, push to a root,
+      `merge`) and a source or push target only through its parent, which
+      relays the request bytes (`ctx.facets.get(n).remote.serve` is user code
+      over a facet RPC method): a facet is reached through its root's isolate
+      and cannot be routed to by id. Force push, tag transfer and deleting a
+      remote branch are not offered. A pack is one in-memory buffer (2 GiB at
+      most), and a source's turn is occupied for the duration of building it.
+      Fork does not set up remotes (`remote.add` after a fork).
+
 ## 4. Determinism: fixes over the earlier plans
 
 Things the workerd reconstruction plan and the current Chronolog patch get

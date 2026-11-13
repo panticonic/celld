@@ -1,0 +1,10 @@
+{
+  "name": "continuations",
+  "main": "index.mjs",
+  "no_bundle": true,
+  "compatibility_date": "2026-01-01",
+  "durable_objects": {
+    "bindings": [{ "name": "AGENT", "class_name": "Agent" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Agent"] }]
+}

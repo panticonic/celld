@@ -82,6 +82,33 @@ seeds.
 | E3 | A graceful shutdown with an open WebSocket waits out the full 25 s drain, then the client sees close code 1006 instead of 1001. | **Yes**, for the preserved restart that `celld dev` and `POST /shutdown?handoff=preserve` use. See below. | |
 | E5 | An alarm set far in the future (year 2100) panics the node: "invalid deadline", `actor/effects.rs:252`. Found while testing object fork. | **Yes.** See below. | |
 | E4 | static-assets: `/index.html` redirects with 307 rather than a permanent redirect. A 404 is served as `Not found` with `content-type: application/json`. | No. | |
+| E6 | A promise continuation that runs after the event that created it ended cannot use its Durable Object. `blockConcurrencyWhile` (and so `transaction()`) rejects with "the cell event ended before it could acquire an input gate"; `fetch`, a stub call or an RPC call starts, and its promise never settles. workerd allows all of it while the object is alive. Found by Vibestudio's agent runtime, which starts blocks from background continuations. Upstream refuses it on purpose (`RETIRED_INPUT_GATE`, `op_gate_acquire`) and drops the op of an owner that is gone. | **Yes.** See below. | |
+
+**E6 detail.** A continuation keeps the token of the event that created it. When
+that event is gone, the token names nothing: the gate op refused it, and an op
+the continuation started was handed to the dead event, whose resolver was then
+dropped (a hang, not an error; storage reads, SQL and `transactionSync` worked
+only because those ops are synchronous). The object is alive, so the work now
+belongs to it, as in workerd, where it runs in the request that is current:
+- a block from such a continuation (`blockConcurrencyWhile`, `transaction()`)
+  starts a block of the object's own, queued behind one that is running, with the
+  event whose turn runs the continuation as its origin and driver. That event
+  stays until the block ends, as for a block it started itself;
+- an op it starts is polled by the event whose turn runs it, which stays until
+  the op settles;
+- its outbound effects are attributed to its object, not to the event that runs
+  it (in a shared isolate that is often another cell): the egress identity is
+  the object's, and the output gate is the one a read of the whole cell takes,
+  behind every write the cell has committed and not yet proven. The core keeps
+  the cell of each of the last 8192 ended events for this; a continuation older
+  than that is attributed to the event that runs it;
+- an instance that was reset (`ctx.abort()`, a failed block) refuses a new block
+  with an error instead of starting work for an object that is gone.
+
+A block that never ends holds its object (`--no-implicit-deadlines`; by default
+it is reset after 30 s) and nothing else: a request queued behind it is released
+when the node stops, and the node stops and starts again.
+Scenario `continuations`, example `examples/continuations`.
 
 **E5 detail.** The actor arms every timer in a `tokio_util` `DelayQueue`, whose
 timer wheel spans about two years, and `insert` and `reset` panic on a delay

@@ -3348,18 +3348,30 @@ class DurableObjectState {
   // loopback surface as ctx.exports on stateless entrypoints.
   get exports() { return __ctxExports(); }
   blockConcurrencyWhile(f) {
+    // A call from a continuation whose event has ended (a promise that waited
+    // on another event, a callback of an old timer) is not nested in whatever
+    // block is open: the object is alive and the call starts a block of its
+    // own, queued behind a running one. Decided here, before the native
+    // context below rebinds the continuation to the event that runs it.
+    const orphan = !__io_context_live();
     // The native context binds the gate and its operations to one driver.
     // Its async continuations keep that driver even inside a foreign turn.
-    return __with_input_gate_context(() => this._blockConcurrencyWhile(f));
+    return __with_input_gate_context(() => this._blockConcurrencyWhile(f, orphan));
   }
-  _blockConcurrencyWhile(f) {
+  _blockConcurrencyWhile(f, orphan = false) {
     if (typeof f !== "function")
       throw new TypeError("blockConcurrencyWhile() requires a function");
     if (this._blockDepth >= 64)
       throw new Error(
         "blockConcurrencyWhile() calls are nested too deeply.",
       );
-    if (this._blockDepth > 0) {
+    // A continuation of an instance that has since been replaced (a failed
+    // block, `ctx.abort()`) must not start work on the new one's behalf.
+    if (this._aborted)
+      return Promise.reject(new Error(
+        "the Durable Object was reset before the block could start",
+      ));
+    if (this._blockDepth > 0 && !orphan) {
       // A stale reaction can run while an unrelated live block makes this
       // actor's depth nonzero. It cannot ride that hold when either half of
       // its retained [origin, driver] pair has already retired.

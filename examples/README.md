@@ -46,6 +46,10 @@ supports, one service or API at a time:
 - `codegen/` — `eval`, `new Function` and WebAssembly compilation are refused
   everywhere except a Durable Object class that declares `codegen`; no build
   step, and `check.sh` asserts the answers
+- `continuations/` — work a promise continuation starts after the event that
+  created it has ended: `blockConcurrencyWhile`, storage, transactions, alarms,
+  fetch and RPC, all allowed while the object is alive; driven by
+  `tests/e2e/scenarios/compat.mjs`
 - `deadlines/` — `blockConcurrencyWhile` keeps its 30 s limit by default and
   drops it under `--no-implicit-deadlines`; `check.sh` asserts both
 - `container/` — a Durable Object that supervises a container with

@@ -840,7 +840,43 @@ impl EgressGate {
 /// refused as belonging to the wrong cell. The turn owner remains the answer
 /// for a context that installs no continuation token.
 fn event_context(scope: &mut v8::PinScope) -> Arc<IoContext> {
-    current_reaction_io_context(scope).unwrap_or_else(current_context)
+    if let Some(context) = current_reaction_io_context(scope) {
+        return context;
+    }
+    orphan_cell_context(scope).unwrap_or_else(current_context)
+}
+
+/// The continuation running now belongs to a cell event that has ended, and
+/// that cell's object is still here: a promise continuation keeps its event's
+/// token however long it waits, and workerd lets it use the object it belongs
+/// to. A context for that object, with no handler and no response of its own.
+///
+/// Its effects name the object: the egress identity is the cell's, and the
+/// frame's position is one no write can be "above", so an outbound effect
+/// gates as a read of the whole cell does, behind every write the cell has
+/// committed but not yet proven (the p2p adoption's rule for a callback with
+/// no event). Without it the effect would take whichever event happened to run
+/// the continuation, whose cell may be another one in a shared isolate.
+fn orphan_cell_context(scope: &mut v8::PinScope) -> Option<Arc<IoContext>> {
+    let id = reaction_continuation_id(scope)?;
+    let cell = actor_runtime_state(scope).retired_scopes.lock().unwrap().get(id)?;
+    let context = IoContext::new();
+    context.egress.lock().unwrap().push(EgressFrame {
+        storage: cell,
+        before: u64::MAX,
+        root: None,
+    });
+    Some(context)
+}
+
+/// The context `id` names, if its event is still running: not dropped, and
+/// still taking ops. A retired context can still be reached through a
+/// continuation's token, but no driver of its own will ever poll what it is
+/// handed.
+fn live_io_context(scope: &mut v8::PinScope, id: u64) -> Option<Arc<IoContext>> {
+    actor_runtime_state(scope)
+        .io_context(id)
+        .filter(|context| context.accepts_handed_ops())
 }
 
 /// What one cell event's outbound effects gate against.
@@ -2607,6 +2643,11 @@ struct ActorRuntimeState {
     termination: std::sync::Mutex<Option<ExecutionTermination>>,
     pending_puts: std::sync::Mutex<PendingPuts>,
     io_contexts: std::sync::Mutex<HashMap<u64, Weak<IoContext>>>,
+    /// The cell each recently dropped event belonged to, by context id. A
+    /// continuation outlives its event, and the continuation's token still
+    /// names it: this is how work that continues after the event ended is
+    /// attributed to its object. See [`RetiredScopes`].
+    retired_scopes: std::sync::Mutex<RetiredScopes>,
     /// WebSocket captures that received a frame in the current isolate turn.
     /// Weak references record every continuation context without extending
     /// an event's lifetime merely to flush its output.
@@ -2697,6 +2738,41 @@ impl ActorRuntimeState {
             contexts.remove(&id);
         }
         context
+    }
+}
+
+/// A bounded record of which cell each ended event belonged to.
+///
+/// A promise continuation keeps the continuation token of the event that
+/// created it, so code that runs after that event ended still names it. The
+/// event is gone, but its cell is not, and the cell is what the continuation's
+/// effects must be attributed to: its egress identity, and the output gate
+/// that keeps its outbound effects behind its own writes. The bound keeps an
+/// isolate that runs for weeks from growing this table; a continuation older
+/// than the newest [`RETIRED_SCOPE_LIMIT`] events falls back to the event that
+/// happens to run it, as every continuation did before.
+#[derive(Default)]
+struct RetiredScopes {
+    scopes: HashMap<u64, String>,
+    order: std::collections::VecDeque<u64>,
+}
+
+const RETIRED_SCOPE_LIMIT: usize = 8192;
+
+impl RetiredScopes {
+    fn record(&mut self, id: u64, scope: String) {
+        if self.scopes.insert(id, scope).is_none() {
+            self.order.push_back(id);
+        }
+        while self.order.len() > RETIRED_SCOPE_LIMIT {
+            if let Some(oldest) = self.order.pop_front() {
+                self.scopes.remove(&oldest);
+            }
+        }
+    }
+
+    fn get(&self, id: u64) -> Option<String> {
+        self.scopes.get(&id).cloned()
     }
 }
 
@@ -4255,9 +4331,33 @@ fn op_with_input_gate_context(
     let token = cped_io_context(scope);
     // A nested block inherits its driver's identity, even if a third event
     // runs the checkpoint. A new block uses the entry driving this turn.
-    if !token.is_array() {
-        if let Some(origin) = reaction_continuation_id(scope) {
-            let driver = current_context().continuation_id().unwrap_or(origin);
+    //
+    // A continuation whose event has ended (an orphan: a promise reaction that
+    // waited on another event, or a timer's callback) names a context that no
+    // driver will poll again. The object it belongs to is alive, and workerd
+    // runs its block on the request that is current, so the block takes the
+    // turn that runs it as both its origin and its driver. That event then
+    // stays until the block ends (`holds_gate`), the same as for a block that
+    // event started itself.
+    let origin = reaction_continuation_id(scope);
+    let driver = token
+        .is_array()
+        .then(|| operation_continuation_id(scope))
+        .flatten();
+    let running = current_context().continuation_id();
+    if let Some(origin) = origin {
+        let origin_live = live_io_context(scope, origin).is_some();
+        let driver_live = driver.is_none_or(|driver| live_io_context(scope, driver).is_some());
+        if !token.is_array() || !origin_live || !driver_live {
+            let origin = if origin_live {
+                origin
+            } else {
+                running.unwrap_or(origin)
+            };
+            let driver = match driver {
+                Some(driver) if driver_live => driver,
+                _ => running.unwrap_or(origin),
+            };
             let origin = v8::BigInt::new_from_u64(scope, origin);
             let driver = v8::BigInt::new_from_u64(scope, driver);
             let pair = v8::Array::new_with_elements(scope, &[origin.into(), driver.into()]);
@@ -5273,15 +5373,19 @@ fn start_cell_event<'s>(
     // this event made from celld's own activation writes. The first sample of
     // an activation is also the baseline a read-only answer observes above.
     let writes_before = storage::event_start_position(scope);
+    // A facet event stores here and gates on the cell that owns the root
+    // database. Read once, with the position, so no later effect can take
+    // one without the other.
+    let root = storage::embedded_root_gate(scope);
+    if root.is_none() {
+        let _ = context.cell_scope.set(scope.to_string());
+    }
     // No guard: this frame is the context's outermost one and the context
     // ends with the event, so there is nothing to pop it before.
     context.egress.lock().unwrap().push(EgressFrame {
         storage: scope.to_string(),
         before: writes_before.unwrap_or(0),
-        // A facet event stores here and gates on the cell that owns the root
-        // database. Read once, with the position, so no later effect can take
-        // one without the other.
-        root: storage::embedded_root_gate(scope),
+        root,
     });
     if capture_frames {
         ws_capture_begin();
@@ -6729,7 +6833,14 @@ macro_rules! ops {
                     let before = asyncrt::spawn_count();
                     $op(scope, args, rv);
                     if asyncrt::spawn_count() != before {
-                        if let Some(owner) = operation_continuation_id(scope) {
+                        // An owner whose event ended can never poll the op,
+                        // and the op's promise would then never settle. The
+                        // continuation is the object's, so the turn that runs
+                        // it takes the op, as workerd gives it to the request
+                        // that is current.
+                        if let Some(owner) = operation_continuation_id(scope)
+                            .filter(|owner| live_io_context(scope, *owner).is_some())
+                        {
                             asyncrt::attribute_spawns(before, owner);
                         }
                     }
@@ -7148,6 +7259,7 @@ ops! { OP_NAMES, install_op_functions,
         "__isolate_condemn" => op_isolate_condemn,
         "__timer_alloc" => op_timer_alloc,
         "__io_context_id" => op_io_context_id,
+        "__io_context_live" => op_io_context_live,
         "__with_input_gate_context" => op_with_input_gate_context,
         "__gate_acquire" => op_gate_acquire,
         "__gate_wait" => op_gate_wait,
@@ -10103,6 +10215,23 @@ fn op_timer(
     rv.set(p);
 }
 
+/// `__io_context_live()` — whether the code running now belongs to an event
+/// that is still running: its origin, and its operation driver when a critical
+/// section carries one. False for a continuation that outlived its event.
+fn op_io_context_live(
+    scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    // No token at all is not an orphan: nothing names an event that could end.
+    let live = reaction_continuation_id(scope).is_none_or(|origin| {
+        live_io_context(scope, origin).is_some()
+            && operation_continuation_id(scope)
+                .is_none_or(|driver| live_io_context(scope, driver).is_some())
+    });
+    rv.set(v8::Boolean::new(scope, live).into());
+}
+
 /// `__io_context_id(operationDriver = false)` — return the live context id.
 ///
 /// The default returns the resource origin. A true argument returns the
@@ -11573,6 +11702,10 @@ pub struct IoContext {
     /// Empty for stateless Worker code, which owns no cell and gates
     /// nothing.
     egress: Mutex<Vec<EgressFrame>>,
+    /// The cell this event ran for, when it was an event of a cell's own
+    /// object (not of a facet). Read when the event ends, so a continuation
+    /// that outlives it can still be attributed to its object.
+    cell_scope: OnceLock<String>,
     /// Ops another event's turn enqueued for this event, waiting for this
     /// event's driver to take them. See `adopt`: a continuation that resumes
     /// inside a foreign turn still enqueues through that turn, and only the
@@ -11779,6 +11912,7 @@ impl IoContext {
             body_streams: Mutex::new(HashMap::new()),
             ws_capture: Mutex::new(Vec::new()),
             egress: Mutex::new(Vec::new()),
+            cell_scope: OnceLock::new(),
             handed: Mutex::new(Some(Vec::new())),
             handed_len: AtomicUsize::new(0),
             handed_wake: tokio::sync::Notify::new(),
@@ -11811,6 +11945,7 @@ impl IoContext {
             body_streams: Mutex::new(HashMap::new()),
             ws_capture: Mutex::new(Vec::new()),
             egress: Mutex::new(Vec::new()),
+            cell_scope: OnceLock::new(),
             handed: Mutex::new(Some(Vec::new())),
             handed_len: AtomicUsize::new(0),
             handed_wake: tokio::sync::Notify::new(),
@@ -12257,6 +12392,13 @@ impl Drop for IoContext {
         if let Some((id, runtime_state)) = &self.continuation {
             if let Some(runtime_state) = runtime_state.upgrade() {
                 runtime_state.io_contexts.lock().unwrap().remove(id);
+                if let Some(scope) = self.cell_scope.get() {
+                    runtime_state
+                        .retired_scopes
+                        .lock()
+                        .unwrap()
+                        .record(*id, scope.clone());
+                }
             }
         }
         if let Some(payload) = first_panic {
@@ -13323,5 +13465,30 @@ mod loader_codegen_grant_tests {
         ] {
             assert!(grant(code.clone(), true).is_err(), "{code}");
         }
+    }
+}
+
+#[cfg(test)]
+mod retired_scope_tests {
+    use super::*;
+
+    #[test]
+    fn the_table_keeps_the_newest_events_and_forgets_the_oldest() {
+        let mut scopes = RetiredScopes::default();
+        for id in 1..=(RETIRED_SCOPE_LIMIT as u64 + 10) {
+            scopes.record(id, format!("Agent:{id}"));
+        }
+        assert_eq!(scopes.scopes.len(), RETIRED_SCOPE_LIMIT);
+        assert_eq!(scopes.get(1), None);
+        assert_eq!(scopes.get(10), None);
+        assert_eq!(scopes.get(11).as_deref(), Some("Agent:11"));
+    }
+
+    #[test]
+    fn recording_an_event_twice_does_not_grow_the_order() {
+        let mut scopes = RetiredScopes::default();
+        scopes.record(7, "A:1".into());
+        scopes.record(7, "A:1".into());
+        assert_eq!(scopes.order.len(), 1);
     }
 }

@@ -35,6 +35,7 @@ has not been run yet.
 | Vibestudio compatibility audit | done (Vibestudio branch `audit/celld-compat`, `docs/celld-compat-audit.md`) | fork bugs A1 and A2 fixed |
 | Vibestudio runtime cutover | partial, paused (Vibestudio branch `feat/celld-runtime`, `HANDOFF-celld-runtime.md`) | |
 | Dolt runtime for the Vibestudio redesign: merge resolver (F1), commit in a transaction (F2), class-declared local tables (F4), checkout independent of local state (F5), history reads (F6) | done (branch `feature/dolt-runtime-f1-f6`) | §3b.12, `docs/services/dolt-cells.md` |
+| Compatibility fixes from the Vibestudio cutover: continuations after their event (E6), facet abort, streaming `Response.clone()`, WebSocket upgrade from an alarm, retry and delete of an unfinished fork target, error codes, inspector titles | in progress (branch `fix/cutover-compat`), §3b.14 | |
 | Vibestudio Dolt redesign | design done, P0 not started (Vibestudio branch `design/dolt-redesign`, `docs/dolt-redesign.md`); questions Q1–Q5 open | |
 
 ### Single-track backlog (from 2026-11-13, in order)
@@ -697,6 +698,27 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       remote branch are not offered. A pack is one in-memory buffer (2 GiB at
       most), and a source's turn is occupied for the duration of building it.
       Fork does not set up remotes (`remote.add` after a fork).
+
+14. **Compatibility fixes from the Vibestudio cutover (2026-11-13).** Source:
+    Vibestudio `HANDOFF-celld-runtime.md`, "Fork issues found" and "System-test
+    results". Branch `fix/cutover-compat`; each item has an e2e scenario in
+    `tests/e2e/scenarios/compat.mjs`.
+    - **Continuations after their event (E6; the blocker).** A continuation that
+      runs after the event that created it ended may use its object: a block
+      (`blockConcurrencyWhile`, `transaction()`), storage, `setAlarm`, `fetch`,
+      stubs and RPC. The rule is the one §3b.11 uses for a timer, applied to the
+      whole isolate: the object is alive, so the work is its own. It runs in
+      the turn of the event that happens to run the continuation, as workerd runs
+      it in the current request; that event is kept until the work settles. The
+      attribution is to the object, not to that event: egress identity and the
+      output gate use the continuation's own cell (kept from its ended event in
+      a bounded table, `RetiredScopes`), with a frame no write can be above, so
+      an effect waits behind every committed write of the cell. A block from
+      such a continuation queues as a top-level block rather than nesting in a
+      running one. An instance that was reset refuses a new block. Nothing
+      here has a deadline of its own: a block that never ends holds only its
+      object (30 s limit by default), and does not delay the node stopping.
+      Detail in `docs/fork/upstream-findings.md` (E6).
 
 ## 4. Determinism: fixes over the earlier plans
 

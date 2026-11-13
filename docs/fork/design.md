@@ -18,7 +18,7 @@ has not been run yet.
 | Test harness: E2E, fleet fault injection, simulator | merged | `tests/e2e`, `tests/fleet`, `crates/logic-sim` |
 | Dolt cells: storage, replication, `ctx.storage.dolt`, fork | merged | `docs/services/dolt-cells.md` |
 | Deterministic execution: per-connection context patch, executor, `dolt.execute`, engine digest | merged | `crates/dolt-exec`, patch 0002 |
-| Dolt facets, `ctx.facets.fork`, chunk files past 1 GiB | branch `feature/dolt-facets` | §3b.7-8, `docs/services/durable-object-facets.md` |
+| Dolt facets, `ctx.facets.fork`, chunk files past 1 GiB | merged | §3b.7-8, `docs/services/durable-object-facets.md` |
 | Codegen confinement, `--no-implicit-deadlines` | merged | `docs/fork/codegen.md`, `docs/fork/deadlines.md` |
 | Residency hold | merged | `docs/services/residency.md` |
 | Egress hook | merged | `docs/services/egress.md` |
@@ -30,13 +30,12 @@ has not been run yet.
 | Chronolog node on the fork | two-node end-to-end test passes (Chronolog branch `feature/celld-host`, `HANDOFF-celld-host.md`); fork APIs on `fix/dolt-exec-log-query` awaiting review | |
 | Windows port (compile and cross-link; CI workflow for a real Windows run) | merged | `docs/fork/windows.md` |
 | Vibestudio compatibility audit | done (Vibestudio branch `audit/celld-compat`, `docs/celld-compat-audit.md`) | fork bugs A1 and A2 fixed |
-| Dolt facets: Vibestudio's userland DOs are facets (audit V9) | in progress | |
 | Vibestudio runtime cutover | partial, paused (Vibestudio branch `feat/celld-runtime`, `HANDOFF-celld-runtime.md`) | |
 | Vibestudio Dolt redesign | design done, P0 not started (Vibestudio branch `design/dolt-redesign`, `docs/dolt-redesign.md`); questions Q1–Q5 open | |
 
 ### Single-track backlog (from 2026-11-13, in order)
 
-1. Dolt facets (`feature/dolt-facets`, running): review, then merge.
+1. ~~Dolt facets~~ merged (`ctx.facets.get(name, () => ({ class, celld: { storage: "dolt" } }))`). Still open: forking a root together with its facets, which belongs with F3.
 2. Review the fork APIs Chronolog needed (`fix/dolt-exec-log-query`): `execute(…, { log })`, `dolt.query`, `beginTransactionSync()`. Add unit tests, then merge.
 3. Fork gaps blocking the Vibestudio cutover:
    - G1: `env.NS.fork` and `restore` for SQLite objects, including their facets;

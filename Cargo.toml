@@ -25,6 +25,15 @@ incremental = true
 # the shipped release profile stays stripped.
 strip = false
 debug = "line-tables-only"
+# The simulator's fixed seed set runs under `cargo test`. Optimise it, and
+# compile its instrumented copy of the core without debug assertions: the
+# simulator calls `State::validate` itself after every event and reports a
+# failure as a finding instead of a panic.
+[profile.dev.package.celld-logic-instrumented]
+opt-level = 2
+debug-assertions = false
+[profile.dev.package.logic-sim]
+opt-level = 2
 [profile.dev.package.sha2]
 opt-level = 3
 [profile.dev.package.rsa]

@@ -364,6 +364,10 @@ name = "celld-logic"
 version = "0.1.0"
 
 [[package]]
+name = "celld-logic-instrumented"
+version = "0.1.0"
+
+[[package]]
 name = "celld-ltx"
 version = "0.0.0"
 dependencies = [
@@ -1726,6 +1730,13 @@ name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+
+[[package]]
+name = "logic-sim"
+version = "0.1.0"
+dependencies = [
+ "celld-logic-instrumented",
+]
 
 [[package]]
 name = "lol_html"

@@ -707,8 +707,7 @@ pub(crate) fn fork_image(
             anyhow::ensure!(is_prolly(&connection), "fork source is not a prolly store");
             attach_active_branch(&connection)?;
             if let Some(at) = at {
-                let at = revision(&Value::String(at.to_string()), "at")?;
-                call(&connection, "dolt_reset", &["--hard".to_string(), at])?;
+                reset_hard(&connection, at)?;
             }
             for table in ["_cf_ALARM", "_cf_WAKE", "_cf_METADATA"] {
                 if table_exists(&connection, table)? {
@@ -733,6 +732,13 @@ pub(crate) fn fork_image(
         }
     }
     built
+}
+
+/// Reset the active branch of a fork's image to the revision `at`.
+pub(crate) fn reset_hard(connection: &Connection, at: &str) -> anyhow::Result<()> {
+    let at = revision(&Value::String(at.to_string()), "at")?;
+    call(connection, "dolt_reset", &["--hard".to_string(), at])?;
+    Ok(())
 }
 
 /// Refuse a facet fork onto a facet that exists: one whose stream restored
@@ -810,28 +816,6 @@ pub(crate) fn fork_snapshot(image: &[u8]) -> anyhow::Result<Vec<u8>> {
         node_id: 0,
     };
     Ok(celld_ltx::ltx::encode_file(&header, &pages, rolling)?)
-}
-
-/// Publish a fork as a new cell: claim its id with a conditional create of
-/// a released ownership record at epoch 1 (so an existing cell can never be
-/// overwritten), then upload the image as epoch 1's base snapshot. The
-/// fork's first activation acquires epoch 2 and restores from that chain,
-/// exactly as an operator-released cell does (`docs/guarantees.md`).
-pub(crate) async fn publish_fork(
-    bucket: &crate::bucket::Bucket,
-    target: &str,
-    snapshot: Vec<u8>,
-) -> anyhow::Result<()> {
-    let record = serde_json::to_vec(&json!({ "node": "", "epoch": 1 }))?;
-    let claimed = bucket
-        .put_cas(&format!("cells/{target}/own.json"), record, None)
-        .await?;
-    anyhow::ensure!(claimed.is_some(), "fork target {target} already exists");
-    let name = celld_ltx::ltx::format_filename(celld_ltx::TXID(1), celld_ltx::TXID(1));
-    bucket
-        .put(&format!("cells/{target}/ltx/e1/0000/{name}"), snapshot)
-        .await?;
-    Ok(())
 }
 
 #[cfg(test)]

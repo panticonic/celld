@@ -93,6 +93,8 @@ struct OpenCell {
     dolt_mutations: u64,
     epoch: u64,
     replicated_wake: bool,
+    /// Whether the connection carries sqlite-vec, so a reopen does too.
+    sqlite_vec: bool,
     backing: StorageBacking,
     /// The committed-write position the first event of this activation
     /// started at. celld's own activation writes sit at or below it, so a
@@ -1009,6 +1011,7 @@ fn finish_open(
                 dolt_mutations: 0,
                 epoch,
                 replicated_wake,
+                sqlite_vec,
                 backing,
                 published_position: None,
             },
@@ -4327,9 +4330,16 @@ pub fn delete_all_with_alarm(scope: &str, delete_alarm: bool) -> anyhow::Result<
             c.execute_batch("PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;")?;
             let result = (|| -> anyhow::Result<()> {
                 for table in tables {
+                    // The facet index and a restore intent describe the
+                    // object's facets and its storage, not application data.
                     if matches!(
                         table.as_str(),
-                        "_cf_METADATA" | "_cf_WAKE" | "_cf_ALARM" | "_cf_DOLT"
+                        "_cf_METADATA"
+                            | "_cf_WAKE"
+                            | "_cf_ALARM"
+                            | "_cf_DOLT"
+                            | "_cf_FACET_INDEX"
+                            | "_cf_RESTORE"
                     ) {
                         continue;
                     }
@@ -4587,28 +4597,344 @@ pub fn dolt_op(scope: &str, op: &str, args: &serde_json::Value) -> Result<serde_
     result
 }
 
-/// The committed bytes of a Dolt cell's file, read in its own turn, and the
-/// directory beside it for scratch files. See `crate::dolt_cell::fork_image`.
-pub fn dolt_source_bytes(scope: &str) -> Result<(Vec<u8>, std::path::PathBuf), String> {
+/// Where a root cell's database lives, for the object operations
+/// (`crate::object_image`): its file, its engine and its activation epoch.
+pub(crate) struct RootFile {
+    pub path: std::path::PathBuf,
+    pub engine: celld_ltx::Engine,
+    pub epoch: u64,
+}
+
+pub(crate) fn root_file(scope: &str) -> Result<RootFile, String> {
     dbs(|d| {
         let dbs = d.borrow();
         let cell = dbs.get(scope).ok_or_else(|| format!("no database for {scope}"))?;
-        if cell.engine != celld_ltx::Engine::Dolt {
-            return Err("only a Dolt cell can be forked".to_string());
-        }
-        if !cell.connection.is_autocommit() {
-            return Err("a Dolt cell cannot be forked inside a storage transaction".to_string());
-        }
         let StorageBacking::File { path, .. } = &cell.backing else {
-            return Err("a facet cannot be forked".to_string());
+            return Err("a facet is forked, restored and imported with its root".to_string());
         };
-        let bytes = std::fs::read(path).map_err(|error| format!("read {path}: {error}"))?;
-        let dir = std::path::Path::new(path)
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_default();
-        Ok((bytes, dir))
+        Ok(RootFile {
+            path: std::path::PathBuf::from(path),
+            engine: cell.engine,
+            epoch: cell.epoch,
+        })
     })
+}
+
+/// The image of a root cell's database, read in its own turn: a SQLite
+/// backup through the cell's own connection (which a paged restore needs),
+/// or a Dolt cell's committed bytes. Outside any storage transaction, so the
+/// image holds committed state only.
+pub(crate) fn export_root(scope: &str) -> Result<(celld_ltx::Engine, Vec<u8>), String> {
+    let root = root_file(scope)?;
+    let scratch = crate::object_image::scratch_beside(&root.path, "export");
+    dbs(|d| {
+        let dbs = d.borrow();
+        let cell = dbs.get(scope).ok_or_else(|| format!("no database for {scope}"))?;
+        if !cell.connection.is_autocommit() {
+            return Err("an object cannot be forked inside a storage transaction".to_string());
+        }
+        match cell.engine {
+            celld_ltx::Engine::Sqlite => {
+                crate::object_image::sqlite_image_from_connection(&cell.connection, &scratch)
+                    .map(|image| (celld_ltx::Engine::Sqlite, image))
+            }
+            celld_ltx::Engine::Dolt => std::fs::read(&root.path)
+                .map_err(anyhow::Error::from)
+                .and_then(|bytes| crate::object_image::dolt_committed(&bytes))
+                .map(|image| (celld_ltx::Engine::Dolt, image)),
+        }
+        .map_err(|error| format!("{error:#}"))
+    })
+}
+
+/// Record that `parent_scope` runs the facet `name` with `engine`, in the
+/// parent's own facet index (`crate::object_image`). Written in the parent's
+/// turn before the facet can write, so the parent's output gate covers the
+/// row before any output of the facet's can leave. A start that names
+/// another engine than the recorded one rewrites the row: the most recent
+/// start is what a fork tries first (the facet's file decides).
+pub(crate) fn register_facet(
+    parent_scope: &str,
+    name: &str,
+    engine: celld_ltx::Engine,
+    replace: bool,
+) -> anyhow::Result<()> {
+    let engine = crate::object_image::engine_name(engine);
+    with(parent_scope, |c| {
+        without_sql_authorizer(c, || -> anyhow::Result<()> {
+            let recorded: Option<String> = c
+                .prepare_cached("SELECT engine FROM _cf_FACET_INDEX WHERE name=?1")
+                .and_then(|mut statement| statement.query_row([name], |row| row.get(0)).optional())
+                .unwrap_or(None);
+            if recorded.as_deref() == Some(engine) || (recorded.is_some() && !replace) {
+                return Ok(());
+            }
+            c.execute_batch(crate::object_image::FACET_INDEX_SQL)?;
+            c.execute(
+                "INSERT INTO _cf_FACET_INDEX(name, engine) VALUES (?1, ?2) \
+                 ON CONFLICT(name) DO UPDATE SET engine=excluded.engine",
+                rusqlite::params![name, engine],
+            )?;
+            Ok(())
+        })
+    })
+    .unwrap_or_else(|| Err(anyhow::anyhow!("no db for {parent_scope}")))
+}
+
+/// Remove the facet `name` from `parent_scope`'s facet index
+/// (`ctx.facets.delete`).
+pub(crate) fn unregister_facet(parent_scope: &str, name: &str) -> anyhow::Result<()> {
+    with(parent_scope, |c| {
+        without_sql_authorizer(c, || -> anyhow::Result<()> {
+            if crate::object_image::table_exists(c, crate::object_image::FACET_INDEX)? {
+                c.execute("DELETE FROM _cf_FACET_INDEX WHERE name=?1", [name])?;
+            }
+            Ok(())
+        })
+    })
+    .unwrap_or_else(|| Err(anyhow::anyhow!("no db for {parent_scope}")))
+}
+
+/// Record a restore's intent in the target root: the staging object whose
+/// image replaces it. The intent is durable before the restore changes any
+/// stream, and the root's own replacement removes it in the same commit
+/// (the image carries no intent), so an activation that finds it rolls the
+/// restore forward before the object runs (`restore_pending`).
+pub(crate) fn restore_begin(scope: &str, staging: &str) -> anyhow::Result<()> {
+    root_file(scope).map_err(anyhow::Error::msg)?;
+    with(scope, |c| {
+        anyhow::ensure!(
+            c.is_autocommit(),
+            "a restore cannot run inside a storage transaction"
+        );
+        without_sql_authorizer(c, || -> anyhow::Result<()> {
+            c.execute_batch(
+                "CREATE TABLE IF NOT EXISTS _cf_RESTORE (k TEXT PRIMARY KEY, v TEXT NOT NULL)",
+            )?;
+            c.execute(
+                "INSERT INTO _cf_RESTORE(k, v) VALUES ('from', ?1) \
+                 ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                [staging],
+            )?;
+            Ok(())
+        })
+    })
+    .unwrap_or_else(|| Err(anyhow::anyhow!("no db for {scope}")))
+}
+
+/// The staging object of a restore of the root `scope` that has not
+/// finished, if any.
+pub(crate) fn restore_pending(scope: &str) -> Option<String> {
+    with(scope, |c| {
+        without_sql_authorizer(c, || {
+            let mut statement = c.prepare("SELECT v FROM _cf_RESTORE WHERE k='from'").ok()?;
+            statement
+                .query_row([], |row| row.get::<_, String>(0))
+                .optional()
+                .ok()
+                .flatten()
+        })
+    })
+    .flatten()
+}
+
+/// Replace the database of the root cell `scope` with `image` (a restore,
+/// `crate::object_image`), keeping what belongs to the target's identity:
+/// its wake record (its sequence never goes back) and its id name. The
+/// target has no alarm afterwards, and the restore intent goes with the old
+/// state.
+///
+/// A SQLite root takes the image through SQLite's backup into its own live
+/// connection: one write transaction, which replication captures and the
+/// output gate proves like any other. A Dolt root's file is replaced
+/// atomically and reopened; its capture sees a new generation and ships it
+/// whole, as after `gc()`.
+pub(crate) fn adopt_root(
+    scope: &str,
+    image: Vec<u8>,
+    engine: celld_ltx::Engine,
+) -> anyhow::Result<()> {
+    let root = root_file(scope).map_err(anyhow::Error::msg)?;
+    anyhow::ensure!(
+        root.engine == engine,
+        "the restore image is a {} database, but {scope} is a {} object",
+        crate::object_image::engine_name(engine),
+        crate::object_image::engine_name(root.engine)
+    );
+    // Clear the alarm the way `deleteAlarm()` does, so the host's alarm
+    // mirror and the wake index learn of it; the wake sequence moves on.
+    delete_alarm(scope)?;
+    let (wake, actor_name) = with(scope, |c| -> anyhow::Result<_> {
+        without_sql_authorizer(c, || {
+            let wake: Option<(String, i64)> =
+                if crate::object_image::table_exists(c, "_cf_WAKE")? {
+                    c.query_row(
+                        "SELECT epoch, sequence FROM _cf_WAKE WHERE scope=?1",
+                        [scope],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()?
+                } else {
+                    None
+                };
+            let name: Option<String> = c
+                .query_row(
+                    "SELECT actor_name FROM _cf_METADATA WHERE scope=?1",
+                    [scope],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok((wake, name))
+        })
+    })
+    .unwrap_or_else(|| Err(anyhow::anyhow!("no db for {scope}")))?;
+    let scratch = crate::object_image::scratch_beside(&root.path, "restore");
+    let (image, ()) = crate::object_image::rewrite(engine, &image, &scratch, |c| {
+        crate::object_image::strip_identity(c, scope)?;
+        if let Some((epoch, sequence)) = &wake {
+            c.execute_batch(
+                "CREATE TABLE IF NOT EXISTS _cf_WAKE (
+                   scope TEXT PRIMARY KEY, epoch TEXT NOT NULL CHECK(length(epoch)=16),
+                   sequence INTEGER NOT NULL CHECK(typeof(sequence)='integer' AND sequence>=0),
+                   at_ms INTEGER
+                 );",
+            )?;
+            c.execute(
+                "INSERT OR REPLACE INTO _cf_WAKE(scope, epoch, sequence, at_ms) \
+                 VALUES (?1, ?2, ?3, NULL)",
+                rusqlite::params![scope, epoch, sequence],
+            )?;
+        }
+        if let Some(name) = &actor_name {
+            c.execute(
+                "CREATE TABLE IF NOT EXISTS _cf_METADATA \
+                 (scope TEXT PRIMARY KEY, actor_name TEXT)",
+                [],
+            )?;
+            c.execute(
+                "INSERT OR REPLACE INTO _cf_METADATA(scope, actor_name) VALUES (?1, ?2)",
+                rusqlite::params![scope, name],
+            )?;
+        }
+        Ok(())
+    })?;
+    match engine {
+        celld_ltx::Engine::Sqlite => adopt_sqlite_root(scope, &root, &image, &scratch),
+        celld_ltx::Engine::Dolt => adopt_dolt_root(scope, &root, &image),
+    }
+}
+
+fn adopt_sqlite_root(
+    scope: &str,
+    root: &RootFile,
+    image: &[u8],
+    scratch: &std::path::Path,
+) -> anyhow::Result<()> {
+    let replicated_wake = dbs(|d| {
+        d.borrow()
+            .get(scope)
+            .is_some_and(|cell| cell.replicated_wake)
+    });
+    let result = (|| -> anyhow::Result<()> {
+        crate::object_image::remove_scratch(scratch);
+        std::fs::write(scratch, image)?;
+        let source = Connection::open(scratch)?;
+        source.pragma_update(None, "journal_mode", "DELETE")?;
+        with_mut(scope, |c| -> anyhow::Result<()> {
+            anyhow::ensure!(
+                c.is_autocommit(),
+                "a restore cannot run inside a storage transaction"
+            );
+            without_sql_authorizer_mut(c, |c| -> anyhow::Result<()> {
+                // A WAL database takes a backup only from a source of its
+                // own page size.
+                let target: i64 = c.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+                let ours: i64 = source.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+                if target != ours {
+                    source.execute_batch(&format!("PRAGMA page_size={target}; VACUUM;"))?;
+                }
+                rusqlite::backup::Backup::new(&source, c)?
+                    .run_to_completion(1024, std::time::Duration::ZERO, None)
+                    .context("restore the root database")?;
+                c.flush_prepared_statement_cache();
+                schema(c)?;
+                if replicated_wake {
+                    wake_record::initialize(c, scope, root.epoch, false)?;
+                }
+                Ok(())
+            })
+        })
+        .unwrap_or_else(|| Err(anyhow::anyhow!("no db for {scope}")))
+    })();
+    crate::object_image::remove_scratch(scratch);
+    result?;
+    after_replacement(scope);
+    Ok(())
+}
+
+fn adopt_dolt_root(scope: &str, root: &RootFile, image: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    let (replicated_wake, sqlite_vec, position, published, idle) = dbs(|d| {
+        let dbs = d.borrow();
+        let cell = dbs.get(scope)?;
+        Some((
+            cell.replicated_wake,
+            cell.sqlite_vec,
+            fingerprint(scope, &cell.connection),
+            cell.published_position,
+            cell.connection.is_autocommit(),
+        ))
+    })
+    .ok_or_else(|| anyhow::anyhow!("no db for {scope}"))?;
+    anyhow::ensure!(idle, "a restore cannot run inside a storage transaction");
+    let temp = root.path.with_file_name(".object-restore.tmp");
+    let mut file = std::fs::File::create(&temp)?;
+    file.write_all(image)?;
+    file.sync_all()?;
+    drop(file);
+    // DoltLite keeps the store's state in the connection, so the connection
+    // closes before its file is replaced and opens again on the new one.
+    close(scope);
+    std::fs::rename(&temp, &root.path)?;
+    if let Some(parent) = root.path.parent() {
+        std::fs::File::open(parent)?.sync_all()?;
+    }
+    open_at_epoch(
+        scope,
+        &root.path.to_string_lossy(),
+        root.epoch,
+        replicated_wake,
+        None,
+        sqlite_vec,
+        celld_ltx::Engine::Dolt,
+    )?;
+    // The committed-write position never goes back within an activation,
+    // and the new connection's counters start from zero.
+    dbs(|d| {
+        if let Some(cell) = d.borrow_mut().get_mut(scope) {
+            cell.dolt_mutations = position + 1;
+            cell.published_position = published;
+        }
+    });
+    // Closing the connection dropped the cleared alarm's move, which this
+    // turn has not reported yet: report the reopened store's (no alarm).
+    let _ = publish_alarm(scope);
+    after_replacement(scope);
+    Ok(())
+}
+
+/// After a root's database was replaced: nothing cached about the old one
+/// survives, and the replacement counts as a write the output gate proves.
+fn after_replacement(scope: &str) {
+    close_sync_list_cursors(scope);
+    close_sql_cursors(scope);
+    close_sql_statement_cache(scope);
+    cells(|c| c.schema_cookies.borrow_mut().remove(scope));
+    dbs(|d| {
+        if let Some(cell) = d.borrow_mut().get_mut(scope) {
+            cell.dolt_mutations += 1;
+        }
+    });
 }
 
 /// The persisted alarm in a restored cell DB, read directly by path — the

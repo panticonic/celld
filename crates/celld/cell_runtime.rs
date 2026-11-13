@@ -307,6 +307,213 @@ impl CellRuntime {
         Ok(size)
     }
 
+    /// Activate a facet's stream for an object operation, which knows the
+    /// facet's engine only from its parent's index: the most recent start's
+    /// choice. The facet's file is what records the engine, so a stream the
+    /// index names wrongly opens with the other engine.
+    async fn open_facet_any(
+        &self,
+        root: &str,
+        epoch: u64,
+        names: &[String],
+        hint: celld_ltx::Engine,
+    ) -> anyhow::Result<(PathBuf, bool)> {
+        match self.open_facet(root, epoch, names, hint).await {
+            Ok(opened) => Ok(opened),
+            Err(first) => self
+                .open_facet(root, epoch, names, crate::object_image::other_engine(hint))
+                .await
+                .map_err(|_| first),
+        }
+    }
+
+    /// Export the facets of the resident root `root` for a fork
+    /// (`crate::object_image`): `index` is the root's facet index, read from
+    /// the root's image, and `options` the fork's options (`facets` names a
+    /// facet's own options, `at` a Dolt facet's commit).
+    ///
+    /// Every parent is read before its children, and each facet is read and
+    /// then proved: its stream is proved durable past the read before the
+    /// export returns, so nothing an image holds can still be lost. A parent
+    /// learns of a child's writes only from the child's replies and effects,
+    /// which leave only once the child's stream proved them, so a child read
+    /// after its parent holds every write that parent's image depends on.
+    pub async fn export_facets(
+        &self,
+        root: &str,
+        epoch: u64,
+        index: Vec<(String, celld_ltx::Engine)>,
+        options: serde_json::Value,
+        target: &str,
+    ) -> anyhow::Result<Vec<crate::object_image::Component>> {
+        fn child_options(options: &serde_json::Value, name: &str) -> serde_json::Value {
+            options
+                .get("facets")
+                .and_then(|facets| facets.get(name))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null)
+        }
+        fn check_names(
+            options: &serde_json::Value,
+            index: &[(String, celld_ltx::Engine)],
+            path: &[String],
+        ) -> anyhow::Result<()> {
+            if let Some(facets) = options.get("facets").and_then(|facets| facets.as_object()) {
+                for name in facets.keys() {
+                    anyhow::ensure!(
+                        index.iter().any(|(known, _)| known == name),
+                        "fork options name the facet {:?}, which {} does not have",
+                        name,
+                        if path.is_empty() {
+                            "the object".to_string()
+                        } else {
+                            format!("facet {:?}", path.join("/"))
+                        }
+                    );
+                }
+            }
+            Ok(())
+        }
+        check_names(&options, &index, &[])?;
+        let mut out = Vec::new();
+        let mut stack: Vec<(Vec<String>, celld_ltx::Engine, serde_json::Value)> = index
+            .into_iter()
+            .rev()
+            .map(|(name, engine)| {
+                let options = child_options(&options, &name);
+                (vec![name], engine, options)
+            })
+            .collect();
+        while let Some((path, hint, options)) = stack.pop() {
+            let (file, _) = self
+                .open_facet_any(root, epoch, &path, hint)
+                .await
+                .with_context(|| format!("open facet {:?}", path.join("/")))?;
+            let scratch = crate::object_image::scratch_beside(&file, "export");
+            let read_scratch = scratch.clone();
+            let read = asyncrt::blocking(move || {
+                crate::object_image::image_from_file(&file, &read_scratch)
+            })
+            .await??;
+            let stream = crate::engine_api::facet_cell(root, &path);
+            self.prove_facet(&stream, epoch)
+                .await
+                .with_context(|| format!("prove facet {:?} before its fork", path.join("/")))?;
+            let at = options
+                .get("at")
+                .and_then(|at| at.as_str())
+                .map(str::to_string);
+            let Some((engine, image)) = read else {
+                // A facet that never wrote: its fork starts it empty, as
+                // its source would.
+                anyhow::ensure!(
+                    at.is_none(),
+                    "fork options give facet {:?} a commit, but it has no storage",
+                    path.join("/")
+                );
+                continue;
+            };
+            anyhow::ensure!(
+                at.is_none() || engine == celld_ltx::Engine::Dolt,
+                "fork options give facet {:?} a commit (`at`), but it is a SQLite facet",
+                path.join("/")
+            );
+            let target = target.to_string();
+            let (image, children) = asyncrt::blocking(move || {
+                crate::object_image::rewrite(engine, &image, &scratch, |c| {
+                    if let Some(at) = &at {
+                        crate::dolt_cell::reset_hard(c, at)?;
+                    }
+                    crate::object_image::strip_identity(c, &target)?;
+                    crate::object_image::read_index(c)
+                })
+            })
+            .await??;
+            check_names(&options, &children, &path)?;
+            for (name, engine) in children.into_iter().rev() {
+                let child = child_options(&options, &name);
+                let mut child_path = path.clone();
+                child_path.push(name);
+                stack.push((child_path, engine, child));
+            }
+            tracing::info!(root, facet = %stream, bytes = image.len(), "fork export: facet read and proved");
+            out.push(crate::object_image::Component {
+                path,
+                engine,
+                image,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The streams half of a restore of the resident root `root`: read the
+    /// staging object `staging` (published by the source's export) from the
+    /// bucket, delete every facet stream of `root`, and create each facet of
+    /// the image in a new stream, proved durable. Answers a file holding the
+    /// root's image, which the root's own turn installs
+    /// (`storage::adopt_root`).
+    pub async fn adopt_streams(
+        &self,
+        root: &str,
+        epoch: u64,
+        staging: &str,
+    ) -> anyhow::Result<(PathBuf, celld_ltx::Engine)> {
+        let replication = self
+            .replication
+            .as_ref()
+            .context("a restore needs a fleet bucket (celld dev provides one)")?;
+        let root_db = self.db_path(root, epoch);
+        let scratch = crate::object_image::scratch_beside(&root_db, "adopt");
+        let image = crate::object_image::read_published(replication, staging, &scratch)
+            .await
+            .with_context(|| format!("read the restore image {staging}"))?;
+        let mut components = image.into_iter();
+        let root_image = components
+            .next()
+            .context("the restore image has no root")?;
+        self.facets
+            .delete_all(
+                Some(replication),
+                |cell| self.data_dir.join(&*crate::fsname::cell_path(cell)),
+                root,
+                epoch,
+            )
+            .await
+            .context("delete the target's facets")?;
+        for component in components {
+            let (file, restored) = self
+                .open_facet(root, epoch, &component.path, component.engine)
+                .await
+                .with_context(|| format!("open facet {:?}", component.path.join("/")))?;
+            let engine = component.engine;
+            let image = component.image;
+            let install_scratch = scratch.clone();
+            asyncrt::blocking(move || -> anyhow::Result<()> {
+                match engine {
+                    celld_ltx::Engine::Dolt => {
+                        crate::dolt_cell::ensure_fork_target(&file, restored)?;
+                        crate::dolt_cell::install_fork_image(&file, &image)
+                    }
+                    celld_ltx::Engine::Sqlite => {
+                        anyhow::ensure!(!restored, "the restored facet's stream was not empty");
+                        crate::object_image::install_sqlite(&file, &image, &install_scratch)
+                    }
+                }
+            })
+            .await??;
+            let stream = crate::engine_api::facet_cell(root, &component.path);
+            self.prove_facet(&stream, epoch)
+                .await
+                .with_context(|| format!("prove the restored facet {stream}"))?;
+            tracing::info!(root, facet = %stream, "restore: facet installed and proved");
+        }
+        let image_file = root_db.with_file_name(".object-adopt-root.img");
+        let written = image_file.clone();
+        let bytes = root_image.image;
+        asyncrt::blocking(move || asyncrt::fs().write(&written, &bytes)).await??;
+        Ok((image_file, root_image.engine))
+    }
+
     /// Prove every committed write of a facet's stream durable.
     pub async fn prove_facet(&self, stream: &str, epoch: u64) -> anyhow::Result<()> {
         self.await_durable(stream, epoch, 0).await.map(|_| ())

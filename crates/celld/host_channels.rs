@@ -69,6 +69,28 @@ pub enum FacetReq {
         at: Option<String>,
         reply: tokio::sync::oneshot::Sender<Result<u64>>,
     },
+    /// Export the facets of `root` for a fork (`CellRuntime::export_facets`):
+    /// each read and proved, parents before children.
+    Export {
+        root: String,
+        epoch: u64,
+        /// The root's facet index, read from the root's image.
+        index: Vec<(String, celld_ltx::Engine)>,
+        /// The fork's options (`facets`, `at`).
+        options: serde_json::Value,
+        /// The new object, whose scope the images take.
+        target: String,
+        reply: tokio::sync::oneshot::Sender<Result<Vec<crate::object_image::Component>>>,
+    },
+    /// The streams half of a restore of `root` from the staging object
+    /// `staging` (`CellRuntime::adopt_streams`). Answers the file holding
+    /// the root's image and its engine.
+    Adopt {
+        root: String,
+        epoch: u64,
+        staging: String,
+        reply: tokio::sync::oneshot::Sender<Result<(std::path::PathBuf, celld_ltx::Engine)>>,
+    },
     /// Prove every committed write of the stream durable.
     Prove {
         stream: String,

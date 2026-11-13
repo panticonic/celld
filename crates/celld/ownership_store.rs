@@ -28,6 +28,11 @@ struct OwnerWire<'a> {
 struct OwnerWireOwned {
     node: String,
     epoch: u64,
+    /// Set while a fork, restore staging copy or import uploads the cell's
+    /// first epoch (`object_image::publish_new`). Such a record is never
+    /// acquired: the cell does not exist until the publication completes.
+    #[serde(default)]
+    publishing: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -586,6 +591,11 @@ impl BucketOwnership {
         let Some((owner, etag)) = load_json::<OwnerWireOwned>(&self.bucket, &key).await? else {
             return Ok(None);
         };
+        anyhow::ensure!(
+            owner.publishing.is_none(),
+            "{cell} is being published (a fork, restore or import is uploading it); \
+             it cannot be activated until the publication completes"
+        );
         let record = OwnerRecord {
             node: (!owner.node.is_empty()).then_some(owner.node),
             epoch: owner.epoch,

@@ -7001,7 +7001,15 @@ ops! { OP_NAMES, install_op_functions,
         "__sql_database_size" => storage_ops::op_sql_database_size,
         "__dolt_enabled" => storage_ops::op_dolt_enabled,
         "__dolt_op" => storage_ops::op_dolt_op,
-        "__dolt_fork_export" => storage_ops::op_dolt_fork_export,
+        "__object_export" => object_ops::op_object_export,
+        "__object_quiesced" => object_ops::op_object_quiesced,
+        "__object_restore_begin" => object_ops::op_object_restore_begin,
+        "__object_restore_pending" => object_ops::op_object_restore_pending,
+        "__object_adopt_streams" => object_ops::op_object_adopt_streams,
+        "__object_adopt_root" => object_ops::op_object_adopt_root,
+        "__object_prove" => object_ops::op_object_prove,
+        "__object_discard" => object_ops::op_object_discard,
+        "__object_stop" => object_ops::op_object_stop,
         "__d1_run" => storage_ops::op_d1_run,
         "__storage_transaction_control" => storage_ops::op_storage_transaction_control,
         "__log" => op_log,
@@ -8689,6 +8697,11 @@ fn op_facet_rpc(
     let method = args.get(7).to_rust_string_lossy(scope);
     let call_args = view_bytes(args.get(8)).unwrap_or_default();
     let engine = facet_engine(scope, args.get(9));
+    // Before the identity sample, so the parent's gate covers the index row
+    // before anything the facet writes can leave.
+    if let Err(error) = storage::register_facet(&parent_scope, &name, engine, true) {
+        return loader_throw(scope, &format!("record the facet: {error:#}"));
+    }
     let parent = match storage::storage_identity(&parent_scope) {
         Ok(Some(parent)) => parent,
         Ok(None) => {
@@ -8787,6 +8800,11 @@ fn op_facet_fetch(
             Ok(headers) => headers,
             Err(error) => return loader_throw(scope, &format!("facet headers: {error}")),
         };
+    // Before the identity sample, so the parent's gate covers the index row
+    // before anything the facet writes can leave.
+    if let Err(error) = storage::register_facet(&parent_scope, &name, engine, true) {
+        return loader_throw(scope, &format!("record the facet: {error:#}"));
+    }
     let mut body_guard = match body.stream_id() {
         Some(stream_id) => match current_context().transfer_body_stream(stream_id) {
             Some(guard) => guard,
@@ -8951,6 +8969,9 @@ fn op_facet_delete(
     if let Err(error) = storage::delete_legacy_facet(&parent, &name) {
         return loader_throw(scope, &format!("delete facet storage: {error}"));
     }
+    if let Err(error) = storage::unregister_facet(&parent_scope, &name) {
+        return loader_throw(scope, &format!("delete facet storage: {error:#}"));
+    }
     let mut names = parent.facet_path.clone();
     names.push(name);
     let async_id = asyncrt::enqueue(async move {
@@ -9009,6 +9030,11 @@ fn op_facet_fork(
     };
     if source == target {
         return loader_throw(scope, "a facet cannot be forked onto itself");
+    }
+    // The fork's target is a Dolt facet of this parent from now on; a fork
+    // that fails leaves only an index row, and a facet that never wrote.
+    if let Err(error) = storage::register_facet(&parent_scope, &target, celld_ltx::Engine::Dolt, false) {
+        return loader_throw(scope, &format!("record the facet: {error:#}"));
     }
     let mut source_names = parent.facet_path.clone();
     source_names.push(source.clone());
@@ -10908,6 +10934,7 @@ fn op_test_queue_rearm_bounded(
 // of the object record.
 pub(crate) mod r2_ops;
 mod storage_ops;
+mod object_ops;
 use storage_ops::{actor_runtime_state, throw_storage_error};
 
 /// $$urlParse(input, base?) -> {protocol,username,password,host,port,pathname,search,hash,href}

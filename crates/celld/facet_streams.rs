@@ -201,6 +201,45 @@ impl FacetStreams {
         }
     }
 
+    /// Delete every facet stream of a resident root, resident or not,
+    /// locally and in the bucket: the prefix `<root>/facets`, which a
+    /// restore replaces whole. Whatever the root's facet index says, no
+    /// facet survives, those written before the index existed included.
+    pub(crate) async fn delete_all(
+        &self,
+        replication: Option<&Replication>,
+        local: impl Fn(&str) -> PathBuf,
+        root: &str,
+        epoch: u64,
+    ) -> anyhow::Result<()> {
+        let doomed: Vec<String> = {
+            let mut roots = self.0.lock().expect("facet streams poisoned");
+            let entry = roots
+                .get_mut(root)
+                .filter(|entry| entry.epoch == epoch && !entry.stopping)
+                .ok_or_else(|| anyhow!("{root} epoch {epoch} is not resident"))?;
+            std::mem::take(&mut entry.streams).into_iter().collect()
+        };
+        let prefix = format!("{root}/facets");
+        match replication {
+            Some(replication) => {
+                for stream in &doomed {
+                    replication.ltx().delete_local(stream, epoch);
+                }
+                replication.ltx().delete_streams(&prefix).await
+            }
+            None => {
+                let local = local(&prefix);
+                match crate::asyncrt::fs().remove_dir_all(&local) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                        Err(error).with_context(|| format!("remove facets {}", local.display()))
+                    }
+                    _ => Ok(()),
+                }
+            }
+        }
+    }
+
     /// The root begins to stop: see `FacetRoot::stopping`. Answers the
     /// streams the stop must stop, after which no open can add one.
     pub(crate) fn stopping(&self, root: &str, epoch: u64) -> Vec<String> {

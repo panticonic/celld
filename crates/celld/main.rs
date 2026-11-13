@@ -672,6 +672,8 @@ async fn dispatch_facet(app: AppHandle, req: celld::js::FacetReq) {
             FacetReq::Delete { reply, .. } => drop(reply.send(Err(error()))),
             FacetReq::Prove { reply, .. } => drop(reply.send(Err(error()))),
             FacetReq::Fork { reply, .. } => drop(reply.send(Err(error()))),
+            FacetReq::Export { reply, .. } => drop(reply.send(Err(error()))),
+            FacetReq::Adopt { reply, .. } => drop(reply.send(Err(error()))),
         }
         return;
     };
@@ -706,6 +708,24 @@ async fn dispatch_facet(app: AppHandle, req: celld::js::FacetReq) {
                 .fork_facet(&root, epoch, &source, &target, at.as_deref())
                 .await,
         )),
+        FacetReq::Export {
+            root,
+            epoch,
+            index,
+            options,
+            target,
+            reply,
+        } => drop(reply.send(
+            runtime
+                .export_facets(&root, epoch, index, options, &target)
+                .await,
+        )),
+        FacetReq::Adopt {
+            root,
+            epoch,
+            staging,
+            reply,
+        } => drop(reply.send(runtime.adopt_streams(&root, epoch, &staging).await)),
     }
 }
 

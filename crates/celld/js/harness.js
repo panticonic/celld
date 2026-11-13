@@ -3313,6 +3313,10 @@ function _instance(scope) {
   return inst;
 }
 async function _readyInstance(scope) {
+  // A restore of this object runs, or an unfinished one must roll forward,
+  // before anything reads it. The loop ends in the tick that constructs.
+  for (let barrier = __restoreBarrier(scope); barrier !== undefined;
+    barrier = __restoreBarrier(scope)) await barrier;
   const inst = _instance(scope);
   await inst.__celldState._ready();
   return inst;
@@ -5633,22 +5637,64 @@ class DurableObjectNamespace {
     if (value == null) return this;
     throw new Error("Jurisdiction restrictions are not implemented");
   }
-  // Fork a Dolt object: a new id whose state starts from `sourceId`'s
-  // (every branch and its history), with the active branch reset to `at`
-  // when given. The source publishes the image from its own turn, behind
-  // its output gate; see docs/services/dolt-cells.md.
+  // celld fork: copy the object `sourceId`, its root and every facet (each
+  // SQLite or Dolt, with its engine), into a new object, and answer its id:
+  // `options.to` (an id of this namespace), `options.name` (idFromName), or
+  // a new unique id. `options.at` resets a Dolt root's checked-out branch,
+  // `options.facets[name].at` a Dolt facet's (nested under `.facets`). The
+  // source exports itself from its own turn, every component behind its
+  // output gate, and the target is claimed with a conditional create, so a
+  // fork never overwrites an object. See docs/services/object-fork.md.
   async fork(sourceId, options = {}) {
     if (!(sourceId instanceof DurableObjectId) || sourceId._className !== this._className)
       throw new TypeError("Durable Object ID is not valid for this namespace");
-    const id = this.newUniqueId();
-    const params = new URLSearchParams({ to: id._scope() });
-    if (options && options.at != null) params.set("at", String(options.at));
-    const response = await this.get(sourceId).fetch(
-      "https://celld.internal" + __FORK_EXPORT_PATH + "?" + params, { method: "POST" },
-    );
-    if (!response.ok) throw new Error("fork: " + (await response.text()));
-    await response.arrayBuffer();
+    if (options === null || typeof options !== "object")
+      throw new TypeError("fork options must be an object.");
+    let id;
+    if (options.to !== undefined) {
+      if (!(options.to instanceof DurableObjectId) || options.to._className !== this._className)
+        throw new TypeError("fork options.to must be a Durable Object ID of this namespace.");
+      id = options.to;
+    } else if (options.name !== undefined) {
+      id = this.idFromName(String(options.name));
+    } else {
+      id = this.newUniqueId();
+    }
+    await __objectExport(this, sourceId, id, __forkOptions(options));
     return id;
+  }
+  // celld fork: replace the state of the object `targetId` (its root and all
+  // of its facets) with a copy of `fromId`'s. The target must be quiesced:
+  // no instance in its current activation, no running facet, no WebSocket,
+  // no residency hold, no other event in flight. An inactive target is.
+  // A running one is refused (error code ERR_RESTORE_TARGET_ACTIVE), unless
+  // `options.stop` is true: the restore then stops it first, as a reset
+  // does. `options.at` and `options.facets` are the source's export
+  // options, as for fork(). See docs/services/object-fork.md.
+  async restore(targetId, fromId, options = {}) {
+    for (const id of [targetId, fromId])
+      if (!(id instanceof DurableObjectId) || id._className !== this._className)
+        throw new TypeError("Durable Object ID is not valid for this namespace");
+    if (options === null || typeof options !== "object")
+      throw new TypeError("restore options must be an object.");
+    if (options.stop !== undefined && typeof options.stop !== "boolean")
+      throw new TypeError("restore options.stop must be a boolean.");
+    const staging = this.newUniqueId();
+    const exported = { ...__forkOptions(options), staging: targetId._scope() };
+    await __objectExport(this, fromId, staging, exported, "restore");
+    const params = new URLSearchParams({ from: staging._scope() });
+    if (options.stop === true) params.set("stop", "1");
+    const response = await this.get(targetId).fetch(
+      "https://celld.internal" + __OBJECT_ADOPT_PATH + "?" + params, { method: "POST" },
+    );
+    const text = await response.text();
+    if (!response.ok) {
+      const error = new Error("restore: " + text);
+      const code = response.headers.get("x-celld-code");
+      if (code) error.code = code;
+      throw error;
+    }
+    return JSON.parse(text);
   }
   getByName(name, options) {
     return this.get(this.idFromName(name), options);
@@ -5843,29 +5889,182 @@ __celld.__makeIncomingRequest = (
   url, method,
   streamId === undefined ? body : new CelldHttpBodyStream(streamId),
   headersJson, undefined, true);
-const __FORK_EXPORT_PATH = "/__celld/dolt-fork-export";
-const __forkExport = async (scope, url) => {
+// ---- whole-object fork and restore (docs/services/object-fork.md) --------
+// Both are internal requests to an object, answered by the runtime before
+// (and without) its instance: the export reads the source in its own turn,
+// the adoption installs a staging copy into a quiesced target.
+const __OBJECT_EXPORT_PATH = "/__celld/object-export";
+const __OBJECT_ADOPT_PATH = "/__celld/object-adopt";
+// Validated export options: `at`, and `facets` naming each facet's own.
+const __forkOptions = (options, where = "fork options") => {
+  if (options === undefined || options === null) return {};
+  if (typeof options !== "object") throw new TypeError(where + " must be an object.");
+  const out = {};
+  if (options.at !== undefined) {
+    if (typeof options.at !== "string") throw new TypeError(where + ".at must be a string.");
+    out.at = options.at;
+  }
+  if (options.facets !== undefined) {
+    if (options.facets === null || typeof options.facets !== "object")
+      throw new TypeError(where + ".facets must be an object.");
+    out.facets = {};
+    for (const [name, value] of Object.entries(options.facets))
+      out.facets[name] = __forkOptions(value, where + ".facets[" + JSON.stringify(name) + "]");
+  }
+  return out;
+};
+const __objectExport = async (namespace, sourceId, targetId, options, what = "fork") => {
+  const params = new URLSearchParams({ to: targetId._scope(), options: JSON.stringify(options) });
+  const response = await namespace.get(sourceId).fetch(
+    "https://celld.internal" + __OBJECT_EXPORT_PATH + "?" + params, { method: "POST" },
+  );
+  const text = await response.text();
+  if (!response.ok) throw new Error(what + ": " + text);
+  return JSON.parse(text);
+};
+// A restore in progress on this isolate, by root scope. Every event waits
+// for it before it constructs the object (`_readyInstance`).
+const __restoring = new Map();
+// Exports in progress, by root scope: a restore of the object waits.
+const __objectExports = new Map();
+// Run the streams half and then the root half of a restore of `scope` from
+// `staging`, whose intent the root already records.
+const __runAdopt = (scope, staging) => {
+  const run = (async () => {
+    // The intent is durable before any stream changes.
+    await __object_prove(scope);
+    const root = JSON.parse(await __object_adopt_streams(scope, staging));
+    // Replaces the root and, in the same commit, removes the intent.
+    __object_adopt_root(scope, root.path, root.engine);
+    await __object_prove(scope);
+  })();
+  __restoring.set(scope, run);
+  const clear = () => {
+    if (__restoring.get(scope) === run) __restoring.delete(scope);
+  };
+  run.then(clear, clear);
+  // The staging copy goes once the restore is durable. A copy that fails to
+  // go is garbage that nothing reads, never a wrong state.
+  return run.then(() => __object_discard(scope, staging).catch(() => {}));
+};
+// What an event of `scope` must wait for before it reads the object: a
+// restore running here, or the roll-forward of one an earlier activation
+// began and did not finish (its intent is in the root). `undefined` when
+// nothing: the caller then proceeds in the same tick.
+const __restoreBarrier = (scope) => {
+  const running = __restoring.get(scope);
+  if (running !== undefined) return running.then(() => {}, () => {});
+  if (__cell.instances[scope] !== undefined || __cell.facetConfigs[scope] !== undefined)
+    return undefined;
+  const pending = __object_restore_pending(scope);
+  if (!pending) return undefined;
+  return __runAdopt(scope, pending);
+};
+const __settleRestore = async (scope) => {
+  for (let barrier = __restoreBarrier(scope); barrier !== undefined;
+    barrier = __restoreBarrier(scope)) await barrier;
+};
+// Why `scope` is not quiesced, or "" when it is. After a stop, events of
+// the stopped instance may still be in flight; their storage is closed.
+const __objectQuiescedReason = (scope, stopped = false) => {
+  if (__cell.instances[scope] !== undefined)
+    return "it is running: its instance exists in this activation " +
+      "(restore with { stop: true }, or let it stop itself with ctx.abort())";
+  if ((__objectExports.get(scope) ?? 0) > 0) return "a fork of it is in progress";
+  for (const hold of __residencyHolds.values())
+    if (hold._cell === scope && !hold._done) return "it holds residency";
+  if (!stopped) {
+    let events = 0;
+    for (const event of __actorEventStack) if (event.scope === scope) events++;
+    if (events > 1) return "another event of it is in flight";
+  }
+  return __object_quiesced(scope, stopped);
+};
+// Stop a running object for a restore, as a reset does: its instance goes
+// (any continuation of it finds its storage closed), its residency holds
+// end, and the host closes its WebSockets and its facets.
+const __objectStop = async (scope) => {
+  const instance = __cell.instances[scope];
+  if (instance !== undefined) {
+    const state = instance.__celldState;
+    state._aborted = true;
+    __storage_cancel_pending_puts(scope);
+    state.facets?._release();
+    delete __cell.instances[scope];
+  }
+  for (const hold of [...__residencyHolds.values()])
+    if (hold._cell === scope && !hold._done) hold.release();
+  await __object_stop(scope);
+};
+const __objectExportHere = async (scope, url) => {
   const params = new URL(url).searchParams;
   try {
-    const result = await __dolt_fork_export(
-      scope, String(params.get("to") ?? ""), String(params.get("at") ?? ""));
-    return new Response(result, { status: 200 });
+    await __settleRestore(scope);
+    __objectExports.set(scope, (__objectExports.get(scope) ?? 0) + 1);
+    try {
+      const result = await __object_export(
+        scope, String(params.get("to") ?? ""), String(params.get("options") ?? ""));
+      return new Response(result, { status: 200 });
+    } finally {
+      const left = (__objectExports.get(scope) ?? 1) - 1;
+      if (left > 0) __objectExports.set(scope, left);
+      else __objectExports.delete(scope);
+    }
   } catch (error) {
     return new Response(String(error && error.message || error), { status: 409 });
+  }
+};
+const __objectAdoptHere = async (scope, url) => {
+  const params = new URL(url).searchParams;
+  const staging = String(params.get("from") ?? "");
+  const stop = params.get("stop") === "1";
+  try {
+    await __settleRestore(scope);
+    if (stop) {
+      // Nothing constructs the object while it stops: events wait here as
+      // they wait for a restore.
+      let release;
+      const stopping = new Promise((resolve) => { release = resolve; });
+      __restoring.set(scope, stopping);
+      try {
+        await __objectStop(scope);
+      } finally {
+        if (__restoring.get(scope) === stopping) __restoring.delete(scope);
+        release();
+      }
+    }
+    const reason = __objectQuiescedReason(scope, stop);
+    if (reason !== "") {
+      await __object_discard(scope, staging).catch(() => {});
+      return new Response("the target is not quiesced: " + reason, {
+        status: 409, headers: { "x-celld-code": "ERR_RESTORE_TARGET_ACTIVE" },
+      });
+    }
+    __object_restore_begin(scope, staging);
+    await __runAdopt(scope, staging);
+    return new Response(JSON.stringify({ restored: true }), { status: 200 });
+  } catch (error) {
+    return new Response(String(error && error.message || error), { status: 500 });
   }
 };
 const __dispatchTo = __celld.__dispatchTo = async (
   scope, url, method, body, headersJson, requestId = null, bodyStreamId = null,
 ) => {
-  // `env.NS.fork()` asks the source object to publish its own image. It is
+  // `env.NS.fork()` asks the source object to publish its own image, and
+  // `env.NS.restore()` asks the target to adopt a staging copy. Both are
   // answered by the runtime, never by the object's fetch handler.
-  if (method === "POST" && typeof url === "string" &&
-      url.startsWith("https://celld.internal" + __FORK_EXPORT_PATH + "?")) {
-    const actorEvent = __beginActorEvent(scope);
-    try {
-      return await __forkExport(scope, url);
-    } finally {
-      __endActorEvent(actorEvent);
+  if (method === "POST" && typeof url === "string") {
+    const internal = url.startsWith("https://celld.internal" + __OBJECT_EXPORT_PATH + "?")
+      ? __objectExportHere
+      : url.startsWith("https://celld.internal" + __OBJECT_ADOPT_PATH + "?")
+        ? __objectAdoptHere : undefined;
+    if (internal !== undefined) {
+      const actorEvent = __beginActorEvent(scope);
+      try {
+        return await internal(scope, url);
+      } finally {
+        __endActorEvent(actorEvent);
+      }
     }
   }
   // A routed body that must not be collected crosses as a host stream id; the

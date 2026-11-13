@@ -72,6 +72,9 @@ pub struct Cells {
     sql_critical_errors: RefCell<HashMap<String, String>>,
     /// The schema cookie last read for a cell, and what it was read against.
     schema_cookies: RefCell<HashMap<String, SchemaCookie>>,
+    /// The SQLite handles of open Dolt-cell connections, so reinstalling the
+    /// authorizer after a lifted section picks the Dolt rules.
+    dolt_handles: RefCell<HashSet<usize>>,
 }
 
 /// The database and the ownership epoch that authorized its activation.
@@ -81,6 +84,13 @@ pub struct Cells {
 /// later ownership lookup after a takeover.
 struct OpenCell {
     connection: Connection,
+    /// The storage engine the cell was created with.
+    engine: celld_ltx::Engine,
+    /// `ctx.storage.dolt` operations that could change the store, counted
+    /// into the committed-write position. A Dolt commit, checkout or merge
+    /// changes no SQLite row counter, yet it is a write the output gate must
+    /// prove before an output that follows it.
+    dolt_mutations: u64,
     epoch: u64,
     replicated_wake: bool,
     backing: StorageBacking,
@@ -679,12 +689,98 @@ fn authorize_sql(context: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::
     }
 }
 
+/// `dolt_*` functions application SQL may call on a Dolt cell: read-only
+/// lookups. Everything else that versions the store goes through
+/// `ctx.storage.dolt`.
+fn dolt_user_function_allowed(name: &str) -> bool {
+    matches!(
+        name,
+        "dolt_hashof"
+            | "dolt_hashof_table"
+            | "dolt_hashof_db"
+            | "dolt_hashof_catalog"
+            | "dolt_hashof_index"
+            | "dolt_version"
+            | "dolt_merge_base"
+            | "active_branch"
+            | "doltlite_engine"
+    )
+}
+
+/// `dolt_*` functions with network or host-file reach. Denied to every
+/// statement on a Dolt cell, celld's own included: a cell's state leaves
+/// the node only through replication.
+fn dolt_function_has_reach(name: &str) -> bool {
+    ["clone", "fetch", "push", "pull", "remote", "creds", "backup", "dump", "http"]
+        .iter()
+        .any(|word| name.contains(word))
+}
+
+fn is_dolt_function(name: &str) -> bool {
+    name.starts_with("dolt") || name == "active_branch"
+}
+
+/// The authorizer of a Dolt cell's connection: the SQLite cell rules, plus
+/// the versioning surface kept out of application SQL.
+fn authorize_dolt_sql(context: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization {
+    use rusqlite::hooks::{AuthAction, Authorization};
+
+    let user = USER_SQL.with(std::cell::Cell::get);
+    let lower = |name: &str| name.to_ascii_lowercase();
+    let denied = match context.action {
+        AuthAction::Function { function_name } => {
+            let name = lower(function_name);
+            is_dolt_function(&name)
+                && (dolt_function_has_reach(&name) || (user && !dolt_user_function_allowed(&name)))
+        }
+        // System tables are readable (`dolt_log`, `dolt_diff_*`, ...) except
+        // those that expose credentials or remotes.
+        AuthAction::Read { table_name, .. } => {
+            let name = lower(table_name);
+            name.starts_with("dolt_") && dolt_function_has_reach(&name)
+        }
+        AuthAction::Insert { table_name }
+        | AuthAction::Delete { table_name }
+        | AuthAction::Update { table_name, .. }
+        | AuthAction::CreateTable { table_name }
+        | AuthAction::DropTable { table_name }
+        | AuthAction::AlterTable { table_name, .. } => {
+            user && lower(table_name).starts_with("dolt_")
+        }
+        AuthAction::CreateVtable { table_name, .. } | AuthAction::DropVtable { table_name, .. } => {
+            user && lower(table_name).starts_with("dolt_")
+        }
+        _ => false,
+    };
+    if denied {
+        return Authorization::Deny;
+    }
+    authorize_sql(context)
+}
+
+fn is_dolt_connection(connection: &Connection) -> bool {
+    // SAFETY: the handle is only compared, never dereferenced.
+    let handle = unsafe { connection.handle() } as usize;
+    CURRENT_CELLS.get().is_null().then_some(false).unwrap_or_else(|| {
+        cells(|cells| cells.dolt_handles.borrow().contains(&handle))
+    })
+}
+
+/// Install the application authorizer for the connection's engine.
+fn install_authorizer(connection: &Connection) {
+    if is_dolt_connection(connection) {
+        connection.authorizer(Some(authorize_dolt_sql));
+    } else {
+        connection.authorizer(Some(authorize_sql));
+    }
+}
+
 fn without_sql_authorizer<T>(connection: &Connection, callback: impl FnOnce() -> T) -> T {
     use rusqlite::hooks::{AuthContext, Authorization};
 
     connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
     let result = callback();
-    connection.authorizer(Some(authorize_sql));
+    install_authorizer(connection);
     result
 }
 
@@ -696,7 +792,7 @@ fn without_sql_authorizer_mut<T>(
 
     connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
     let result = callback(connection);
-    connection.authorizer(Some(authorize_sql));
+    install_authorizer(connection);
     result
 }
 
@@ -750,7 +846,7 @@ pub fn open(scope: &str, path: &str) -> anyhow::Result<()> {
 }
 
 pub fn open_with_compat(scope: &str, path: &str, sqlite_vec: bool) -> anyhow::Result<()> {
-    open_at_epoch(scope, path, 1, false, None, sqlite_vec)
+    open_at_epoch(scope, path, 1, false, None, sqlite_vec, celld_ltx::Engine::Sqlite)
 }
 
 /// Open a production cell database with the epoch that authorized the
@@ -764,20 +860,17 @@ pub(crate) fn open_at_epoch(
     replicated_wake: bool,
     vfs: Option<&str>,
     sqlite_vec: bool,
+    engine: celld_ltx::Engine,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(epoch > 0, "a cell activation epoch must be positive");
-    let connection = match vfs {
-        Some(vfs) => {
-            Connection::open_with_flags_and_vfs(path, rusqlite::OpenFlags::default(), vfs)?
-        }
-        None => Connection::open(path)?,
-    };
+    let connection = crate::dolt_cell::open_connection(path, engine, vfs)?;
     finish_open(
         scope,
         connection,
         epoch,
         replicated_wake,
         sqlite_vec,
+        engine,
         StorageBacking::File {
             path: path.to_string(),
             root_scope: scope.to_string(),
@@ -794,6 +887,7 @@ pub fn open_with_fault_vfs_for_test(scope: &str, path: &str) -> anyhow::Result<(
         1,
         true,
         false,
+        celld_ltx::Engine::Sqlite,
         StorageBacking::File {
             path: path.to_string(),
             root_scope: scope.to_string(),
@@ -808,6 +902,7 @@ fn finish_open(
     epoch: u64,
     replicated_wake: bool,
     sqlite_vec: bool,
+    engine: celld_ltx::Engine,
     backing: StorageBacking,
 ) -> anyhow::Result<()> {
     // SQLite's default lookaside arena reserves 48 KiB for every connection.
@@ -834,9 +929,21 @@ fn finish_open(
     if sqlite_vec {
         register_vec0_extension(&c)?;
     }
+    if engine == celld_ltx::Engine::Dolt {
+        anyhow::ensure!(
+            crate::dolt_cell::is_prolly(&c),
+            "a Dolt cell's database did not open as a prolly store"
+        );
+        // DoltLite opens every connection on `main`; the runtime tables
+        // live on the active branch, so move there before reading them.
+        crate::dolt_cell::attach_active_branch(&c)?;
+    }
     schema(&c)?;
+    if engine == celld_ltx::Engine::Dolt {
+        crate::dolt_cell::ensure_runtime(&c)?;
+    }
     if replicated_wake {
-        wake_record::initialize(&c, scope, epoch)?;
+        wake_record::initialize(&c, scope, epoch, engine == celld_ltx::Engine::Dolt)?;
     }
     // Match Workerd's SQLite security budgets. Applying native connection
     // limits once here avoids request-path parsing and keeps rejected queries
@@ -861,7 +968,14 @@ fn finish_open(
             rusqlite::ffi::sqlite3_limit(database, category, limit);
         }
     }
-    c.authorizer(Some(authorize_sql));
+    if engine == celld_ltx::Engine::Dolt {
+        // SAFETY: the handle is only recorded as an identity.
+        let handle = unsafe { c.handle() } as usize;
+        cells(|cells| cells.dolt_handles.borrow_mut().insert(handle));
+        c.authorizer(Some(authorize_dolt_sql));
+    } else {
+        c.authorizer(Some(authorize_sql));
+    }
     // rusqlite's default holds 16 statements; the KV texts plus a cell's
     // few hot user statements fit in 64 without evicting each other.
     c.set_prepared_statement_cache_capacity(64);
@@ -874,6 +988,8 @@ fn finish_open(
             scope.to_string(),
             OpenCell {
                 connection: c,
+                engine,
+                dolt_mutations: 0,
                 epoch,
                 replicated_wake,
                 backing,
@@ -907,7 +1023,11 @@ pub fn close(scope: &str) {
     close_sql_statement_cache(scope);
     sql_critical_errors(|errors| errors.borrow_mut().remove(scope));
     cells(|c| c.schema_cookies.borrow_mut().remove(scope));
-    dbs(|d| d.borrow_mut().remove(scope));
+    if let Some(cell) = dbs(|d| d.borrow_mut().remove(scope)) {
+        // SAFETY: the handle is only used as an identity.
+        let handle = unsafe { cell.connection.handle() } as usize;
+        cells(|c| c.dolt_handles.borrow_mut().remove(&handle));
+    }
     active_alarms(|alarms| alarms.borrow_mut().remove(scope));
     alarm_moves(|moves| {
         moves.borrow_mut().remove(scope);
@@ -1140,6 +1260,7 @@ pub(crate) fn open_embedded(
         parent.epoch,
         false,
         sqlite_vec,
+        celld_ltx::Engine::Sqlite,
         StorageBacking::Embedded {
             stream,
             opening: NEXT_FACET_OPENING.fetch_add(1, Ordering::Relaxed),
@@ -1298,7 +1419,14 @@ pub fn write_position(scope: &str) -> anyhow::Result<Option<u64>> {
 }
 
 fn fingerprint(scope: &str, connection: &Connection) -> u64 {
-    total_changes(connection) + data_version(connection) + schema_cookie(scope, connection)
+    total_changes(connection)
+        + data_version(connection)
+        + schema_cookie(scope, connection)
+        + dolt_mutations(scope)
+}
+
+fn dolt_mutations(scope: &str) -> u64 {
+    dbs(|d| d.borrow().get(scope).map_or(0, |cell| cell.dolt_mutations))
 }
 
 /// A `RETURNING` cursor runs its write during the first step but holds the
@@ -1387,7 +1515,8 @@ pub fn sync_sample(scope: &str) -> anyhow::Result<Option<SyncSample>> {
                 Ok(SyncSample {
                     in_transaction: !cell.connection.is_autocommit(),
                     position: total_changes(&cell.connection)
-                        + schema_cookie(scope, &cell.connection),
+                        + schema_cookie(scope, &cell.connection)
+                        + cell.dolt_mutations,
                     epoch: cell.epoch,
                 })
             })
@@ -4156,11 +4285,20 @@ pub fn delete_all_with_alarm(scope: &str, delete_alarm: bool) -> anyhow::Result<
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(statement);
+        let dolt = is_dolt_connection(c);
         without_sql_authorizer(c, || {
             c.execute_batch("PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;")?;
             let result = (|| -> anyhow::Result<()> {
                 for table in tables {
-                    if matches!(table.as_str(), "_cf_METADATA" | "_cf_WAKE" | "_cf_ALARM") {
+                    if matches!(
+                        table.as_str(),
+                        "_cf_METADATA" | "_cf_WAKE" | "_cf_ALARM" | "_cf_DOLT"
+                    ) {
+                        continue;
+                    }
+                    // A Dolt cell's system tables (`dolt_ignore`, ...) are
+                    // part of the store, not application data.
+                    if dolt && table.to_ascii_lowercase().starts_with("dolt_") {
                         continue;
                     }
                     // The ltx replicator owns its control tables. Dropping
@@ -4332,6 +4470,104 @@ fn alarm_state(scope: &str) -> Option<(i64, i64)> {
     })?
 }
 
+fn is_chunk_store_file(path: &str) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 8];
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut head))
+        .is_ok()
+        && celld_ltx::dolt::is_chunk_store(&head)
+}
+
+pub(crate) fn wake_record_trigger_sql() -> String {
+    wake_record::trigger_sql(true)
+}
+
+/// Whether `scope`'s open database is a Dolt cell.
+pub fn is_dolt(scope: &str) -> bool {
+    dbs(|d| {
+        d.borrow()
+            .get(scope)
+            .is_some_and(|cell| cell.engine == celld_ltx::Engine::Dolt)
+    })
+}
+
+/// Run one `ctx.storage.dolt` operation (see `crate::dolt_cell`).
+///
+/// It runs synchronously in the handler's turn, like a SQL statement, and
+/// only outside a storage transaction: a Dolt commit or checkout is not a
+/// row write that a savepoint could roll back. An operation that can change
+/// the store advances the cell's committed-write position, so the output
+/// gate holds the next output until a capture after it is proved durable,
+/// exactly as it does for a SQL write.
+pub fn dolt_op(scope: &str, op: &str, args: &serde_json::Value) -> Result<serde_json::Value, String> {
+    require_sql_healthy(scope)?;
+    let result = dbs(|d| {
+        let mut dbs = d.borrow_mut();
+        let Some(cell) = dbs.get_mut(scope) else {
+            return Err(format!("no database for {scope}"));
+        };
+        if cell.engine != celld_ltx::Engine::Dolt {
+            return Err("ctx.storage.dolt is only available on Dolt cells \
+                        (declare the class in migrations[].new_dolt_classes)"
+                .to_string());
+        }
+        if !cell.connection.is_autocommit() {
+            return Err("a Dolt operation cannot run inside a storage transaction".to_string());
+        }
+        if crate::dolt_cell::mutates(op) {
+            // Counted before it runs: a failed checkout or merge can still
+            // have committed part of its work.
+            cell.dolt_mutations += 1;
+        }
+        let connection = &cell.connection;
+        let result = without_sql_authorizer(connection, || {
+            let result = crate::dolt_cell::run(connection, op, args);
+            // A branch switch or a reset can drop the wake triggers with the
+            // tables they sit on; put them back before anything else runs.
+            if cell.replicated_wake && crate::dolt_cell::mutates(op) {
+                if let Err(error) = crate::dolt_cell::ensure_wake_triggers(connection) {
+                    return Err(error.context("restore the wake triggers"));
+                }
+            }
+            result
+        });
+        if crate::dolt_cell::changes_schema(op) {
+            connection.flush_prepared_statement_cache();
+        }
+        result.map_err(|error| format!("{error:#}"))
+    });
+    if crate::dolt_cell::changes_schema(op) {
+        close_sql_statement_cache(scope);
+        cells(|c| c.schema_cookies.borrow_mut().remove(scope));
+    }
+    result
+}
+
+/// The committed bytes of a Dolt cell's file, read in its own turn, and the
+/// directory beside it for scratch files. See `crate::dolt_cell::fork_image`.
+pub fn dolt_source_bytes(scope: &str) -> Result<(Vec<u8>, std::path::PathBuf), String> {
+    dbs(|d| {
+        let dbs = d.borrow();
+        let cell = dbs.get(scope).ok_or_else(|| format!("no database for {scope}"))?;
+        if cell.engine != celld_ltx::Engine::Dolt {
+            return Err("only a Dolt cell can be forked".to_string());
+        }
+        if !cell.connection.is_autocommit() {
+            return Err("a Dolt cell cannot be forked inside a storage transaction".to_string());
+        }
+        let StorageBacking::File { path, .. } = &cell.backing else {
+            return Err("a facet cannot be forked".to_string());
+        };
+        let bytes = std::fs::read(path).map_err(|error| format!("read {path}: {error}"))?;
+        let dir = std::path::Path::new(path)
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default();
+        Ok((bytes, dir))
+    })
+}
+
 /// The persisted alarm in a restored cell DB, read directly by path — the
 /// activation executor seeds the lifecycle Cell's alarm mirror from this at
 /// restore time, before the isolate opens the scope's `with` connection. Read
@@ -4352,6 +4588,12 @@ pub fn persisted_alarm(
             vfs,
         )
         .ok()?,
+        None if is_chunk_store_file(db_path) => {
+            // A Dolt cell's runtime tables live on its active branch.
+            let connection = rusqlite::Connection::open(db_path).ok()?;
+            crate::dolt_cell::attach_active_branch(&connection).ok()?;
+            connection
+        }
         None => rusqlite::Connection::open_with_flags(
             db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,

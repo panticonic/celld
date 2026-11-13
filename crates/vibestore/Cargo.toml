@@ -1,0 +1,37 @@
+# celld-vibestore: an `object_store::ObjectStore` over a Vibestudio-compatible
+# content-addressed blob root plus a small SQLite key index. It lets a
+# single-node workspace run celld with no cloud bucket. See
+# docs/fork/vibestore.md.
+[package]
+name = "celld-vibestore"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.94.1"
+license = "Apache-2.0"
+publish = false
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ["cfg(celld_internal_tests)"]
+
+[lints.clippy]
+disallowed_macros = "forbid"
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+object_store.workspace = true
+percent-encoding.workspace = true
+rusqlite = { workspace = true, features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

@@ -302,6 +302,8 @@ pub struct WorkerConfigOptions {
     pub src: String,
     pub script_name: String,
     pub do_classes: Vec<String>,
+    /// The subset of `do_classes` whose cells are Dolt cells.
+    pub dolt_classes: Vec<String>,
     pub bindings: Vec<(String, String)>,
     pub r2_bindings: Vec<(String, String)>,
     pub d1_bindings: Vec<(String, String)>,

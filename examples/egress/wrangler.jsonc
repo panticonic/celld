@@ -1,0 +1,8 @@
+{
+  "name": "egress",
+  "main": "index.js",
+  "compatibility_date": "2026-08-02",
+  "durable_objects": { "bindings": [{ "name": "PROBE", "class_name": "Probe" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Probe"] }],
+  "worker_loaders": [{ "binding": "LOADER" }]
+}

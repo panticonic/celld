@@ -52,6 +52,7 @@ axum = { version = "0.7", features = ["multipart"] }
 base64 = "0.22"
 bytes = "1"
 celld-dolt-exec = { path = "crates/dolt-exec" }
+blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 celld-logic = { path = "crates/logic" }
 celld-ltx = { path = "crates/ltx" }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
@@ -87,6 +88,15 @@ hyper = { version = "1", features = ["client", "server", "http1"] }
 httpdate = "1"
 lol_html = "3.0"
 hyper-util = { version = "0.1", features = ["tokio"] }
+# Peer-to-peer transport for the `p2p` binding (docs/services/p2p.md): QUIC
+# connections dialed by public key, with hole punching and relay fallback.
+# 1.x is wire-compatible with the 1.0.2 core inside Vibestudio's
+# `@number0/iroh` binding. `tls-ring` matches the rustls provider the rest of
+# the workspace already uses; the default `portmapper` (UPnP/NAT-PMP),
+# `metrics` and Apple datapath features are left off.
+iroh = { version = "1.4", default-features = false, features = ["tls-ring"] }
+# mDNS address lookup for peers on the same LAN. A separate crate upstream.
+iroh-mdns-address-lookup = "0.6"
 libc = "0.2"
 lz4_flex = { version = "0.11", features = ["frame"] }
 md-5 = "0.10"
@@ -170,6 +180,20 @@ urlpattern = "=0.4.2"
 v8 = "152.1"
 # 1.0.10 drops the emSign ECC root, whose intermediate CA keys are public.
 webpki-roots = "1.0.10"
+# Windows port (docs/fork/windows.md): process memory, job objects, console
+# control events, file flushing and ACLs. Windows targets only.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }
 
 # DoltLite spike: the only SQLite in the binary is the DoltLite amalgamation.
 # rusqlite 0.31's `bundled` build of libsqlite3-sys 0.28 compiles it instead of

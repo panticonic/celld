@@ -51,6 +51,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 // acquisition. On a 16-core host jemalloc measured 20% more hello-world
 // throughput than glibc (mimalloc 11%), and returned the ~7% of the machine
 // that arena-lock sleeps reported as idle.
+//
+// Windows (MSVC) keeps the system allocator: jemalloc does not support it.
+#[cfg(not(windows))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
@@ -601,6 +604,61 @@ impl WebSocketRouteTiming {
             dispatch_us = self.dispatch_us,
             "WebSocket cell request resolved"
         );
+    }
+}
+
+/// A residency hold request from the isolate that runs the cell.
+///
+/// The deployment's declaration is checked here, against the root cell's class,
+/// and only then does the core decide whether the node can afford the hold.
+async fn dispatch_hold(app: AppHandle, req: celld::js::HoldReq) {
+    use celld::js::{HoldDenied, HoldReq};
+    match req {
+        HoldReq::Release { cell, hold } => app.release_hold(cell, hold),
+        HoldReq::Acquire {
+            cell,
+            hold,
+            epoch,
+            reply,
+        } => {
+            let declared = app
+                .runtime
+                .as_ref()
+                .is_some_and(|runtime| runtime.residency_declared(&cell));
+            let verdict = if !declared {
+                let class = cell
+                    .split_once(':')
+                    .map_or(cell.as_str(), |(class, _)| class);
+                Err(HoldDenied {
+                    code: "ERR_RESIDENCY_NOT_DECLARED",
+                    message: format!(
+                        "class {class} did not declare residency: add \
+                         \"celld\": {{ \"durable_objects\": {{ \"{class}\": {{ \"residency\": true }} }} }} \
+                         to the deployment config"
+                    ),
+                })
+            } else {
+                app.hold(cell, hold, epoch)
+                    .await
+                    .map_err(|refusal| HoldDenied {
+                        code: match refusal {
+                            celld_logic::HoldRefusal::NodeBudget { .. } => "ERR_RESIDENCY_BUDGET",
+                            celld_logic::HoldRefusal::CellLimit { .. } => {
+                                "ERR_RESIDENCY_CELL_LIMIT"
+                            }
+                            celld_logic::HoldRefusal::CellLeaving => "ERR_RESIDENCY_LEAVING",
+                            celld_logic::HoldRefusal::CellNotResident => {
+                                "ERR_RESIDENCY_NOT_RESIDENT"
+                            }
+                            celld_logic::HoldRefusal::NodeUnavailable => {
+                                "ERR_RESIDENCY_UNAVAILABLE"
+                            }
+                        },
+                        message: refusal.to_string(),
+                    })
+            };
+            let _ = reply.send(verdict);
+        }
     }
 }
 
@@ -2880,11 +2938,20 @@ async fn handle_internal(
     let do_scope = path.strip_prefix("/do/");
     let cell_scope = path.strip_prefix("/cell/");
     let evict_scope = path.strip_prefix("/evict/");
+    let revoke_scope = path.strip_prefix("/revoke-holds/");
     let result = match path.as_str() {
         "/peer/probe" => internal_probe(request, app).await,
         "/peer/handoff" => internal_handoff(request, app).await,
         _ if path.starts_with("/peer/log/") => internal_log(request, app, path.clone()).await,
         "/state" => response(StatusCode::OK, app.snapshot().await),
+        // The p2p endpoint's node id, addresses and accepted ALPNs.
+        "/p2p" => match celld::p2p::status() {
+            Some(status) => response(
+                StatusCode::OK,
+                serde_json::to_string(&status).unwrap_or_default(),
+            ),
+            None => response(StatusCode::NOT_FOUND, "{\"error\":\"p2p_not_running\"}"),
+        },
         "/reload" if request.method() != hyper::Method::POST => {
             response(StatusCode::METHOD_NOT_ALLOWED, "method not allowed")
         }
@@ -3085,6 +3152,21 @@ async fn handle_internal(
                         format!("{{\"error\":\"{error:?}\"}}"),
                     ),
                 }
+            }
+        }
+        // Operator action: end every residency hold on a cell. The cell's
+        // application is told and its holds drop when its handlers settle or
+        // CELLD_HOLD_GRACE_MS passes; the cell then evicts like any idle cell.
+        _ if revoke_scope.is_some() && request.method() != hyper::Method::POST => {
+            response(StatusCode::METHOD_NOT_ALLOWED, "method not allowed")
+        }
+        _ if revoke_scope.is_some() => {
+            let cell = revoke_scope.expect("checked prefix");
+            if !celld_logic::cell::valid_cell_scope(cell) {
+                malformed_scope()
+            } else {
+                app.revoke_holds(cell.to_string());
+                response(StatusCode::ACCEPTED, r#"{"ok":true}"#)
             }
         }
         _ if evict_scope.is_some() => {
@@ -3386,7 +3468,9 @@ fn shutdown_accept_failure_test_action() -> Action {
         advertise: None,
         unsafe_public_advertise: false,
         trust_forwarded_headers: false,
+        egress: Default::default(),
         dev_store: None,
+        p2p: Default::default(),
     })
 }
 
@@ -3632,6 +3716,15 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
         }
         Action::Run(settings) => settings,
     };
+    // Before any isolate exists, so the first outbound request already takes
+    // the configured route. A bad URL or secret stops startup here.
+    if settings.egress.install()? {
+        tracing::info!(
+            event = "egress_proxy",
+            proxy = settings.egress.proxy.as_deref().unwrap_or_default(),
+            "all outbound traffic is routed through the egress proxy"
+        );
+    }
     // Operators need the applied worker count to verify CELLD_TOKIO_THREADS;
     // a count of process threads also includes unrelated, lazily started
     // thread pools, so it cannot stand in for this value.
@@ -3685,6 +3778,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                     celld::bucket::StorageBackend::Azure => "az",
                     celld::bucket::StorageBackend::S3 => "s3",
                     celld::bucket::StorageBackend::Local => "dev",
+                    celld::bucket::StorageBackend::Vibestore => "vibestore",
                 }
             );
             // The control plane issues one bucket per fleet and its enrollment
@@ -3783,6 +3877,8 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
         .or_else(|| std::env::var_os("CELLD_WATCH"))
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join(format!("celld-{}", std::process::id())));
+    // Windows: absolute, verbatim and length-checked (see `fsname::data_root`).
+    let data_dir = celld::fsname::data_root(data_dir)?;
     let mut deploy_agent = None;
     // The channel `POST /reload` and a managed notification nudge the pointer
     // watcher through. Without a deployment bucket the receiver is dropped
@@ -3990,6 +4086,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                 src: source,
                 script_name,
                 do_classes,
+                dolt_classes: Vec::new(),
                 bindings,
                 r2_bindings,
                 d1_bindings,
@@ -4062,6 +4159,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                     services: Vec::new(),
                     crons,
                     containers: Vec::new(),
+                    residency_classes: Vec::new(),
                     fence_image: None,
                     // The local-script equivalent of `celld.durable_objects`.
                     codegen_classes: std::env::var("CELLD_TEST_CODEGEN_CLASSES")
@@ -4350,6 +4448,16 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
         tokio::spawn(async move {
             while let Some(req) = facet_rx.recv().await {
                 tokio::spawn(dispatch_facet(app.clone(), req));
+            }
+        });
+    }
+    let (hold_tx, mut hold_rx) = mpsc::unbounded_channel();
+    celld::js::set_hold_tx(hold_tx);
+    {
+        let app = app.clone();
+        tokio::spawn(async move {
+            while let Some(req) = hold_rx.recv().await {
+                tokio::spawn(dispatch_hold(app.clone(), req));
             }
         });
     }
@@ -4716,6 +4824,10 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
         });
     }
 
+    // The p2p endpoint starts here, once the first deployment has declared its
+    // bindings and the app can route an inbound stream to its cell. It prints
+    // its own node-id line.
+    celld::p2p::install(app.clone(), settings.p2p.clone()).await?;
     celld::cli_output::Output::new(celld::cli_output::Format::Text).line(format_args!(
         "celld listening on {} (ownership={ownership_name})",
         listener.local_addr()?
@@ -4733,8 +4845,8 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
     // A SIGTERM (systemd stop, `docker stop`, a Kubernetes pod delete) or a
     // SIGINT begins the same graceful shutdown as `POST /shutdown`, so the
     // orchestrator's ordinary stop drains and hands off instead of killing.
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    // On Windows the console control events stand in (`TerminationSignals`).
+    let mut termination = celld::startup::TerminationSignals::install()?;
     let (connection_drain_tx, connection_drain) = watch::channel(false);
     let shutdown_timing = celld::env_vars::shutdown_timing()?;
     let drain_ms = shutdown_timing.drain_no_progress_ms;
@@ -4882,8 +4994,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                 }));
             }
             mode = shutdown_rx.recv() => break mode.unwrap_or(ShutdownMode::Handoff),
-            _ = sigterm.recv() => break ShutdownMode::Handoff,
-            _ = sigint.recv() => break ShutdownMode::Handoff,
+            _ = termination.recv() => break ShutdownMode::Handoff,
             code = fence_rx.recv() => {
                 exit_flushed(code.unwrap_or(3));
             }
@@ -5251,7 +5362,9 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                         && status.releasing == 0
                         && status.adopting == 0
                 }
-                ShutdownMode::Preserve => status.activating == 0 && status.evicting == 0,
+                ShutdownMode::Preserve => {
+                    status.activating == 0 && status.evicting == 0 && status.revoking_holds == 0
+                }
             });
             let completely_drained = match shutdown_mode {
                 ShutdownMode::Handoff => core_drained,
@@ -5599,6 +5712,11 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
         shutdown_accept_failure_test_active,
         "final log flush reached",
     );
+    // Close the p2p endpoint so peers see an orderly close and redial at once
+    // instead of waiting out the idle timeout.
+    if let Some(node) = celld::p2p::node() {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), node.shutdown()).await;
+    }
     exit_flushed(0);
 }
 

@@ -130,15 +130,18 @@ the Cloudflare service.
 - [Workers](services/workers.md)
 - [Durable Objects / Cells](services/durable-objects.md)
 - [Durable Object Facets](services/durable-object-facets.md)
+- [Residency holds](services/residency.md): keep an object resident until it releases
 - [KV](services/kv.md)
 - [Queues](services/queues.md)
 - [D1](services/d1.md)
 - [R2](services/r2.md)
+- [P2P (Iroh)](services/p2p.md)
 - [Workflows](services/workflows.md)
 - [Cron Triggers](services/cron-triggers.md)
 - [Static assets](services/static-assets.md)
 - [Dynamic Workers](services/dynamic-workers.md)
 - [Containers](services/containers.md)
+- [Egress proxy](services/egress.md)
 
 ## Install
 

@@ -19,9 +19,16 @@ pub(crate) struct Settings {
     /// Whether forwarded scheme and host headers can set `request.url`.
     /// This option is off unless a trusted proxy replaces both headers.
     pub(crate) trust_forwarded_headers: bool,
+    /// The node-level egress proxy and its HMAC secret. When set, every
+    /// outbound request of every isolate goes through the proxy.
+    pub(crate) egress: celld::egress::NodeSettings,
     /// Set only by the `celld dev` supervisor for its child node. No fleet
     /// flag or public environment variable selects the local backend.
     pub(crate) dev_store: Option<std::path::PathBuf>,
+    /// The Iroh endpoint behind the `p2p` binding: `--p2p-*` flags and
+    /// `CELLD_P2P_*` variables. The endpoint starts only when a key file is
+    /// named or a loaded deployment declares a `p2p` binding.
+    pub(crate) p2p: celld::p2p::Settings,
 }
 
 pub(crate) enum Action {
@@ -150,11 +157,13 @@ pub(crate) fn action_from_process() -> anyhow::Result<Action> {
         advertise: configured_advertise,
         unsafe_public_advertise: celld::env_vars::flag("CELLD_UNSAFE_PUBLIC_ADVERTISE", false)?,
         trust_forwarded_headers: celld::env_vars::flag("CELLD_TRUST_FORWARDED_HEADERS", false)?,
+        egress: celld::egress::NodeSettings::from_environment(),
         dev_store: if diagnose {
             None
         } else {
             std::env::var_os("CELLD_INTERNAL_DEV_STORE").map(std::path::PathBuf::from)
         },
+        p2p: celld::p2p::Settings::from_environment()?,
     };
     let mut inspector_addr = env("CELLD_INSPECTOR_ADDR");
     let mut inspector_allow_non_loopback =
@@ -208,9 +217,55 @@ pub(crate) fn action_from_process() -> anyhow::Result<Action> {
                         .ok_or_else(|| anyhow::anyhow!("--advertise requires a value"))?,
                 );
             }
+            "--p2p-key-file" => {
+                settings.p2p.key_file = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--p2p-key-file requires a value"))?
+                        .into(),
+                );
+            }
+            "--p2p-relay" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--p2p-relay requires a value"))?;
+                settings.p2p.set_relay(&value)?;
+            }
+            "--p2p-discovery" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--p2p-discovery requires a value"))?;
+                settings.p2p.set_discovery(&value)?;
+            }
+            "--p2p-bind" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--p2p-bind requires a value"))?;
+                settings.p2p.set_bind(&value)?;
+            }
             "--unsafe-public-advertise" => settings.unsafe_public_advertise = true,
             "--trust-forwarded-headers" => settings.trust_forwarded_headers = true,
             "--no-implicit-deadlines" => celld::deadlines::disable_implicit_deadlines(),
+            "--egress-proxy" => {
+                settings.egress.proxy = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--egress-proxy requires a URL"))?,
+                );
+            }
+            "--egress-secret" => {
+                settings.egress.secret = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--egress-secret requires a value"))?,
+                );
+                settings.egress.secret_file = None;
+            }
+            "--egress-secret-file" => {
+                settings.egress.secret_file = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--egress-secret-file requires a path"))?
+                        .into(),
+                );
+                settings.egress.secret = None;
+            }
             "--peer" if diagnose => {
                 let peer = args
                     .next()
@@ -297,6 +352,8 @@ USAGE:
 
 Production install: celld --bucket s3://NAME [OPTIONS]
                     celld --bucket gs://NAME [OPTIONS]
+Single-node workspace: celld --bucket vibestore:///PATH/TO/BLOBROOT[?index=FILE]
+                       (no cloud bucket; see docs/fork/vibestore.md)
 
 OPTIONS:
   --bucket [s3://|gs://|az://]NAME[/PREFIX]
@@ -328,6 +385,7 @@ OPTIONS:
                          Peer traffic has no built-in TLS, and operator routes
                          permit unauthenticated work, eviction, state inspection,
                          and shutdown
+{p2p_help}
   --trust-forwarded-headers
                          Let X-Forwarded-Host and X-Forwarded-Proto set the
                          scheme and host in request.url. Set this option only
@@ -352,6 +410,15 @@ OPTIONS:
   --inspector-allow-non-loopback
                          Accept a non-loopback --inspector-addr (or
                          CELLD_INSPECTOR_ALLOW_NON_LOOPBACK=1)
+  --egress-proxy URL     Send every outbound request of every isolate (fetch,
+                         outbound WebSocket, connect()) to this http:// or
+                         https:// proxy, which admits it by the caller identity
+                         celld attaches and authenticates with HMAC. Needs an
+                         egress secret. Without it, isolates dial directly
+  --egress-secret-file PATH
+                         File holding the egress HMAC secret (16+ bytes)
+  --egress-secret VALUE  The secret itself; prefer the file or the environment,
+                         since arguments are visible to other local users
   -h, --help             Show this help
   -V, --version          Show the celld version
 
@@ -371,6 +438,12 @@ ENVIRONMENT:
   CELLD_TRUST_FORWARDED_HEADERS   `1` trusts X-Forwarded-Host and
                                   X-Forwarded-Proto
   CELLD_NO_IMPLICIT_DEADLINES     `1` is --no-implicit-deadlines
+  CELLD_P2P_KEY_FILE, CELLD_P2P_RELAY, CELLD_P2P_DISCOVERY, CELLD_P2P_BIND
+                                  Same as the --p2p-* options
+  CELLD_P2P_MAX_STREAMS           Open p2p streams per node (default: 4096)
+  CELLD_EGRESS_PROXY              Egress proxy URL; same as --egress-proxy
+  CELLD_EGRESS_SECRET             Egress HMAC secret; same as --egress-secret
+  CELLD_EGRESS_SECRET_FILE        Egress HMAC secret file; same as --egress-secret-file
   CELLD_NODE                      Node-session ID (default: generated)
   CELLD_WATCH                     Local SQLite/replication working directory
   CELLD_ESBUILD                   Override esbuild executable path
@@ -391,6 +464,9 @@ TUNING:
   CELLD_PLACEMENT_WEIGHT          Relative ownership share (default: the
                                   CPU count)
   CELLD_IDLE_EVICT_S              Idle-cell eviction age (disabled unless set)
+  CELLD_HOLD_GRACE_MS             How long a revoked residency hold may take to
+                                  wind down (default: 5000)
+  CELLD_MAX_HOLDS_PER_CELL        Residency holds one cell may carry (default: 16)
   CELLD_RECOVERY_RETRY_MS         Dead-owner recovery retry backoff (default: 1000)
   CELLD_RECOVERY_RETRIES          Recovery retries before a request fails (default: 240)
   CELLD_LOCAL_CACHE_MAX_BYTES     Hibernated SQLite cache limit (default: 2 GiB; 0 disables)
@@ -421,6 +497,7 @@ TUNING:
 
 Documentation: https://celld.dev/docs"#,
         shutdown_total_ms = celld::env_vars::DEFAULT_SHUTDOWN_TOTAL_MS,
+        p2p_help = celld::p2p::HELP,
     );
     celld::cli_output::Output::new(celld::cli_output::Format::Text).help(&help)
 }

@@ -216,6 +216,21 @@ impl CellHost {
         }
     }
 
+    /// Tell the cell's application its residency holds are revoked and wait for
+    /// its handlers to settle.
+    pub(crate) async fn holds_revoked(
+        &self,
+        cell: String,
+        holds: Vec<u64>,
+        reason: &str,
+    ) -> anyhow::Result<Option<u64>> {
+        match self {
+            Self::Engine(runtime) => runtime.holds_revoked(cell, holds, reason).await,
+            #[cfg(all(test, celld_internal_tests))]
+            Self::Scripted(_) => Ok(None),
+        }
+    }
+
     pub(crate) fn abort_alarm(&self, cell: &str, op: celld_logic::OpId) {
         match self {
             Self::Engine(runtime) => runtime.abort_alarm(cell, op),

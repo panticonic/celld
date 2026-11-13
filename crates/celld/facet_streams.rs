@@ -110,7 +110,9 @@ impl FacetStreams {
                     spec.resume_local = false;
                 }
                 let (restored_path, restored, _) =
-                    replication.restore(&facet, &spec, false).await?;
+                    replication
+                        .restore(&facet, &spec, false, celld_ltx::Engine::Sqlite)
+                        .await?;
                 anyhow::ensure!(
                     restored_path == path,
                     "replication restored {} instead of {}",

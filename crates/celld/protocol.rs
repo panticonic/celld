@@ -23,6 +23,12 @@ pub struct Manifest {
     pub do_classes: Vec<String>,
     /// Subset of `do_classes` that are SQLite-backed (from migrations).
     pub sqlite_classes: Vec<String>,
+    /// Subset of `sqlite_classes` whose cells are Dolt cells: a DoltLite
+    /// prolly store with commits, branches and merge
+    /// (`migrations[].new_dolt_classes`). A class's engine is fixed when the
+    /// class is created; see `docs/services/dolt-cells.md`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dolt_classes: Vec<String>,
     pub modules: Vec<ModuleRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assets: Option<AssetManifestRef>,
@@ -48,6 +54,14 @@ pub struct Manifest {
     /// which a node then refuses to start containers for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fence_image: Option<String>,
+    /// The config's `"celld"` block: per-class capabilities celld grants
+    /// beyond the Workers contract (residency, and the features that share
+    /// this block). Empty when the config has none.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::deploy::CelldDeclaration::is_empty"
+    )]
+    pub celld: crate::deploy::CelldDeclaration,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_features: Vec<String>,
     /// wrangler's raw metadata, retained verbatim for anything we don't yet model.
@@ -67,16 +81,29 @@ pub const SUPPORTED_DEPLOYMENT_FEATURES: &[&str] = &[
     FEATURE_CONTAINERS_V1,
     FEATURE_CRON_V1,
     FEATURE_D1_V1,
+    FEATURE_DOLT_CELLS_V1,
     FEATURE_KV_V1,
+    FEATURE_P2P_V1,
     FEATURE_QUEUES_V1,
     FEATURE_SQLITE_VEC_V1,
     FEATURE_R2_V1,
     FEATURE_WASM_V1,
     FEATURE_WORKFLOWS_V1,
     FEATURE_PYTHON_WORKERS_V1,
+    FEATURE_RESIDENCY_V1,
 ];
 
+/// A deployment whose `celld` block grants `residency`. Required because a
+/// build without `ctx.residency` would load the manifest and let an object
+/// that depends on staying resident be evicted like any other, losing the
+/// state it was written to keep, with no error to say why.
+pub const FEATURE_RESIDENCY_V1: &str = "residency-v1";
+
 pub const FEATURE_ASSETS_V1: &str = "assets-v1";
+/// A deployment with Dolt classes (`migrations[].new_dolt_classes`).
+/// Required because a node without the Dolt engine would create a stock
+/// SQLite file for the class, and the class's engine is fixed at creation.
+pub const FEATURE_DOLT_CELLS_V1: &str = "dolt-cells-v1";
 /// A deployment with `containers`. Required because a build without the
 /// container engine would load the manifest, build a `ctx` with no
 /// `container`, and fail only when the object first touches it.
@@ -115,6 +142,12 @@ pub const FEATURE_WORKFLOWS_V1: &str = "workflows-v1";
 /// because its reserved class is in `do_classes` and the loader refuses a
 /// class it does not know.
 pub const FEATURE_KV_V1: &str = "kv-v1";
+
+/// A deployment with `p2p` bindings. A node without the Iroh endpoint would
+/// build an `env` with no binding on it and fail when the application first
+/// reaches for it, and would never accept the ALPN, so a peer's dial would
+/// fail on a node the developer is not watching.
+pub const FEATURE_P2P_V1: &str = "p2p-v1";
 
 /// A deployment with a Queue producer or consumer. A node without the broker
 /// would otherwise omit a producer binding or silently stop consuming.

@@ -46,6 +46,7 @@ static_source!(MESSAGE_CHANNEL_SOURCE, "message_channel.js");
 static_source!(EVENT_SOURCE_SOURCE, "event_source.js");
 static_source!(CACHE_SOURCE, "cache.js");
 static_source!(SOCKETS_SOURCE, "sockets.js");
+static_source!(P2P_SOURCE, "p2p.js");
 static_source!(HTML_REWRITER_SOURCE, "html_rewriter.js");
 static_source!(CRYPTO_SOURCE, "crypto.js");
 
@@ -100,6 +101,10 @@ static POST_HARNESS: &[BootstrapSource] = &[
     BootstrapSource {
         name: "sockets.js",
         source: &SOCKETS_SOURCE,
+    },
+    BootstrapSource {
+        name: "p2p.js",
+        source: &P2P_SOURCE,
     },
     BootstrapSource {
         name: "html_rewriter.js",
@@ -493,6 +498,33 @@ pub(super) fn inject_containers(
     Ok(())
 }
 
+/// `__cell.residency`: the classes whose objects may `ctx.residency.hold()`.
+///
+/// A deployment's Worker lists its declared classes. A loaded Worker carries
+/// one `"*"` entry that says whether its loader's `celld: { residency }`
+/// granted it. This is only the harness's own early answer -- the host refuses
+/// again in `op_residency_hold` and in the host loop, against the deployment.
+pub(super) fn inject_residency(
+    scope: &mut v8::PinScope,
+    config: &super::WorkerConfig,
+) -> Result<()> {
+    let cell = cell_state(scope)?;
+    let map = v8::Object::new(scope);
+    let value = v8::Boolean::new(scope, true);
+    for class in &config.residency_classes {
+        let key = v8::String::new(scope, class).ok_or_else(|| anyhow!("residency class"))?;
+        map.set(scope, key.into(), value.into());
+    }
+    if let Some(grant) = config.residency_grant {
+        let key = v8::String::new(scope, "*").unwrap();
+        let value = v8::Boolean::new(scope, grant);
+        map.set(scope, key.into(), value.into());
+    }
+    let key = v8::String::new(scope, "residency").unwrap();
+    cell.set(scope, key.into(), map.into());
+    Ok(())
+}
+
 /// Register the workflow cell class under its script-scoped name.
 ///
 /// `harness.js` registers `__WorkflowCell` under the bare `__Workflow` at
@@ -665,6 +697,14 @@ pub(super) fn build_env(scope: &mut v8::PinScope, config: &WorkerConfig) -> Resu
             lines.push_str(&format!(
                 "e[{:?}] = __celld.__makeServiceBinding({:?}, {});\n",
                 binding, script, entrypoint
+            ));
+        }
+        // `p2p` bindings come from the node-level registry rather than from
+        // `WorkerConfig`: the endpoint they reach is the node's.
+        for binding in crate::p2p::bindings_for(script_name) {
+            lines.push_str(&format!(
+                "e[{:?}] = __celld.__makeP2P({{ binding: {:?}, alpn: {:?} }});\n",
+                binding.binding, binding.binding, binding.alpn
             ));
         }
         for (name, value) in vars {
@@ -919,6 +959,7 @@ pub(super) fn adopt_cell(
             cell_storage.replicated_wake,
             cell_storage.vfs,
             compat.sqlite_vec,
+            cell_storage.engine,
         )
         .context("cell storage open failed")?;
     }

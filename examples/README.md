@@ -7,6 +7,8 @@ supports, one service or API at a time:
 - `webapi/` — common Web Platform APIs
 - `static-assets/` — an asset-only website with headers and redirects
 - `counter/` — a SQLite-backed Durable Object
+- `dolt/` — a Dolt-backed Durable Object: commits, branches, merge, fork
+  (fork-only feature; `demo.sh` runs it end to end under `celld dev`)
 - `vectordb/` — nearest-color search with a per-object `vec0` index
 - `d1/` — a guestbook on a D1 database
 - `r2/` — object reads, writes, and deletes on an R2 bucket
@@ -17,11 +19,17 @@ supports, one service or API at a time:
 - `router/` — Worker-to-Durable-Object routing
 - `wsecho/` — WebSocket echo with hibernation
 - `wsclient/` — outbound WebSocket client from a Durable Object
+- `p2p/` — two nodes exchanging streams over Iroh, dialed by node id
 - `alarm/` — a Durable Object alarm handler
 - `cron/` — a cron trigger that logs each tick
 - `workflow/` — a Workflow that builds a report in one durable step
 - `rpc/` — Durable Object method calls through JS RPC
 - `dynamic-worker-tails/` — a runtime-loaded Worker with a Tail Worker
+- `residency/` — an in-memory counter kept resident by `ctx.residency.hold()`
+  past idle eviction, and evicted after `release()`; `run.sh` scripts it
+  against `celld dev`
+- `egress/` — outbound traffic through a node egress proxy, with a test that
+  checks the identity each request carries (`node test.mjs`)
 - `facets/` — a Durable Object facet over a class the Worker Loader starts
 - `codegen/` — `eval`, `new Function` and WebAssembly compilation are refused
   everywhere except a Durable Object class that declares `codegen`; no build

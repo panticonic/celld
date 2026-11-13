@@ -568,6 +568,7 @@ pub(crate) async fn outbound_websocket_task(
         want_response,
         target,
         facet,
+        via,
         reply,
     } = request;
     if let Some(target) = target {
@@ -612,7 +613,11 @@ pub(crate) async fn outbound_websocket_task(
         );
     }
     let timeout = std::time::Duration::from_secs(10);
-    let connected = tokio::time::timeout(timeout, celld::ws_client::connect(&url, handshake)).await;
+    let connected = tokio::time::timeout(
+        timeout,
+        celld::ws_client::connect_via(&url, handshake, via.as_ref()),
+    )
+    .await;
     let connection = match connected {
         Ok(Ok(connection)) => connection,
         Ok(Err(celld::ws_client::Error::Declined(declined))) if want_response => {

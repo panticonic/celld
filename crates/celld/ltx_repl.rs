@@ -31,7 +31,9 @@ use celld_ltx::client::epochs::EpochChain;
 use celld_ltx::object_store::ObjectStore;
 use celld_ltx::replica;
 use celld_ltx::replica_compactor::{CompactionResult, ReplicaCompactor};
+use celld_ltx::CellStore;
 use celld_ltx::Db;
+use celld_ltx::DoltStore;
 use celld_ltx::HostTaskError;
 use celld_ltx::LtxHost;
 use celld_ltx::ObjectStoreClient;
@@ -1482,6 +1484,11 @@ impl LtxRepl {
             crate::bucket::StorageBackend::Local => {
                 Arc::new(crate::local_store::LocalStore::open(&bucket)?)
             }
+            // `bucket` is the spec text after `vibestore://`; the node's other
+            // bucket clients already opened this store, and `open` returns it.
+            crate::bucket::StorageBackend::Vibestore => {
+                crate::vibestore::open(&format!("vibestore://{bucket}"))?.0
+            }
         };
         // Azure blob metadata names must be C# identifiers, so the standard
         // Litestream key cannot carry its hyphen there. External Litestream
@@ -1491,7 +1498,8 @@ impl LtxRepl {
             crate::bucket::StorageBackend::Azure => TimestampMetadataKey::Underscore,
             crate::bucket::StorageBackend::S3
             | crate::bucket::StorageBackend::Gcs
-            | crate::bucket::StorageBackend::Local => TimestampMetadataKey::Litestream,
+            | crate::bucket::StorageBackend::Local
+            | crate::bucket::StorageBackend::Vibestore => TimestampMetadataKey::Litestream,
         };
         // The tiering flush interval: with a healthy shipper, at most one
         // upload per cell per interval; it is simultaneously the bucket lag
@@ -2197,7 +2205,7 @@ impl LtxRepl {
 
     fn db_path(&self, cell: &str, epoch: u64) -> PathBuf {
         self.watch
-            .join(cell)
+            .join(&*crate::fsname::cell_path(cell))
             .join("ltx")
             .join(format!("e{epoch}"))
             .join("db.sqlite")
@@ -2316,7 +2324,11 @@ impl LtxRepl {
             // Consumed by the interlock before the fold; the field stays
             // on the options because the core's claim still names it.
             prior: _,
+            engine,
         } = options;
+        // A Dolt cell's chain is downloaded whole: the paged VFS serves
+        // SQLite pages, and DoltLite reads its chunk file directly.
+        let allow_paged = allow_paged && engine == celld_ltx::Engine::Sqlite;
         {
             let _close_gate = self.replica_close_gate.lock().unwrap();
             anyhow::ensure!(
@@ -2594,16 +2606,25 @@ impl LtxRepl {
         // or schema setup runs. An earlier write can hide a torn WAL header and
         // let capture resume from a stale LTX cursor after a crash.
         let (db, mut seed, marker) = asyncrt::blocking(move || {
-            let open_db = |ltx_host: LtxHost| match vfs_name.as_deref() {
-                Some(vfs_name) => Db::open_with_host_and_vfs(&dst_, ltx_host, vfs_name),
-                None => Db::open_with_host(&dst_, ltx_host),
+            let open_db = |ltx_host: LtxHost| -> celld_ltx::Result<Box<dyn CellStore>> {
+                match (engine, vfs_name.as_deref()) {
+                    (celld_ltx::Engine::Dolt, _) => {
+                        Ok(Box::new(DoltStore::open(&dst_, ltx_host)?))
+                    }
+                    (celld_ltx::Engine::Sqlite, Some(vfs_name)) => Ok(Box::new(
+                        Db::open_with_host_and_vfs(&dst_, ltx_host, vfs_name)?,
+                    )),
+                    (celld_ltx::Engine::Sqlite, None) => {
+                        Ok(Box::new(Db::open_with_host(&dst_, ltx_host)?))
+                    }
+                }
             };
             #[cfg(celld_internal_tests)]
             let mut db = crate::fault::with_connection_role("celld_ltx_db", || open_db(ltx_host))?;
             #[cfg(not(celld_internal_tests))]
             let mut db = open_db(ltx_host)?;
             if let Some(pages) = truncate_pages {
-                db.truncate_page_n = pages;
+                db.set_truncate_page_n(pages);
             }
             let marker = match continuation {
                 Some((txid, commit)) => Some((txid, db.seed_continuation(txid, commit)?)),
@@ -2655,7 +2676,7 @@ impl LtxRepl {
                 "computed restore plan"
             );
         }
-        let mut replica = Replica::new(db, client.clone());
+        let mut replica = Replica::new_boxed(db, client.clone());
         if let Some(pos) = seed {
             replica.seed_pos(pos);
         }
@@ -3513,7 +3534,7 @@ impl LtxRepl {
         while let Some(result) = deleted.next().await {
             result?;
         }
-        let local = self.watch.join(cell);
+        let local = self.watch.join(&*crate::fsname::cell_path(cell));
         if self.ltx_host.filesystem().metadata(&local).is_ok() {
             self.ltx_host.remove_dir_all(&local)?;
         }
@@ -3870,7 +3891,9 @@ impl LtxRepl {
         {
             return Ok(None);
         }
-        let directory = self.watch.join(format!(".inspect-{cell}-e{epoch}"));
+        let directory = self
+            .watch
+            .join(format!(".inspect-{}-e{epoch}", crate::fsname::cell_path(cell)));
         let _ = self.ltx_host.remove_dir_all(&directory);
         self.ltx_host.create_dir_all(&directory)?;
         let path = directory.join("db.sqlite");
@@ -3924,7 +3947,9 @@ impl LtxRepl {
                 continue;
             }
             let epoch = chain.spans().last().map_or(0, |(e, _)| *e);
-            let directory = self.watch.join(format!(".restore-{cell}"));
+            let directory = self
+                .watch
+                .join(format!(".restore-{}", crate::fsname::cell_path(cell)));
             let _ = self.ltx_host.remove_dir_all(&directory);
             self.ltx_host.create_dir_all(&directory)?;
             let path = directory.join("db.sqlite");
@@ -4010,7 +4035,11 @@ impl LtxRepl {
             if !cell_dir.is_dir {
                 continue;
             }
-            let Some(cell) = cell_dir.file_name.to_str().map(str::to_owned) else {
+            let Some(cell) = cell_dir
+                .file_name
+                .to_str()
+                .map(|name| crate::fsname::cell_from_dir_name(name).into_owned())
+            else {
                 continue;
             };
             let Ok(epochs) = filesystem.read_dir(&cell_dir.path.join("ltx")) else {
@@ -5519,7 +5548,7 @@ fn close_replica_or_warn(handle: &CellHandle, cell: &str, epoch: u64) {
 
 fn managed_db_mut(
     replica: &mut Option<Replica<SharedObjectStoreClient>>,
-) -> Option<&mut celld_ltx::Db> {
+) -> Option<&mut (dyn CellStore + 'static)> {
     replica.as_mut()?.db_mut()
 }
 

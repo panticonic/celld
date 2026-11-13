@@ -10,6 +10,25 @@ Facts are from source reads of celld `8702f6d`, DoltLite 0.11.29 (pinned in
 Chronolog) and Chronolog `simplify-core` `a8e5954`. Anything marked *spike*
 has not been run yet.
 
+## Status (2026-11-13)
+
+| Piece | State | Where |
+| --- | --- | --- |
+| DoltLite 0.51.11 as the only SQLite | merged | `vendor/libsqlite3-sys` |
+| Test harness: E2E, fleet fault injection, simulator | merged | `tests/e2e`, `tests/fleet`, `crates/logic-sim` |
+| Dolt cells: storage, replication, `ctx.storage.dolt`, fork | merged | `docs/services/dolt-cells.md` |
+| Deterministic execution: per-connection context patch, executor, `dolt.execute`, engine digest | merged | `crates/dolt-exec`, patch 0002 |
+| Codegen confinement, `--no-implicit-deadlines` | merged | `docs/fork/codegen.md`, `docs/fork/deadlines.md` |
+| Residency hold | merged | `docs/services/residency.md` |
+| Egress hook | merged | `docs/services/egress.md` |
+| Iroh P2P binding | merged | `docs/services/p2p.md` |
+| Vibestore local bucket | merged | `docs/fork/vibestore.md` |
+| Fixes for the upstream defects the harness found | in progress | `docs/fork/upstream-findings.md` |
+| V8 inspector, Windows port | in progress | |
+| Chronolog `transport-iroh` | done (Chronolog branch `feature/transport-iroh`) | |
+| Chronolog node on the fork | in progress (Chronolog branch `feature/celld-host`) | |
+| Vibestudio compatibility audit | in progress (Vibestudio branch `audit/celld-compat`) | |
+
 ## 1. Goal
 
 There is one runtime, and it has two kinds of cell:
@@ -159,6 +178,54 @@ their own switches.
   - `Outcome` is `Accepted` or `Rejected { code, statement_index }`.
   - `ctx.storage.dolt.execute` is a thin wrapper over it.
 
+## 3b. Dolt cells as built (phase 1 decisions, 2026-11-13)
+
+User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
+
+1. **The seam is below `Replication`, at the capture.** `celld_ltx::CellStore`
+   (`crates/ltx/src/cell_store.rs`) is what a `Replica` holds; `Db` is the
+   LTX store, `DoltStore` (`crates/ltx/src/dolt.rs`) the Dolt one.
+   `ltx_repl.rs` picks the store by `ActivationOptions.engine` and is
+   otherwise engine-blind.
+2. **A `DoltSegment` travels as an L0 LTX of page images.** The appended
+   byte range (cut at the end of the newest root whose BLAKE3 seal verifies)
+   is carried as the 4 KiB pages that cover it, last page zero-filled past
+   the cut. Position is the TXID; the byte cut is in the L0 header
+   (`wal_size`, `wal_offset` = next record, `wal_salt1` = `DOLT`).
+   Consequence: followers, bundles, upload, compaction, epoch chains, epoch
+   GC, handoff snapshots and the output gate's proofs are literally the same
+   code, so no engine tag was needed in `log_tier`, `epoch_gc` or
+   `BUCKET_FORMAT` (the object format is unchanged; the manifest feature
+   `dolt-cells-v1` keeps old nodes away). A **generation** (`dolt_gc`,
+   restore) is detected by a changed offset-0 manifest or a short file and
+   captured whole, which truncates on restore like a VACUUM. Cost: each
+   capture re-sends at most one partial page. Limit: the LTX lock page
+   caps a chunk file at 1 GiB; no paged restore for Dolt cells.
+3. **`_cf_*` tables live in the prolly store, unversioned.** One root then
+   commits a handler's application rows and celld's rows together, and one
+   stream replicates both. `dolt_ignore` (`_cf_%`) keeps them out of every
+   commit, `reset --hard` and `merge`. DoltLite's checkout is per
+   connection and working sets are per branch, so checkout copies the
+   runtime tables into the target branch's working set and then flips
+   `_cf_DOLT.branch` on `main`, which every open reads first (crash-safe
+   in either order of failure; cost O(runtime tables)). Rejected:
+   `dolt_nonlocal_tables` (needs ATTACH of `file/branch`, which the
+   authorizer denies, and failed to open in a probe), and a sidecar SQLite
+   file (two streams, no atomicity with application writes).
+4. **Gate:** Dolt operations change no SQLite row counter, so each mutating
+   operation bumps a per-activation counter folded into the committed-write
+   position; the output gate then waits for the same proofs as a SQL write.
+5. **Fork (simplest correct):** the source publishes a full image from its
+   own turn behind its output gate, claims the new id with a conditional
+   create of a released `own.json` at epoch 1, and uploads a TXID-1
+   snapshot to `e1`; the fork's first activation restores from it like an
+   operator-released cell. No storage is shared yet (§3.2's prefix
+   reference remains future work).
+6. **Wake triggers are TEMP on Dolt cells.** Dolt versions persistent
+   triggers (`dolt_schemas`), so reset/merge/checkout could drop the
+   `_cf_WAKE` triggers and user commits would carry them; Dolt cells create
+   them per connection and re-ensure them after every mutating operation.
+
 ## 4. Determinism: fixes over the earlier plans
 
 Things the workerd reconstruction plan and the current Chronolog patch get
@@ -212,7 +279,7 @@ Corrections are marked ✱.
 | Egress with caller identity, plus a "no network" mode, covering fetch, `connect()` and outbound WebSocket (used by model transport and the CDP client) | One `EgressHook` in front of `op_fetch`, `op_tcp_connect` and `op_ws_connect` (`js.rs:8990`, `js/tcp.rs:136`, `js/websocket.rs:475`), with the policy carried per isolate (`EgressPolicy`, `js.rs:2430`) |
 | Residency hold, available to any cell that declares it (eval kernels are ordinary per-owner Dolt cells, §8) | `Cell.held` folded into `is_active` (`logic/lib.rs:1748`), with a node-wide budget like `may_pin_outbound` |
 | No hidden deadlines | Make explicit, or remove: the JS-side 30 s `blockConcurrencyWhile` timer (`harness.js:2736`), `CELLD_OPERATION_DEADLINE_MS` (15 s, `actor.rs:41`), the 60 s stream idle expiry (`http_streams.rs:34`) and the 10 s durability timeout |
-| Local store on the Vibestudio blobstore | `ObjectStore` implementation over the CAS, with conditional writes for ownership records |
+| Local store on the Vibestudio blobstore | `ObjectStore` implementation over the CAS, with conditional writes for ownership records. Built: [vibestore.md](vibestore.md) |
 | Fork, backup, restore without private files | Dolt cells (§3.2) for DOs that want versioning. Snapshot-and-segment fork for SQLite cells. Deletes `cloneDO` and `computeWorkerdObjectIdHash` |
 | ✱ SES `lockdown()` for internal DOs | Verify in phase 0 |
 | V8 inspector | New module, bridged like `workerdInspectorBridge.ts` |

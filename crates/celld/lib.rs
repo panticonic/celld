@@ -55,15 +55,18 @@ pub mod deadlines;
 pub mod deploy;
 pub mod dev;
 pub mod docker;
+pub(crate) mod dolt_cell;
 pub mod drain_token;
 pub mod engine_api;
 pub mod env_vars;
+pub mod fsname;
 #[cfg(celld_internal_tests)]
 #[allow(clippy::disallowed_methods)]
 #[doc(hidden)]
 pub mod fault {
     include!(env!("CELLD_INTERNAL_SQLITE_FAULT"));
 }
+pub mod egress;
 pub(crate) mod facet_streams;
 pub mod fleet;
 pub mod generation;
@@ -75,6 +78,7 @@ pub mod js;
 pub mod kv_blob;
 pub mod kv_cli;
 pub(crate) mod local_store;
+pub(crate) mod vibestore;
 pub mod ltx_repl;
 pub mod ltx_replication;
 pub mod machine;
@@ -84,6 +88,7 @@ pub(crate) mod operator_cell;
 #[doc(hidden)]
 pub mod otlp;
 pub mod ownership_store;
+pub mod p2p;
 pub mod peer_auth;
 pub mod peer_probe;
 pub mod pool;
@@ -103,6 +108,8 @@ pub mod wake_entry;
 pub mod wake_format;
 pub mod ws_client;
 pub mod ws_registry;
+#[cfg(windows)]
+pub mod winos;
 
 #[cfg(all(test, celld_internal_tests))]
 mod composed_simulation {

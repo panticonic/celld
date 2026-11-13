@@ -1,0 +1,17 @@
+{
+  "name": "p2p",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": { "bindings": [{ "name": "NODE", "class_name": "Node" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Node"] }],
+  // One ALPN, accepted by the Durable Object `Node` named "node". A node that
+  // runs this deployment also needs an Iroh identity: run it with
+  // `--p2p-key-file` (`celld dev` keeps one in .celld/dev/p2p.key).
+  "p2p": [
+    {
+      "binding": "P2P",
+      "alpn": "celld-example/echo/1",
+      "accept": { "class": "Node", "name": "node" }
+    }
+  ]
+}

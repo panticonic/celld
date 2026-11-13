@@ -78,6 +78,7 @@ pub(crate) use crate::host_channels::outbound_ws_tx;
 pub use crate::host_channels::set_asset_call_tx;
 pub use crate::host_channels::set_facet_tx;
 pub use crate::host_channels::set_gate_tx;
+pub use crate::host_channels::set_hold_tx;
 pub use crate::host_channels::set_kv_blob_store;
 pub use crate::host_channels::set_outbound_ws_tx;
 pub use crate::host_channels::set_queue_dispatch_tx;
@@ -87,6 +88,8 @@ pub use crate::host_channels::set_svc_rpc_tx;
 pub use crate::host_channels::AssetCallReq;
 pub use crate::host_channels::FacetReq;
 pub use crate::host_channels::GateReq;
+pub use crate::host_channels::HoldDenied;
+pub use crate::host_channels::HoldReq;
 pub use crate::host_channels::QueueDispatchReq;
 pub use crate::host_channels::QueueLeaseRef;
 pub use crate::host_channels::RpcCallReq;
@@ -97,6 +100,7 @@ pub use crate::host_channels::TestOutboundWsConnector;
 pub(crate) use crate::host_channels::ASSET_CALL_TX;
 pub(crate) use crate::host_channels::FACET_TX;
 pub(crate) use crate::host_channels::GATE_TX;
+pub(crate) use crate::host_channels::HOLD_TX;
 pub(crate) use crate::host_channels::QUEUE_DISPATCH_TX;
 pub(crate) use crate::host_channels::RPC_CALL_TX;
 pub(crate) use crate::host_channels::SVC_CALL_TX;
@@ -649,6 +653,15 @@ pub enum CellJob {
         reply:
             tokio::sync::oneshot::Sender<Result<(celld_logic::wake::AlarmSnapshot, Option<u64>)>>,
     },
+    /// The core revoked residency holds on this cell (a drain, a forced swap or
+    /// an operator). Runs each handle's `onrevoked` handlers and finishes when
+    /// they have settled, which is what lets the core drop the hold early.
+    HoldsRevoked {
+        scope: String,
+        holds: Vec<u64>,
+        reason: String,
+        reply: tokio::sync::oneshot::Sender<Result<Option<u64>>>,
+    },
     #[cfg(celld_internal_tests)]
     SyncErrorForTest {
         scope: String,
@@ -668,6 +681,7 @@ impl CellJob {
             | CellJob::WsOpen { scope, .. }
             | CellJob::WsMessage { scope, .. }
             | CellJob::WsClosed { scope, .. }
+            | CellJob::HoldsRevoked { scope, .. }
             | CellJob::Alarm { scope, .. } => scope,
             #[cfg(celld_internal_tests)]
             CellJob::SyncErrorForTest { scope, .. } => scope,
@@ -708,6 +722,7 @@ impl CellJob {
             CellJob::WsOpen { reply, .. } => drop(reply.send(Err(error))),
             CellJob::WsMessage { reply, .. } => drop(reply.send(Err(error))),
             CellJob::WsClosed { reply, .. } => drop(reply.send(Err(error))),
+            CellJob::HoldsRevoked { reply, .. } => drop(reply.send(Err(error))),
             CellJob::Alarm { reply, .. } => drop(reply.send(Err(error))),
             #[cfg(celld_internal_tests)]
             CellJob::SyncErrorForTest { reply, .. } => drop(reply.send(Err(error))),
@@ -1487,7 +1502,12 @@ fn platform_thread_cpu_nanos() -> Option<u64> {
     clock_nanos(libc::CLOCK_THREAD_CPUTIME_ID)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn platform_thread_cpu_nanos() -> Option<u64> {
+    crate::winos::current_thread_cpu_nanos()
+}
+
+#[cfg(not(any(unix, windows)))]
 fn platform_thread_cpu_nanos() -> Option<u64> {
     None
 }
@@ -1574,11 +1594,28 @@ impl TargetThreadCpuClock {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// The thread id; `GetThreadTimes` on a handle opened from it reads the
+/// thread's CPU time from the watchdog thread.
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+struct TargetThreadCpuClock(u32);
+
+#[cfg(windows)]
+impl TargetThreadCpuClock {
+    fn current() -> Option<Self> {
+        Some(Self(crate::winos::current_thread_id()))
+    }
+
+    fn nanos(self) -> Option<u64> {
+        crate::winos::thread_cpu_nanos(self.0)
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 #[derive(Clone, Copy)]
 struct TargetThreadCpuClock;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 impl TargetThreadCpuClock {
     fn current() -> Option<Self> {
         None
@@ -1886,6 +1923,8 @@ pub struct WorkerConfig {
     /// A script name is caller-controlled, so it cannot prove this origin.
     origin: WorkerOrigin,
     do_classes: Vec<String>,
+    /// The subset of `do_classes` whose cells are Dolt cells.
+    dolt_classes: Vec<String>,
     bindings: Vec<(String, String)>,
     /// `r2_buckets`: (environment name, bucket name). The bucket name is
     /// the key space the binding owns inside the fleet bucket; see [[r2]].
@@ -1921,6 +1960,8 @@ pub struct WorkerConfig {
     loader_bindings: Vec<String>,
     /// Ambient outbound authority. Loaded workers may be denied.
     egress: EgressPolicy,
+    /// What names this Worker to the node's egress proxy. See [`egress`].
+    egress_base: EgressBase,
     /// Structured-clone values and host-minted service routes that a loaded
     /// worker receives. Loader-only; empty for a normal worker.
     loader_env: Option<LoaderEnv>,
@@ -1942,6 +1983,16 @@ pub struct WorkerConfig {
     /// `containers` from the deployment: the classes whose `ctx.container`
     /// exists. Empty for a loaded worker.
     pub containers: Vec<crate::container::ContainerSpec>,
+    /// The Durable Object classes the deployment declared
+    /// `"celld": { "durable_objects": { "Class": { "residency": true } } }`
+    /// for: the classes whose cells may `ctx.residency.hold()`. Empty for a
+    /// loaded worker.
+    pub residency_classes: Vec<String>,
+    /// What a Worker Loader's `celld: { residency }` granted this loaded
+    /// worker. `None` for a deployment's own Worker, whose classes are
+    /// governed by `residency_classes`. A loaded worker never holds more than
+    /// the root cell it runs under (the host checks the root's class as well).
+    pub residency_grant: Option<bool>,
     /// The application generation this configuration belongs to. Every
     /// isolate built from it carries the value as a slot, so its host calls
     /// resolve against the deployment graph it was built with.
@@ -2027,6 +2078,7 @@ impl WorkerConfig {
             src,
             script_name,
             do_classes,
+            dolt_classes,
             bindings,
             r2_bindings,
             d1_bindings,
@@ -2044,6 +2096,7 @@ impl WorkerConfig {
             .map(|(_name, source)| modules::scan_external_imports(source))
             .collect();
         let declares_queue_consumer = !queue_consumers.is_empty();
+        let egress_base = EgressBase::deployed(&script_name);
         let queue_consumers = queue_consumers
             .into_iter()
             .map(|config| QueueConsumerRegistration {
@@ -2057,6 +2110,7 @@ impl WorkerConfig {
             script_name,
             origin: WorkerOrigin::Deployment,
             do_classes,
+            dolt_classes,
             bindings,
             r2_bindings,
             d1_bindings,
@@ -2073,12 +2127,15 @@ impl WorkerConfig {
             asset_binding: None,
             loader_bindings: Vec::new(),
             egress: EgressPolicy::Allow,
+            egress_base,
             loader_env: None,
             resource_limits: None,
             tail_reporting: false,
             codegen: false,
             crons: Vec::new(),
             containers: Vec::new(),
+            residency_classes: Vec::new(),
+            residency_grant: None,
             generation: 0,
             main_imports,
             module_imports,
@@ -2107,9 +2164,37 @@ impl WorkerConfig {
         self
     }
 
+    pub fn with_residency_classes(mut self, classes: Vec<String>) -> Self {
+        self.residency_classes = classes;
+        self
+    }
+
+    /// Grant (or refuse) residency to a loaded worker, per the loader's
+    /// `celld: { residency }`.
+    pub fn with_residency_grant(mut self, grant: bool) -> Self {
+        self.residency_grant = Some(grant);
+        self
+    }
+
+    /// Whether the deployment declared `residency` for cells of `class`.
+    pub fn residency_class(&self, class: &str) -> bool {
+        self.residency_classes
+            .iter()
+            .any(|declared| declared == class)
+    }
+
     /// Whether cells of `class` supervise a container.
     pub fn container_class(&self, class: &str) -> bool {
         self.containers.iter().any(|spec| spec.class_name == class)
+    }
+
+    /// The storage engine of a Durable Object class's cells.
+    pub fn class_engine(&self, class: &str) -> celld_ltx::Engine {
+        if self.dolt_classes.iter().any(|dolt| dolt == class) {
+            celld_ltx::Engine::Dolt
+        } else {
+            celld_ltx::Engine::Sqlite
+        }
     }
 
     /// Stamp this Worker with the application generation it serves.
@@ -2173,6 +2258,19 @@ impl WorkerConfig {
         self
     }
 
+    /// Name the deployment this Worker belongs to in the identity it presents
+    /// to the node's egress proxy: the deployment's fleet-wide version string.
+    pub fn with_deployment(mut self, version: &str) -> Self {
+        self.egress_base.deployment = Arc::from(version);
+        self
+    }
+
+    /// The identity a loaded worker presents, derived from its loader's.
+    fn with_egress_base(mut self, base: EgressBase) -> Self {
+        self.egress_base = base;
+        self
+    }
+
     /// Install the limits that every invocation of this Dynamic Worker owns.
     fn with_resource_limits(mut self, limits: Option<ResourceLimits>) -> Self {
         self.resource_limits = limits;
@@ -2211,6 +2309,8 @@ pub struct CellStorage<'a> {
     /// The activation's paged VFS, when its restore paged. The file at `path`
     /// is then sparse; opening it without this VFS reads holes as data.
     pub vfs: Option<&'a str>,
+    /// The storage engine of the cell's class.
+    pub engine: celld_ltx::Engine,
 }
 
 pub struct Worker {
@@ -2473,8 +2573,11 @@ struct ActorRuntimeState {
     /// an event's lifetime merely to flush its output.
     ws_capture_touched: Mutex<Vec<Weak<IoContext>>>,
     egress: EgressPolicy,
+    egress_base: EgressBase,
     resource_limits: Option<ResourceLimits>,
     tail_reporting: bool,
+    /// `WorkerConfig::residency_grant`, for a loaded worker.
+    residency_grant: Option<bool>,
     script_name: String,
     event_hooks: OnceLock<EventHooks>,
     /// See [`internals`].
@@ -5455,6 +5558,23 @@ fn begin_cell(tc: &mut v8::PinScope, job: CellJob, event_time: i64) -> Begun {
                     .ok_or_else(|| anyhow!("wsClosed threw"))
             })
         }
+        CellJob::HoldsRevoked {
+            scope,
+            holds,
+            reason,
+            reply,
+        } => start_cell_event(tc, &scope, Answer::Ack(reply), None, None, false, |tc| {
+            let f = internal_function(tc, "__residencyRevoked")?;
+            let ids = serde_json::to_string(&holds).unwrap_or_else(|_| "[]".into());
+            let arguments = [
+                v8::String::new(tc, &scope).unwrap().into(),
+                v8::String::new(tc, &ids).unwrap().into(),
+                v8::String::new(tc, &reason).unwrap().into(),
+            ];
+            let recv = v8::undefined(tc).into();
+            f.call(tc, recv, &arguments)
+                .ok_or_else(|| anyhow!("residency revocation threw"))
+        }),
         CellJob::Alarm {
             request_id,
             scope,
@@ -5847,32 +5967,8 @@ struct CodegenGrant(bool);
 /// What a Worker Loader's `WorkerCode.celld` asks for. Keys are the shared
 /// declaration contract (docs/fork/design.md section 3a); the ones another
 /// capability owns are validated here and honored where that capability lands.
-fn loader_celld_codegen(
-    code: &serde_json::Value,
-    loader_holds_codegen: bool,
-) -> Result<bool, String> {
-    let Some(celld) = code.get("celld") else {
-        return Ok(false);
-    };
-    let Some(celld) = celld.as_object() else {
-        return Err("worker loader: WorkerCode field `celld` must be an object".to_string());
-    };
-    let mut codegen = false;
-    for (key, value) in celld {
-        match key.as_str() {
-            "codegen" => {
-                codegen = value.as_bool().ok_or_else(|| {
-                    "worker loader: `celld.codegen` must be a boolean".to_string()
-                })?;
-            }
-            "residency" | "egressIdentity" => {}
-            other => {
-                return Err(format!(
-                    "worker loader: WorkerCode `celld.{other}` is not supported"
-                ))
-            }
-        }
-    }
+fn loader_celld_codegen(celld: &LoaderCelld, loader_holds_codegen: bool) -> Result<bool, String> {
+    let codegen = celld.codegen == Some(true);
     // A loader cannot grant more than it holds. Refusing, not quietly
     // dropping the request, keeps a caller from believing its worker can eval.
     if codegen && !loader_holds_codegen {
@@ -5919,8 +6015,10 @@ impl Worker {
         let runtime_state = Arc::new(ActorRuntimeState {
             promises: std::sync::Mutex::new(PromiseMap::new()),
             egress: config.egress.clone(),
+            egress_base: config.egress_base.clone(),
             resource_limits: config.resource_limits,
             tail_reporting: config.tail_reporting,
+            residency_grant: config.residency_grant,
             script_name: script_name.to_string(),
             ..Default::default()
         });
@@ -6062,6 +6160,7 @@ impl Worker {
             inject_crons(scope, &config.crons)?;
             inject_workflows(scope, script_name, &config.workflow_bindings)?;
             inject_containers(scope, &config.containers)?;
+            inject_residency(scope, &config)?;
             inject_kv_limits(scope)?;
             bootstrap::inject_deadline_policy(scope)?;
             inject_queue_config(scope, &config)?;
@@ -6865,6 +6964,13 @@ ops! { OP_NAMES, install_op_functions,
         "__tcp_shutdown" => tcp::op_tcp_shutdown,
         "__tcp_close" => tcp::op_tcp_close,
         "__tcp_starttls" => tcp::op_tcp_starttls,
+        "__p2p_node_id" => p2p::op_p2p_node_id,
+        "__p2p_connect" => p2p::op_p2p_connect,
+        "__p2p_claim" => p2p::op_p2p_claim,
+        "__p2p_read" => p2p::op_p2p_read,
+        "__p2p_write" => p2p::op_p2p_write,
+        "__p2p_shutdown" => p2p::op_p2p_shutdown,
+        "__p2p_close" => p2p::op_p2p_close,
         "__container_running" => container::op_container_running,
         "__container_address" => container::op_container_address,
         "__container_start" => container::op_container_start,
@@ -6886,6 +6992,9 @@ ops! { OP_NAMES, install_op_functions,
         "__sql_cursor_next" => storage_ops::op_sql_cursor_next,
         "__sql_cursor_close" => storage_ops::op_sql_cursor_close,
         "__sql_database_size" => storage_ops::op_sql_database_size,
+        "__dolt_enabled" => storage_ops::op_dolt_enabled,
+        "__dolt_op" => storage_ops::op_dolt_op,
+        "__dolt_fork_export" => storage_ops::op_dolt_fork_export,
         "__d1_run" => storage_ops::op_d1_run,
         "__storage_transaction_control" => storage_ops::op_storage_transaction_control,
         "__log" => op_log,
@@ -6919,6 +7028,8 @@ ops! { OP_NAMES, install_op_functions,
         "$$textDecoderDecodeOnce" => op_text_decoder_decode_once,
         "$$textDecoderFree" => op_text_decoder_free,
         "__alarm_set" => op_alarm_set,
+        "__residency_hold" => residency::op_residency_hold,
+        "__residency_release" => residency::op_residency_release,
         "__queue_alarm_set_wait" => op_queue_alarm_set_wait,
         "__alarm_get" => op_alarm_get,
         "__alarm_delete" => op_alarm_delete,
@@ -7535,6 +7646,20 @@ async fn loaded_worker_slot(
 /// tailReporting)` -> stub id. Builds a WorkerConfig from the supplied modules
 /// and registers its asynchronous load state. Compilation runs on Tokio's
 /// blocking pool. Calls wait for that result and use the normal turn driver.
+/// A Worker Loader's `celld: { ... }` option: capabilities granted to the
+/// loaded worker. One optional field per feature, so features that share the
+/// option never read each other's keys.
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct LoaderCelld {
+    residency: Option<bool>,
+    codegen: Option<bool>,
+    /// Owned by the egress feature; validated here so the struct stays the
+    /// single reader of `WorkerCode.celld`.
+    #[allow(dead_code)]
+    egress_identity: Option<String>,
+}
+
 fn op_loader_load(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -7567,9 +7692,30 @@ fn op_loader_load(
         None => None,
     };
     let tail_reporting = args.get(6).boolean_value(scope);
+    // `celld: { codegen, residency, egressIdentity }`. The harness already
+    // vetted it against the caller's own capabilities; each feature reads only
+    // its own field, and an unknown key is refused here too.
+    let celld = match code.get("celld") {
+        Some(value) => match serde_json::from_value::<LoaderCelld>(value.clone()) {
+            Ok(celld) => celld,
+            Err(error) => {
+                return loader_throw(scope, &format!("worker loader: invalid celld: {error}"));
+            }
+        },
+        None => LoaderCelld::default(),
+    };
     let loader_holds_codegen = scope.get_slot::<CodegenGrant>().is_some_and(|grant| grant.0);
-    let codegen = match loader_celld_codegen(&code, loader_holds_codegen) {
+    let codegen = match loader_celld_codegen(&celld, loader_holds_codegen) {
         Ok(codegen) => codegen,
+        Err(error) => return loader_throw(scope, &error),
+    };
+    // The identity this worker presents to the node's egress proxy is its
+    // loader's, extended by the loader's own `celld.egressIdentity`. It is read
+    // here, from the loader's WorkerCode, and nowhere the loaded code reaches.
+    let egress_base = match loader_egress_identity(&code) {
+        Ok(identity) => actor_runtime_state(scope)
+            .egress_base
+            .loaded_child(identity),
         Err(error) => return loader_throw(scope, &error),
     };
     let Some(main) = code.get("mainModule").and_then(|v| v.as_str()) else {
@@ -7793,6 +7939,7 @@ fn op_loader_load(
             src,
             script_name: format!("__loader:{id}"),
             do_classes: Vec::new(),
+            dolt_classes: Vec::new(),
             bindings: Vec::new(),
             r2_bindings: Vec::new(),
             // A loaded worker reaches D1 only if its parent injects a stub;
@@ -7811,7 +7958,9 @@ fn op_loader_load(
         .with_main_module_name(main.to_string())
         .with_generation(generation)
         .with_egress(egress)
+        .with_egress_base(egress_base)
         .with_resource_limits(limits)
+        .with_residency_grant(celld.residency == Some(true))
         .with_tail_reporting(tail_reporting)
         .with_codegen(codegen)
         .with_loader_env(loader_env),
@@ -9125,17 +9274,13 @@ fn op_fetch(
     if let Err(error) = context.charge_subrequest() {
         return loader_throw(scope, &error);
     }
-    let egress = actor_runtime_state(scope).egress.clone();
-    // A loaded worker with globalOutbound: null has no ambient egress: it must
-    // reach the world through `env` capabilities. Message matches workerd.
-    if egress == EgressPolicy::Deny {
-        return loader_throw(
-            scope,
-            "This worker is not permitted to access the internet via global \
-             functions like fetch(). It must use capabilities (such as \
-             bindings in 'env') to talk to the outside world.",
-        );
-    }
+    // One decision for all outbound traffic. A loaded worker with
+    // globalOutbound: null has no ambient egress: it must reach the world
+    // through `env` capabilities. Message matches workerd.
+    let route = match egress_route(scope, Traffic::Fetch) {
+        Ok(route) => route,
+        Err(message) => return loader_throw(scope, message),
+    };
     let method = args.get(0).to_rust_string_lossy(scope);
     let url = args.get(1).to_rust_string_lossy(scope);
     // A body is a typed array, as it is for `__svc_call`, `__do_call` and
@@ -9189,66 +9334,78 @@ fn op_fetch(
         "follow" | "manual" | "error" => {}
         other => return loader_throw(scope, &format!("fetch: unknown redirect mode {other}")),
     }
-    if let EgressPolicy::Broker(broker) = egress {
-        let (request_id, cancel, cancel_guard) = if cancellable {
-            let request_id = next_do_request_id();
-            let (cancel_sender, cancel_receiver) = tokio::sync::oneshot::channel();
-            do_call_cancels()
-                .lock()
-                .unwrap()
-                .insert(request_id, cancel_sender);
-            (
-                Some(request_id),
-                Some(cancel_receiver),
-                Some(DoCallCancelGuard::new(request_id)),
-            )
-        } else {
-            (None, None, None)
-        };
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::Fetch);
-        let request = SvcCallReq {
-            cancel,
-            generation: broker.generation,
-            script: broker.script,
-            entrypoint: broker.entrypoint,
-            url,
-            method,
-            body: body.unwrap_or_else(|| RequestBody::Bytes(Vec::new().into())),
-            body_guard,
-            headers,
-            reply: tx,
-        };
-        let stream_service = http_stream_service();
-        let id = asyncrt::enqueue(async move {
-            let mut cancel_guard = cancel_guard;
-            gated_channel_send(gate, &SVC_CALL_TX, request, "no service binding channel").await?;
-            let result = match rx.await {
-                Ok(Ok(response)) => encode_http_response(response, true, &stream_service),
-                Ok(Err(error)) => Err(format!("{error}")),
-                Err(error) => Err(format!("globalOutbound Fetcher dropped: {error}")),
+    let proxy = match route {
+        EgressRoute::Direct => None,
+        EgressRoute::Proxy(route) => Some(route),
+        EgressRoute::Broker(broker) => {
+            let (request_id, cancel, cancel_guard) = if cancellable {
+                let request_id = next_do_request_id();
+                let (cancel_sender, cancel_receiver) = tokio::sync::oneshot::channel();
+                do_call_cancels()
+                    .lock()
+                    .unwrap()
+                    .insert(request_id, cancel_sender);
+                (
+                    Some(request_id),
+                    Some(cancel_receiver),
+                    Some(DoCallCancelGuard::new(request_id)),
+                )
+            } else {
+                (None, None, None)
             };
-            if let Some(cancel_guard) = cancel_guard.as_mut() {
-                cancel_guard.disarm();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::Fetch);
+            let request = SvcCallReq {
+                cancel,
+                generation: broker.generation,
+                script: broker.script,
+                entrypoint: broker.entrypoint,
+                url,
+                method,
+                body: body.unwrap_or_else(|| RequestBody::Bytes(Vec::new().into())),
+                body_guard,
+                headers,
+                reply: tx,
+            };
+            let stream_service = http_stream_service();
+            let id = asyncrt::enqueue(async move {
+                let mut cancel_guard = cancel_guard;
+                gated_channel_send(gate, &SVC_CALL_TX, request, "no service binding channel").await?;
+                let result = match rx.await {
+                    Ok(Ok(response)) => encode_http_response(response, true, &stream_service),
+                    Ok(Err(error)) => Err(format!("{error}")),
+                    Err(error) => Err(format!("globalOutbound Fetcher dropped: {error}")),
+                };
+                if let Some(cancel_guard) = cancel_guard.as_mut() {
+                    cancel_guard.disarm();
+                }
+                result
+            });
+            let promise = promise_for(scope, id);
+            if let Some(request_id) = request_id {
+                attach_cancel_id(scope, promise, request_id);
             }
-            result
-        });
-        let promise = promise_for(scope, id);
-        if let Some(request_id) = request_id {
-            attach_cancel_id(scope, promise, request_id);
+            rv.set(promise);
+            return;
         }
-        rv.set(promise);
-        return;
-    }
-    // Select the client only for direct egress: a broker must not initialize
-    // an unused network client and its TLS stack.
-    let client = match redirect.as_str() {
-        "follow" if context.subrequest_limit.is_some() => context.redirect_counting_client(),
-        "follow" => HTTP.with(|client| client.clone()),
-        "manual" => HTTP_MANUAL.with(|client| client.clone()),
-        "error" => HTTP_ERROR.with(|client| client.clone()),
-        _ => unreachable!("the redirect mode was validated above"),
     };
+    // Select the client only for direct egress: a broker must not initialize
+    // an unused network client and its TLS stack, and a proxied request never
+    // touches reqwest (see `egress::fetch`).
+    let client = if proxy.is_some() {
+        None
+    } else {
+        Some(match redirect.as_str() {
+            "follow" if context.subrequest_limit.is_some() => context.redirect_counting_client(),
+            "follow" => HTTP.with(|client| client.clone()),
+            "manual" => HTTP_MANUAL.with(|client| client.clone()),
+            "error" => HTTP_ERROR.with(|client| client.clone()),
+            _ => unreachable!("the redirect mode was validated above"),
+        })
+    };
+    // Followed redirects of a proxied request are subrequests of this
+    // invocation, charged like the direct client's redirect policy charges them.
+    let redirect_budget = Arc::downgrade(&context);
     // The creating context, read here while JS is still running: the op
     // future resolves on whatever worker polls it, far from any CPED.
     let trace = current_trace_context(scope);
@@ -9325,6 +9482,81 @@ fn op_fetch(
         // of parking run_loop forever — the hang the Drop guard can't catch.
         let fetch_timeout = crate::env_vars::positive_or("CELLD_FETCH_TIMEOUT_S", 120)
             .expect("validated CELLD_FETCH_TIMEOUT_S");
+        if let Some(route) = proxy {
+            // Through the node's egress proxy: every hop, redirects included,
+            // is a signed forward-proxy request, and the destination is never
+            // resolved or dialed from here.
+            let request_body = match body {
+                None => crate::egress::FetchBody::None,
+                Some(RequestBody::Bytes(bytes)) => crate::egress::FetchBody::Bytes(bytes),
+                Some(RequestBody::Stream(stream_id)) => match body_guard.take_stream(stream_id) {
+                    Ok(stream) => crate::egress::FetchBody::Stream(stream),
+                    Err(error) => {
+                        finish(false, None, Some(error.clone()));
+                        return Err(error);
+                    }
+                },
+            };
+            let mode = match redirect.as_str() {
+                "follow" => crate::egress::RedirectMode::Follow,
+                "manual" => crate::egress::RedirectMode::Manual,
+                _ => crate::egress::RedirectMode::Error,
+            };
+            let request = crate::egress::FetchRequest {
+                method: method.clone(),
+                url: url.clone(),
+                headers,
+                body: request_body,
+            };
+            let in_flight = crate::egress::fetch(
+                &route,
+                request,
+                mode,
+                (!crate::deadlines::implicit_deadlines_disabled())
+                    .then(|| std::time::Duration::from_secs(fetch_timeout)),
+                || match redirect_budget.upgrade() {
+                    Some(context) => context.charge_subrequest(),
+                    None => Ok(()),
+                },
+            );
+            let sent = match cancel {
+                Some(cancel) => crate::asyncrt::select_biased! {
+                    "a cancel that is ready wins a tie, so an aborted request never \
+                     hands back a response and never leaves a body stream nobody reads";
+                    _ = cancel => None,
+                    result = in_flight => Some(result),
+                },
+                None => Some(in_flight.await),
+            };
+            let Some(sent) = sent else {
+                let error = "fetch: the request was aborted".to_string();
+                finish(false, None, Some(error.clone()));
+                return Err(error);
+            };
+            return match sent {
+                Ok(response) => {
+                    let Some(stream_id) = stream_service
+                        .register_source(HttpStreamSource::Stream(response.body))
+                    else {
+                        let error = format!("fetch: {HTTP_STREAM_REGISTRATION_CLOSED}");
+                        finish(false, Some(response.status), Some(error.clone()));
+                        return Err(error);
+                    };
+                    finish(true, Some(response.status), None);
+                    Ok(serde_json::json!({
+                        "status": response.status,
+                        "streamId": stream_id,
+                        "headers": response.headers,
+                    })
+                    .to_string())
+                }
+                Err(error) => {
+                    finish(false, None, Some(error.clone()));
+                    Err(error)
+                }
+            };
+        }
+        let client = client.expect("direct egress selects a client");
         let mut rb = client.request(m, &url);
         // The timeout covers the whole exchange, body included, so it also
         // ends a long streaming response. --no-implicit-deadlines leaves the
@@ -10088,7 +10320,11 @@ fn webcrypto_return_bytes(
 
 mod container;
 mod crypto;
+mod egress;
+use egress::{egress_route, loader_egress_identity, EgressBase, EgressRoute, Traffic};
 mod html_rewriter;
+mod residency;
+mod p2p;
 mod tcp;
 #[cfg(celld_internal_tests)]
 pub use tcp::test_extra_tls_root;
@@ -11610,6 +11846,9 @@ impl IoContext {
         }
         let tcp: Vec<u64> = self.tcp_sockets.lock().unwrap().drain(..).collect();
         for id in tcp {
+            // Stream ids carry a bit TCP ids never reach, so each id is freed
+            // by the one registry that holds it.
+            p2p::free(id);
             tcp::free(id);
         }
     }
@@ -12617,9 +12856,10 @@ mod v8_strings;
 use bootstrap::{
     adopt_cell, adopt_embedded_cell, begin_event_context, build_env, end_event_context,
     harness_env, inject_compatibility_flags, inject_containers, inject_crons, inject_kv_limits,
-    inject_namespace_keys, inject_queue_config, inject_routing, inject_storage_compatibility,
-    inject_workflows, install_harness, install_prelude, populate_cf_exports, register_class,
-    register_entrypoints, validate_workflow_classes, EmbeddedStartup,
+    inject_namespace_keys, inject_queue_config, inject_residency, inject_routing,
+    inject_storage_compatibility, inject_workflows, install_harness, install_prelude,
+    populate_cf_exports, register_class, register_entrypoints, validate_workflow_classes,
+    EmbeddedStartup,
 };
 use modules::{
     compile_module, host_import_module_dynamically, install_lazy_globals, op_builtin_module,
@@ -12817,19 +13057,28 @@ include!(env!("CELLD_INTERNAL_JS_OBSERVERS"));
 
 #[cfg(test)]
 mod loader_codegen_grant_tests {
-    use super::loader_celld_codegen;
-    use serde_json::json;
+    use super::{loader_celld_codegen, LoaderCelld};
+    use serde_json::{json, Value};
+
+    /// The same two steps `op_loader_load` takes: parse `WorkerCode.celld`,
+    /// then apply the loader's own grant.
+    fn grant(code: Value, loader_holds_codegen: bool) -> Result<bool, String> {
+        let celld = match code.get("celld") {
+            Some(value) => serde_json::from_value::<LoaderCelld>(value.clone())
+                .map_err(|error| error.to_string())?,
+            None => LoaderCelld::default(),
+        };
+        loader_celld_codegen(&celld, loader_holds_codegen)
+    }
 
     #[test]
     fn a_loader_that_holds_codegen_can_grant_it() {
-        let code = json!({ "celld": { "codegen": true } });
-        assert_eq!(loader_celld_codegen(&code, true), Ok(true));
+        assert_eq!(grant(json!({ "celld": { "codegen": true } }), true), Ok(true));
     }
 
     #[test]
     fn a_loader_cannot_grant_more_than_it_holds() {
-        let code = json!({ "celld": { "codegen": true } });
-        let error = loader_celld_codegen(&code, false).unwrap_err();
+        let error = grant(json!({ "celld": { "codegen": true } }), false).unwrap_err();
         assert!(error.contains("does not hold code generation"), "{error}");
     }
 
@@ -12840,8 +13089,8 @@ mod loader_codegen_grant_tests {
             json!({ "celld": {} }),
             json!({ "celld": { "codegen": false } }),
         ] {
-            assert_eq!(loader_celld_codegen(&code, true), Ok(false));
-            assert_eq!(loader_celld_codegen(&code, false), Ok(false));
+            assert_eq!(grant(code.clone(), true), Ok(false));
+            assert_eq!(grant(code, false), Ok(false));
         }
     }
 
@@ -12852,7 +13101,7 @@ mod loader_codegen_grant_tests {
             json!({ "celld": { "codegen": "yes" } }),
             json!({ "celld": { "eval": true } }),
         ] {
-            assert!(loader_celld_codegen(&code, true).is_err(), "{code}");
+            assert!(grant(code.clone(), true).is_err(), "{code}");
         }
     }
 }

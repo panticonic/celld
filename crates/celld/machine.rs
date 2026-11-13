@@ -79,6 +79,14 @@ pub fn random_process_generation() -> String {
 /// (`CELLD_MAX_OUTBOUND_WEBSOCKETS`).
 pub const DEFAULT_MAX_OUTBOUND_WEBSOCKETS: usize = 32;
 
+/// How long a revoked residency hold may take to wind down before the node
+/// drops it (`CELLD_HOLD_GRACE_MS`). Bounds how long a held cell can delay a
+/// drain, a forced generation swap or a clean reload.
+pub const DEFAULT_HOLD_GRACE_MS: u64 = 5_000;
+
+/// Live residency holds one cell may carry (`CELLD_MAX_HOLDS_PER_CELL`).
+pub const DEFAULT_MAX_HOLDS_PER_CELL: usize = 16;
+
 /// Backoff between dead-owner log recovery retries. One second keeps a
 /// waiting takeover responsive to the sweep finishing without hammering
 /// the recovery lock.
@@ -150,7 +158,12 @@ fn total_memory_bytes() -> Option<u64> {
     (ok == 0 && size > 0).then_some(size)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(windows)]
+fn total_memory_bytes() -> Option<u64> {
+    crate::winos::total_physical_memory_bytes()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn total_memory_bytes() -> Option<u64> {
     None
 }

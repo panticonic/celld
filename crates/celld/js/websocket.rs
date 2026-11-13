@@ -346,21 +346,12 @@ pub(super) fn op_ws_upgrade(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    match &actor_runtime_state(scope).egress {
-        EgressPolicy::Allow => {}
-        EgressPolicy::Deny => {
-            return loader_throw(
-                scope,
-                "This worker is not permitted to access the internet via global functions.",
-            );
-        }
-        EgressPolicy::Broker(_) => {
-            return loader_throw(
-                scope,
-                "A globalOutbound Fetcher cannot broker WebSockets in celld.",
-            );
-        }
-    }
+    let via = match egress_route(scope, Traffic::WebSocket) {
+        Ok(EgressRoute::Proxy(route)) => Some(route),
+        // A WebSocket is never brokered; `egress_route` refuses it first.
+        Ok(_) => None,
+        Err(message) => return loader_throw(scope, message),
+    };
     let id = args
         .get(0)
         .to_integer(scope)
@@ -408,6 +399,7 @@ pub(super) fn op_ws_upgrade(
                 want_response: true,
                 target: None,
                 facet,
+                via,
                 reply: tx,
             })
             .is_ok()
@@ -472,21 +464,12 @@ pub(super) fn op_ws_connect(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    match &actor_runtime_state(scope).egress {
-        EgressPolicy::Allow => {}
-        EgressPolicy::Deny => {
-            return loader_throw(
-                scope,
-                "This worker is not permitted to access the internet via global functions.",
-            );
-        }
-        EgressPolicy::Broker(_) => {
-            return loader_throw(
-                scope,
-                "A globalOutbound Fetcher cannot broker WebSockets in celld.",
-            );
-        }
-    }
+    let via = match egress_route(scope, Traffic::WebSocket) {
+        Ok(EgressRoute::Proxy(route)) => Some(route),
+        // A WebSocket is never brokered; `egress_route` refuses it first.
+        Ok(_) => None,
+        Err(message) => return loader_throw(scope, message),
+    };
     let id = args
         .get(0)
         .to_integer(scope)
@@ -529,6 +512,7 @@ pub(super) fn op_ws_connect(
                 want_response: false,
                 target: None,
                 facet,
+                via,
                 reply: tx,
             })
             .is_ok()
@@ -605,6 +589,7 @@ pub(super) fn op_ws_bind_target(
                 target: Some(target),
                 // `scope` names the target, which keeps its own route.
                 facet: None,
+                via: None,
                 reply: tx,
             })
             .is_ok()

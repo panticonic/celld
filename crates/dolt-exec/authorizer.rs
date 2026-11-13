@@ -113,14 +113,24 @@ pub struct AuthOptions {
     pub schema_admin: bool,
 }
 
-/// Names owned by SQLite, Dolt or Chronolog rather than the application.
+/// Names owned by SQLite, Dolt, Chronolog or the celld host (`_cf_*`: KV,
+/// alarms and other runtime tables kept inside a Dolt cell's store) rather
+/// than the application.
 pub fn is_reserved_schema_object_name(value: &str) -> bool {
     let key = ascii_lower(value);
-    key.starts_with("chronolog_")
+    is_host_name(&key)
+        || key.starts_with("chronolog_")
         || key.starts_with("sqlite_")
         || key.starts_with("dolt_")
         || key.starts_with("doltlite_")
         || key.starts_with("pragma_")
+}
+
+/// celld's runtime tables. They hold per-cell host state (KV, alarms, wake
+/// records) that is not part of any replicated program history, so a program
+/// may neither write nor read them.
+fn is_host_name(lowered: &str) -> bool {
+    lowered.starts_with("_cf_")
 }
 
 fn is_dolt_name(value: &str) -> bool {
@@ -232,6 +242,9 @@ impl Authorizer {
             }
             // Dolt system tables expose per-replica history (commit hashes, times).
             if mode != AuthMode::LocalRead && is_dolt_name(&object) {
+                return false;
+            }
+            if is_host_name(&ascii_lower(&object)) {
                 return false;
             }
             return true;
@@ -363,6 +376,8 @@ mod tests {
             assert!(is_reserved_schema_object_name(n), "{n}");
         }
         assert!(!is_reserved_schema_object_name("accounts"));
+        assert!(is_reserved_schema_object_name("_cf_KV"));
+        assert!(is_reserved_schema_object_name("_CF_alarm"));
         // Only ASCII is folded: a Turkish dotted capital I does not make a reserved prefix.
         assert!(!is_reserved_schema_object_name("sqlıte_x"));
     }

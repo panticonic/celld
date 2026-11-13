@@ -18,7 +18,8 @@ use crate::protocol::{
     asset_blob_key, AssetConfig, AssetEntry, AssetIndex, AssetManifestRef, DeployPointer, Manifest,
     ModuleKind, ModuleRef, QueueConsumerAttachment, QueueConsumerConfig, QueueConsumerDeployment,
     Rollout, RunWorkerFirst, FEATURE_ASSETS_V1, FEATURE_CONTAINERS_V1, FEATURE_CRON_V1,
-    FEATURE_D1_V1, FEATURE_KV_V1, FEATURE_PYTHON_WORKERS_V1, FEATURE_QUEUES_V1, FEATURE_R2_V1,
+    FEATURE_D1_V1, FEATURE_DOLT_CELLS_V1, FEATURE_KV_V1, FEATURE_P2P_V1,
+    FEATURE_PYTHON_WORKERS_V1, FEATURE_QUEUES_V1, FEATURE_R2_V1, FEATURE_RESIDENCY_V1,
     FEATURE_SQLITE_VEC_V1, FEATURE_WASM_V1, FEATURE_WORKFLOWS_V1,
     QUEUE_CONSUMER_ATTACHMENT_SCHEMA_VERSION,
 };
@@ -35,7 +36,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+pub mod celld_block;
 mod python;
+pub use celld_block::{CelldDeclaration, ClassCapabilities};
 
 /// Config keys we understand. Anything else is an error: refusing is
 /// compat-safe, guessing produces confusing activation failures later.
@@ -53,6 +56,7 @@ const SUPPORTED_KEYS: &[&str] = &[
     "vars",
     "d1_databases",
     "kv_namespaces",
+    "p2p",
     "queues",
     "workflows",
     "r2_buckets",
@@ -313,13 +317,18 @@ struct Project {
     metadata: Value,
     do_classes: Vec<String>,
     sqlite_classes: Vec<String>,
+    /// The subset of `sqlite_classes` declared by `new_dolt_classes`.
+    dolt_classes: Vec<String>,
     crons: Vec<String>,
     has_workflows: bool,
     has_kv: bool,
+    has_p2p: bool,
     queue_consumers: Vec<QueueConsumerConfig>,
     has_queues: bool,
     has_r2: bool,
     containers: Vec<ContainerDecl>,
+    /// The config's `celld` block.
+    celld: CelldDeclaration,
     /// Set when `main` is a `.py` file: the Python behavior its
     /// compatibility date and flags select.
     python: Option<python::PythonCompat>,
@@ -505,11 +514,13 @@ impl Built {
                     Some("durable_object_namespace") => {
                         let class = binding.get("class_name").and_then(Value::as_str)?;
                         let sqlite = self.manifest.sqlite_classes.iter().any(|c| c == class);
+                        let dolt = self.manifest.dolt_classes.iter().any(|c| c == class);
                         Some((
                             format!("env.{name} ({class})"),
-                            match sqlite {
-                                true => "Durable Object (SQLite)".to_string(),
-                                false => "Durable Object".to_string(),
+                            match (dolt, sqlite) {
+                                (true, _) => "Durable Object (Dolt)".to_string(),
+                                (false, true) => "Durable Object (SQLite)".to_string(),
+                                (false, false) => "Durable Object".to_string(),
                             },
                         ))
                     }
@@ -543,6 +554,10 @@ impl Built {
                     Some("r2_bucket") => {
                         let bucket = binding.get("bucket_name").and_then(Value::as_str)?;
                         Some((format!("env.{name} (R2)"), bucket.to_string()))
+                    }
+                    Some("p2p") => {
+                        let alpn = binding.get("alpn").and_then(Value::as_str)?;
+                        Some((format!("env.{name} (P2P)"), format!("Iroh {alpn}")))
                     }
                     Some("worker_loader") => Some((
                         format!("env.{name} (Worker Loader)"),
@@ -688,6 +703,7 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
         main_module: project.entry.as_ref().map(|_| module_name.clone()),
         do_classes: project.do_classes,
         sqlite_classes: project.sqlite_classes,
+        dolt_classes: project.dolt_classes.clone(),
         modules: modules
             .iter()
             .map(|(name, bytes)| ModuleRef {
@@ -701,6 +717,7 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
         crons: project.crons.clone(),
         containers: container_specs.clone(),
         fence_image: fence_image.clone(),
+        celld: project.celld.clone(),
         queue_consumers: project.queue_consumers,
         // Each capability the manifest depends on is named here, so a node
         // that predates it rejects the deployment up front instead of
@@ -725,6 +742,9 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
             if project.has_kv {
                 features.push(FEATURE_KV_V1.to_string());
             }
+            if project.has_p2p {
+                features.push(FEATURE_P2P_V1.to_string());
+            }
             if project.has_queues {
                 features.push(FEATURE_QUEUES_V1.to_string());
             }
@@ -734,11 +754,17 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
             if sqlite_vec {
                 features.push(FEATURE_SQLITE_VEC_V1.to_string());
             }
+            if !project.dolt_classes.is_empty() {
+                features.push(FEATURE_DOLT_CELLS_V1.to_string());
+            }
             if !wasm_names.is_empty() {
                 features.push(FEATURE_WASM_V1.to_string());
             }
             if python_runtime {
                 features.push(FEATURE_PYTHON_WORKERS_V1.to_string());
+            }
+            if !project.celld.residency_classes().is_empty() {
+                features.push(FEATURE_RESIDENCY_V1.to_string());
             }
             features
         },
@@ -1387,7 +1413,7 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         bail!("an asset-only project cannot set `assets.run_worker_first`");
     }
 
-    let mut sqlite_classes = read_sqlite_classes(object)?;
+    let (mut sqlite_classes, dolt_classes) = read_class_migrations(object)?;
     if let Some(class) = sqlite_classes.iter().find(|class| is_reserved_class(class)) {
         bail!("`{class}` is a runtime class; remove it from `migrations`");
     }
@@ -1585,6 +1611,7 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         do_classes.push(KV_CLASS.to_string());
         sqlite_classes.push(KV_CLASS.to_string());
     }
+    let has_p2p = read_p2p(object, &sqlite_classes, &mut bindings)?;
     let queues = match object.get("queues") {
         None => None,
         Some(Value::Object(queues)) => Some(queues),
@@ -1989,15 +2016,28 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         metadata.insert("queue_consumers".into(), json!(queue_consumers));
     }
     if !sqlite_classes.is_empty() {
-        metadata.insert(
-            "migrations".into(),
-            json!({ "new_sqlite_classes": sqlite_classes }),
+        let mut migrations = json!({ "new_sqlite_classes": sqlite_classes });
+        if !dolt_classes.is_empty() {
+            migrations["new_dolt_classes"] = json!(dolt_classes);
+        }
+        metadata.insert("migrations".into(), migrations);
+    }
+    if let Some(class) = dolt_classes
+        .iter()
+        .find(|class| !do_classes.iter().any(|declared| declared == *class))
+    {
+        bail!(
+            "Dolt class {class:?} is not a Durable Object class of this Worker; \
+             declare it in `durable_objects.bindings`"
         );
     }
 
     let containers = read_containers(object, &do_classes, &sqlite_classes)?;
-    if let Some(celld) = read_celld_block(object, &do_classes)? {
-        metadata.insert("celld".into(), celld);
+    let celld = celld_block::read(object, &do_classes)?;
+    if !celld.is_empty() {
+        // Part of the deployment's identity: granting a capability is a new
+        // deployment, the way a new binding is.
+        metadata.insert("celld".into(), json!(celld));
     }
     Ok(Project {
         script_name,
@@ -2008,78 +2048,18 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         metadata: Value::Object(metadata),
         do_classes,
         sqlite_classes,
+        dolt_classes,
         crons,
         has_workflows: !workflows.is_empty(),
         has_kv: !kv_namespaces.is_empty(),
+        has_p2p,
         has_queues: !queue_producers.is_empty() || !queue_consumers.is_empty(),
         queue_consumers,
         has_r2: !r2_buckets.is_empty(),
         containers,
+        celld,
         python,
     })
-}
-
-/// The per-class capability keys of a config's `celld.durable_objects` entry.
-/// `codegen` is read by the isolate builder; `residency` is declared here so
-/// the shared contract has one validator, and is honored by the residency
-/// hold.
-const CELLD_CLASS_KEYS: &[&str] = &["codegen", "residency"];
-
-/// The config's top-level `celld` block, the one place the fork's per-class
-/// capabilities are declared (docs/fork/design.md section 3a):
-///
-/// ```jsonc
-/// "celld": { "durable_objects": { "Class": { "codegen": true } } }
-/// ```
-///
-/// A capability is opt-in and every key is a boolean. A name that is not a
-/// user Durable Object class of this Worker, or a key celld does not model,
-/// is refused: a misspelled class would otherwise leave the capability off
-/// and the author believing it on. The block travels verbatim in the
-/// manifest's metadata, so it is part of the deployment's identity.
-fn read_celld_block(
-    object: &Map<String, Value>,
-    do_classes: &[String],
-) -> anyhow::Result<Option<Value>> {
-    let Some(value) = object.get("celld") else {
-        return Ok(None);
-    };
-    let block = value
-        .as_object()
-        .ok_or_else(|| anyhow!("config `celld` must be an object"))?;
-    if let Some(key) = block.keys().find(|key| key.as_str() != "durable_objects") {
-        bail!("config `celld` declares `{key}`, which celld does not model");
-    }
-    let Some(classes) = block.get("durable_objects") else {
-        return Ok(None);
-    };
-    let classes = classes
-        .as_object()
-        .ok_or_else(|| anyhow!("config `celld.durable_objects` must be an object"))?;
-    for (class, declaration) in classes {
-        if is_reserved_class(class) || !do_classes.iter().any(|declared| declared == class) {
-            bail!(
-                "config `celld.durable_objects` names {class:?}, which is not a Durable Object \
-                 class of this Worker; declare it in `durable_objects.bindings`"
-            );
-        }
-        let declaration = declaration
-            .as_object()
-            .ok_or_else(|| anyhow!("config `celld.durable_objects.{class}` must be an object"))?;
-        for (key, flag) in declaration {
-            if !CELLD_CLASS_KEYS.contains(&key.as_str()) {
-                bail!(
-                    "config `celld.durable_objects.{class}` declares `{key}`, which celld does \
-                     not model (known: {})",
-                    CELLD_CLASS_KEYS.join(", ")
-                );
-            }
-            if !flag.is_boolean() {
-                bail!("config `celld.durable_objects.{class}.{key}` must be true or false");
-            }
-        }
-    }
-    Ok(Some(value.clone()))
 }
 
 /// The classes a deployment's metadata declared `codegen: true` for.
@@ -2436,23 +2416,41 @@ fn read_crons(project: &Map<String, Value>) -> anyhow::Result<Vec<String>> {
     Ok(crons)
 }
 
-fn read_sqlite_classes(project: &Map<String, Value>) -> anyhow::Result<Vec<String>> {
+/// The config's class migrations: every storage-backed class (SQLite and
+/// Dolt, in declaration order) and the Dolt subset.
+///
+/// `new_dolt_classes` sits beside `new_sqlite_classes` in the same
+/// migration list. A Dolt class is a SQLite-API class (it has
+/// `ctx.storage.sql`) whose cells are DoltLite prolly stores, so it is also
+/// reported among the SQLite classes, and the Dolt list is the engine tag.
+/// A class is introduced once, by one key: its engine is fixed when it is
+/// created, so naming it under both keys (in one migration or two) is
+/// refused rather than reinterpreted.
+fn read_class_migrations(
+    project: &Map<String, Value>,
+) -> anyhow::Result<(Vec<String>, Vec<String>)> {
     let Some(value) = project.get("migrations") else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     };
     let migrations = value
         .as_array()
         .ok_or_else(|| anyhow!("config `migrations` must be an array"))?;
     let mut tags = BTreeSet::new();
-    let mut classes = BTreeSet::new();
+    let mut classes = BTreeMap::new();
     let mut result = Vec::new();
+    let mut dolt = Vec::new();
     for (index, migration) in migrations.iter().enumerate() {
         let migration = migration
             .as_object()
             .ok_or_else(|| anyhow!("config `migrations[{index}]` must be an object"))?;
         let unsupported = migration
             .keys()
-            .filter(|key| !matches!(key.as_str(), "tag" | "new_sqlite_classes"))
+            .filter(|key| {
+                !matches!(
+                    key.as_str(),
+                    "tag" | "new_sqlite_classes" | "new_dolt_classes"
+                )
+            })
             .cloned()
             .collect::<Vec<_>>();
         if !unsupported.is_empty() {
@@ -2472,25 +2470,36 @@ fn read_sqlite_classes(project: &Map<String, Value>) -> anyhow::Result<Vec<Strin
         if !tags.insert(tag.to_string()) {
             bail!("config has duplicate migration tag {tag:?}");
         }
-        let Some(value) = migration.get("new_sqlite_classes") else {
-            continue;
-        };
-        let new_classes = value.as_array().ok_or_else(|| {
-            anyhow!("config `migrations[{index}].new_sqlite_classes` must be an array")
-        })?;
-        for (class_index, class) in new_classes.iter().enumerate() {
-            let class = class.as_str().filter(|class| !class.is_empty()).ok_or_else(|| {
-                anyhow!(
-                    "config `migrations[{index}].new_sqlite_classes[{class_index}]` must be a non-empty string"
-                )
-            })?;
-            if !classes.insert(class.to_string()) {
-                bail!("SQLite class {class:?} is introduced by more than one migration");
+        for (key, engine) in [("new_sqlite_classes", "SQLite"), ("new_dolt_classes", "Dolt")] {
+            let Some(value) = migration.get(key) else {
+                continue;
+            };
+            let new_classes = value
+                .as_array()
+                .ok_or_else(|| anyhow!("config `migrations[{index}].{key}` must be an array"))?;
+            for (class_index, class) in new_classes.iter().enumerate() {
+                let class = class.as_str().filter(|class| !class.is_empty()).ok_or_else(|| {
+                    anyhow!(
+                        "config `migrations[{index}].{key}[{class_index}]` must be a non-empty string"
+                    )
+                })?;
+                if let Some(previous) = classes.insert(class.to_string(), engine) {
+                    if previous != engine {
+                        bail!(
+                            "class {class:?} is introduced as both a {previous} and a {engine} \
+                             class; a class's storage engine is fixed when it is created"
+                        );
+                    }
+                    bail!("{engine} class {class:?} is introduced by more than one migration");
+                }
+                result.push(class.to_string());
+                if engine == "Dolt" {
+                    dolt.push(class.to_string());
+                }
             }
-            result.push(class.to_string());
         }
     }
-    Ok(result)
+    Ok((result, dolt))
 }
 
 fn read_asset_project(
@@ -2665,6 +2674,91 @@ fn optional_asset_mode(
         bail!("unsupported assets.{key} value: {value:?}");
     }
     Ok(value.to_string())
+}
+
+/// The `p2p` bindings: `{ "binding", "alpn", "accept": { "class", "name" } }`.
+///
+/// `accept` names the one Durable Object that receives the inbound streams of
+/// the binding's ALPN, by class and by the name its `getByName` would take. It
+/// is optional: a binding without it can dial out and accepts nothing.
+/// Returns whether any binding was declared.
+fn read_p2p(
+    object: &Map<String, Value>,
+    sqlite_classes: &[String],
+    bindings: &mut Vec<Value>,
+) -> anyhow::Result<bool> {
+    let entries = match object.get("p2p") {
+        None => return Ok(false),
+        Some(Value::Array(entries)) => entries.as_slice(),
+        Some(_) => bail!("config `p2p` must be an array"),
+    };
+    let mut accepted_alpns = BTreeSet::new();
+    for entry in entries {
+        let fields = entry
+            .as_object()
+            .ok_or_else(|| anyhow!("config `p2p` entries must be objects"))?;
+        if let Some(key) = fields
+            .keys()
+            .find(|key| !matches!(key.as_str(), "binding" | "alpn" | "accept"))
+        {
+            bail!(
+                "p2p binding declares `{key}`, which celld does not model; \
+                 celld models `binding`, `alpn` and `accept`"
+            );
+        }
+        let binding = fields
+            .get("binding")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("p2p binding has no `binding`"))?;
+        if !valid_binding(binding) {
+            bail!("invalid p2p binding name: {binding:?}");
+        }
+        let alpn = fields
+            .get("alpn")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("p2p binding {binding} has no `alpn`"))?;
+        if !crate::p2p::valid_alpn(alpn) {
+            bail!(
+                "p2p binding {binding} has an invalid `alpn` {alpn:?}: use 1 to 255 of \
+                 letters, digits and `- _ . / : +`"
+            );
+        }
+        let mut encoded = json!({ "type": "p2p", "name": binding, "alpn": alpn });
+        if let Some(accept) = fields.get("accept") {
+            let accept = accept
+                .as_object()
+                .ok_or_else(|| anyhow!("p2p binding {binding}: `accept` must be an object"))?;
+            if let Some(key) = accept
+                .keys()
+                .find(|key| !matches!(key.as_str(), "class" | "name"))
+            {
+                bail!("p2p binding {binding}: `accept` declares `{key}`; celld models `class` and `name`");
+            }
+            let class = accept
+                .get("class")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("p2p binding {binding}: `accept` has no `class`"))?;
+            let name = accept
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| anyhow!("p2p binding {binding}: `accept` has no `name`"))?;
+            if !sqlite_classes.iter().any(|known| known == class) {
+                bail!(
+                    "p2p binding {binding} accepts into class {class:?}, which is not in \
+                     `migrations[].new_sqlite_classes`"
+                );
+            }
+            // One ALPN has one acceptor on a node, so two bindings in one
+            // config cannot both claim it.
+            if !accepted_alpns.insert(alpn.to_string()) {
+                bail!("two p2p bindings accept the same `alpn` {alpn:?}");
+            }
+            encoded["accept"] = json!({ "class": class, "name": name });
+        }
+        bindings.push(encoded);
+    }
+    Ok(!entries.is_empty())
 }
 
 fn valid_binding(binding: &str) -> bool {
@@ -3120,6 +3214,72 @@ fn strip_jsonc(source: &str) -> String {
     out
 }
 
+#[cfg(test)]
+mod p2p_config {
+    use super::*;
+
+    fn read(config: Value, classes: &[&str]) -> anyhow::Result<(bool, Vec<Value>)> {
+        let classes: Vec<String> = classes.iter().map(|class| class.to_string()).collect();
+        let mut bindings = Vec::new();
+        let declared = read_p2p(config.as_object().unwrap(), &classes, &mut bindings)?;
+        Ok((declared, bindings))
+    }
+
+    #[test]
+    fn a_binding_with_accept_is_encoded_for_the_manifest() {
+        let (declared, bindings) = read(
+            json!({ "p2p": [{
+                "binding": "P2P", "alpn": "chronolog/1",
+                "accept": { "class": "Node", "name": "node" }
+            }] }),
+            &["Node"],
+        )
+        .unwrap();
+        assert!(declared);
+        assert_eq!(
+            bindings,
+            vec![json!({
+                "type": "p2p", "name": "P2P", "alpn": "chronolog/1",
+                "accept": { "class": "Node", "name": "node" }
+            })]
+        );
+        let parsed = crate::p2p::Binding::from_manifest(&bindings[0]).unwrap();
+        assert_eq!(parsed.accept.unwrap().name, "node");
+    }
+
+    #[test]
+    fn a_dial_only_binding_needs_no_class() {
+        let (_, bindings) =
+            read(json!({ "p2p": [{ "binding": "P2P", "alpn": "x/1" }] }), &[]).unwrap();
+        assert!(bindings[0].get("accept").is_none());
+    }
+
+    #[test]
+    fn mistakes_are_refused() {
+        let bad = |config: Value| read(config, &["Node"]).unwrap_err().to_string();
+        assert!(bad(json!({ "p2p": {} })).contains("must be an array"));
+        assert!(bad(json!({ "p2p": [{ "binding": "P2P" }] })).contains("no `alpn`"));
+        assert!(bad(json!({ "p2p": [{ "binding": "1x", "alpn": "a" }] }))
+            .contains("invalid p2p binding"));
+        assert!(
+            bad(json!({ "p2p": [{ "binding": "P", "alpn": "a b" }] })).contains("invalid `alpn`")
+        );
+        assert!(
+            bad(json!({ "p2p": [{ "binding": "P", "alpn": "a", "relay": "x" }] }))
+                .contains("does not model")
+        );
+        assert!(bad(json!({ "p2p": [{
+            "binding": "P", "alpn": "a", "accept": { "class": "Other", "name": "n" }
+        }] }))
+        .contains("not in"));
+        assert!(bad(json!({ "p2p": [
+            { "binding": "P", "alpn": "a", "accept": { "class": "Node", "name": "n" } },
+            { "binding": "Q", "alpn": "a", "accept": { "class": "Node", "name": "n" } },
+        ] }))
+        .contains("same `alpn`"));
+    }
+}
+
 #[cfg(all(test, celld_internal_tests))]
 mod deploy_contract {
     include!(env!("CELLD_INTERNAL_DEPLOY_TESTS"));
@@ -3131,7 +3291,8 @@ mod celld_block_tests {
 
     fn read(config: Value, classes: &[&str]) -> anyhow::Result<Option<Value>> {
         let classes: Vec<String> = classes.iter().map(|class| class.to_string()).collect();
-        read_celld_block(config.as_object().unwrap(), &classes)
+        let block = celld_block::read(config.as_object().unwrap(), &classes)?;
+        Ok((!block.is_empty()).then(|| json!(block)))
     }
 
     #[test]

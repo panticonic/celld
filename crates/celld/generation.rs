@@ -558,6 +558,7 @@ impl Generation {
                 services,
                 crons,
                 containers,
+                residency_classes,
                 fence_image: fence,
                 codegen_classes,
                 ..
@@ -576,6 +577,8 @@ impl Generation {
                     .with_queue_consumers(queue_catalog.clone())
                     .with_crons(if is_primary { crons } else { Vec::new() })
                     .with_containers(containers)
+                    .with_residency_classes(residency_classes)
+                    .with_deployment(&version)
                     .with_generation(id),
             );
             // Stateless handlers never hold codegen. A class that declared it

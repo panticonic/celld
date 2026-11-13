@@ -1,0 +1,11 @@
+{
+  "name": "dolt",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": {
+    "bindings": [{ "name": "REPO", "class_name": "Repo" }]
+  },
+  // A Dolt class: each object is a DoltLite prolly store with commits,
+  // branches and merge, behind the same ctx.storage.sql as a SQLite class.
+  "migrations": [{ "tag": "v1", "new_dolt_classes": ["Repo"] }]
+}

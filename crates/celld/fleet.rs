@@ -897,6 +897,14 @@ async fn load_worker_at_pointer(
         .filter_map(|binding| binding.get("name")?.as_str().map(str::to_string))
         .collect();
     let services = service_bindings(&manifest);
+    // `p2p` bindings reach the node's one endpoint, so they register with the
+    // node-level table instead of travelling in `WorkerConfigOptions`.
+    crate::p2p::declare(
+        &manifest.script_name,
+        bindings(&manifest, "p2p")
+            .filter_map(crate::p2p::Binding::from_manifest)
+            .collect(),
+    );
     let vars = worker_vars(&manifest);
     let compat = crate::worker_compat(&manifest.raw_metadata);
     let assets = match &manifest.assets {
@@ -929,6 +937,7 @@ async fn load_worker_at_pointer(
     let prefix = pointer.prefix.clone();
     let crons = manifest.crons.clone();
     let containers = manifest.containers.clone();
+    let residency_classes = manifest.celld.residency_classes();
     let fence_image = manifest.fence_image.clone();
     let codegen_classes = crate::deploy::declared_codegen_classes(&manifest.raw_metadata);
     Ok(LoadedDeployment {
@@ -936,6 +945,7 @@ async fn load_worker_at_pointer(
             src,
             script_name: script_name.clone(),
             do_classes: manifest.do_classes,
+            dolt_classes: manifest.dolt_classes,
             bindings: do_bindings,
             r2_bindings,
             d1_bindings,
@@ -957,6 +967,7 @@ async fn load_worker_at_pointer(
         services,
         crons,
         containers,
+        residency_classes,
         fence_image,
         codegen_classes,
     })
@@ -979,6 +990,8 @@ pub struct LoadedDeployment {
     /// `containers` from the manifest: the classes whose cells supervise a
     /// container.
     pub containers: Vec<crate::container::ContainerSpec>,
+    /// The classes the manifest's `celld` block grants `residency`.
+    pub residency_classes: Vec<String>,
     /// See `Manifest::fence_image`.
     pub fence_image: Option<String>,
     /// Classes the deployment declared `celld.durable_objects.<Class>.codegen`

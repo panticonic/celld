@@ -81,6 +81,12 @@ fn restart_with_rotated_credentials() -> ! {
     std::process::exit(75);
 }
 
+/// Windows has no `exec`: a process cannot replace its own image while
+/// keeping its pid and listening sockets. Exiting with the same status the
+/// Unix path uses when `exec` fails (75, EX_TEMPFAIL) hands the reload to
+/// the supervisor (`celld dev`, the Vibestudio host, a service wrapper),
+/// which restarts celld. Spawning a replacement from here would race the
+/// old process for its listening ports.
 #[cfg(not(unix))]
 fn restart_with_rotated_credentials() -> ! {
     std::process::exit(75);
@@ -2082,6 +2088,11 @@ fn validate_managed_class_migrations(manifest: &Manifest) -> anyhow::Result<()> 
             }
         })
         .collect::<anyhow::Result<std::collections::BTreeSet<_>>>()?;
+    if !manifest.dolt_classes.is_empty() {
+        return Err(anyhow!(
+            "managed deployments do not support Dolt classes; deploy with `celld deploy`"
+        ));
+    }
     let mut declared_sqlite = std::collections::BTreeSet::new();
     for class in &manifest.sqlite_classes {
         if class.is_empty() {
@@ -2510,6 +2521,9 @@ fn config_path() -> anyhow::Result<PathBuf> {
         PathBuf::from(path)
     } else if let Some(path) = std::env::var_os("XDG_CONFIG_HOME") {
         PathBuf::from(path).join("celld")
+    } else if let Some(path) = std::env::var_os("APPDATA").filter(|_| cfg!(windows)) {
+        // Windows: the roaming profile, where per-user application config lives.
+        PathBuf::from(path).join("celld")
     } else if let Some(path) = std::env::var_os("HOME") {
         PathBuf::from(path).join(".config").join("celld")
     } else {
@@ -2631,7 +2645,14 @@ fn restrict_permissions(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+/// `chmod 0600`: a protected DACL granting only the current user full access.
+#[cfg(windows)]
+fn restrict_permissions(path: &Path) -> anyhow::Result<()> {
+    crate::winos::restrict_to_current_user(path)
+        .with_context(|| format!("restrict access to {}", path.display()))
+}
+
+#[cfg(not(any(unix, windows)))]
 fn restrict_permissions(_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }

@@ -1071,8 +1071,10 @@ impl RuntimeManager {
     ) -> anyhow::Result<celld_logic::RestoreOutcome> {
         let path = self.db_path(cell, spec.epoch);
         self.facets.register(cell, spec);
+        let engine = self.cell_engine(cell);
         if let Some(replication) = &self.replication {
-            let (restored_path, restored, vfs) = replication.restore(cell, spec, true).await?;
+            let (restored_path, restored, vfs) =
+                replication.restore(cell, spec, true, engine).await?;
             if restored_path != path {
                 return Err(anyhow!(
                     "replication restored {} instead of {}",
@@ -1096,6 +1098,15 @@ impl RuntimeManager {
             restored: false,
             alarm: self.restored_alarm(cell, &path, None).await,
         })
+    }
+
+    /// The storage engine of `cell`'s class in the current deployment. A cell
+    /// whose class this deployment does not export is a SQLite cell; its
+    /// activation fails later, when no Worker serves the class.
+    pub(crate) fn cell_engine(&self, cell: &str) -> celld_ltx::Engine {
+        cell.split_once(':')
+            .and_then(|(class, _)| self.generation().cell_config(class).map(|config| (class.to_string(), config)))
+            .map_or(celld_ltx::Engine::Sqlite, |(class, config)| config.class_engine(&class))
     }
 
     /// The alarm the restored database already had armed, read directly by
@@ -1321,6 +1332,7 @@ impl RuntimeManager {
                     epoch,
                     replicated_wake: self.wake.is_some(),
                     vfs: paged_vfs.as_deref(),
+                    engine: config.class_engine(class),
                 },
             )
             .await;
@@ -1893,6 +1905,27 @@ impl RuntimeManager {
             reply,
         };
         self.cell_event(&cell, job, receive, "cell isolate dropped WebSocket close")
+            .await
+    }
+
+    /// Tell the cell's application that the core revoked these residency holds,
+    /// and wait for its `onrevoked` handlers to settle. The answer carries no
+    /// write position: whatever the handlers wrote is proved by the durability
+    /// proof every eviction takes before the runtime stops.
+    pub async fn holds_revoked(
+        &self,
+        cell: String,
+        holds: Vec<u64>,
+        reason: &str,
+    ) -> anyhow::Result<Option<u64>> {
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        let job = CellJob::HoldsRevoked {
+            scope: cell.clone(),
+            holds,
+            reason: reason.to_string(),
+            reply,
+        };
+        self.cell_event(&cell, job, receive, "cell isolate dropped hold revocation")
             .await
     }
 
@@ -3354,6 +3387,7 @@ async fn drive_cell_inner(
             CellJob::WsOpen { .. } => "celld.ws_open",
             CellJob::WsMessage { .. } => "celld.ws_message",
             CellJob::WsClosed { .. } => "celld.ws_close",
+            CellJob::HoldsRevoked { .. } => "celld.residency_revoked",
             #[cfg(celld_internal_tests)]
             CellJob::SyncErrorForTest { .. } => "celld.sync_error_test",
         };

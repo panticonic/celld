@@ -8,7 +8,9 @@ license = "Apache-2.0"
 # Pure decision core: no async, I/O, clocks, randomness, locks, or dependencies.
 [lib]
 path = "lib.rs"
-test = false
+# Upstream's test bodies are stripped, so only the fork's own tests (named
+# `*_tests.rs`, under `#[cfg(test)]`) run here.
+test = true
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

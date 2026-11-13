@@ -32,7 +32,7 @@ const wsecho = {
       await roundtrip(t, a, "from-a", 5);
       await roundtrip(t, b, "from-b", 6);
       await roundtrip(t, a, "from-a-again", 7);
-      // Close before the restart: a graceful stop waits for open sockets (see the drain step below).
+      // Close before the restart: a graceful stop closes open sockets (see the drain step below).
       a.close();
       b.close();
       await Promise.all([a.closed(), b.closed()]);
@@ -58,18 +58,20 @@ const wsecho = {
       ws.close();
       await ws.closed();
     }),
-    // Observed behaviour, asserted as a bound rather than an ideal: SIGTERM with
-    // a socket still open waits for the "preserve drain" (25 s deadline, logged as
-    // `websockets=1`), then exits 0 and the client sees an abnormal close (1006).
-    run("graceful stop with a socket open drains within the shutdown bound and exits 0", async (t) => {
+    // SIGTERM on the dev supervisor is a preserved restart. Once every request has
+    // answered, the node tells each open socket it is going away (1001) and exits
+    // as soon as the close handshakes finish. (Upstream celld 0.6.3 waited out the
+    // 25 s preserve drain and dropped the socket abnormally, 1006.)
+    run("graceful stop with a socket open closes it with 1001 promptly and exits 0", async (t) => {
       const ws = await t.ws("/");
       await roundtrip(t, ws, "open", 11);
       const t0 = Date.now();
       await t.celld.stop({ graceMs: 45000 });
       const took = Date.now() - t0;
       t.assert(t.celld.exit.code === 0, `exit ${JSON.stringify(t.celld.exit)}`);
-      t.assert(took < 40000, `shutdown took ${took} ms`);
-      await ws.closed({ timeoutMs: 5000 });
+      t.assert(took < 10000, `shutdown took ${took} ms`);
+      const closed = await ws.closed({ timeoutMs: 5000 });
+      t.expectValue(closed.code, 1001);
       await t.celld.start();
       const ws2 = await t.ws("/");
       await roundtrip(t, ws2, "next", 12);

@@ -5304,6 +5304,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
     let mut process_deadline_fired = false;
     let mut handoff = tokio::time::interval(std::time::Duration::from_millis(50));
     let mut containers_reaped = false;
+    let mut websockets_told = false;
     let drained = if shutdown_mode == ShutdownMode::Handoff && !handoff_started {
         false
     } else {
@@ -5378,6 +5379,22 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
             // SDK's RPC transport is one such socket). The containers are
             // destroyed at exit anyway; destroying them once every request
             // has answered ends those sockets now.
+            // A client socket never ends on its own either, and its transport
+            // cannot survive the process, so a preserved restart that waits
+            // for it waits out the whole drain deadline and then drops it
+            // abnormally (1006). Once every request has answered, tell each
+            // open socket this node is going away (1001), as Cloudflare does
+            // when it restarts a Durable Object, and let the close handshake
+            // finish. A SIGTERM (handoff) shutdown needs none of this: it
+            // closes each cell's sockets with 1012 when the cell is nominated.
+            if !websockets_told
+                && shutdown_mode == ShutdownMode::Preserve
+                && requests_drained
+                && core_drained
+            {
+                websockets_told = true;
+                celld::js::ws_close_all(1001, "going away");
+            }
             if !containers_reaped
                 && shutdown_mode == ShutdownMode::Preserve
                 && requests_drained

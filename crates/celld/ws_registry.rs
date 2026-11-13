@@ -1305,6 +1305,20 @@ pub fn ws_close(id: u64, code: u16, reason: &str) {
         .emit(id, WsOut::Close(code, reason.to_string()));
 }
 
+/// Close every open socket with `code`, a process-wide announcement that this
+/// node is going away. A preserved restart keeps cells and records for the
+/// next process on this node, but a client's transport cannot outlive the
+/// process, so each client is told to reconnect instead of finding the
+/// connection dropped when the process exits (an abnormal 1006).
+pub fn ws_close_all(code: u16, reason: &str) {
+    let registry = ws_registry();
+    let mut registry = registry.lock().unwrap();
+    let ids: Vec<u64> = registry.outputs.keys().copied().collect();
+    for id in ids {
+        registry.emit(id, WsOut::Close(code, reason.to_string()));
+    }
+}
+
 /// Break a cell's sockets: the output gate could not prove a write durable, so
 /// close every socket the cell owns rather than let a client keep a connection
 /// whose acknowledged effects may not have persisted (a reset DO).

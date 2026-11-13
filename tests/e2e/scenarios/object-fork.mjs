@@ -32,7 +32,7 @@ export default {
     state("src", SOURCE),
     get("/fork?from=src&to=f1", { status: 200, json: { id: M.re(/^[0-9a-f]{64}$/) } }),
     state("f1", SOURCE),
-    get("/fork?from=src&to=f1", { status: 409, json: { error: M.re(/already exists/), code: null } }),
+    get("/fork?from=src&to=f1", { status: 409, json: { error: M.re(/already exists/), code: "ERR_OBJECT_EXISTS" } }),
     get("/w/f1/add?to=notes&body=f1-only", { status: 200, json: { n: 2 } }),
     get("/fork?from=f1&to=backup", { status: 200, json: { id: M.re(/^[0-9a-f]{64}$/) } }),
     get("/restore?target=f1&from=src", {

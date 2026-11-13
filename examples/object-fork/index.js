@@ -13,7 +13,8 @@ import { DurableObject } from "cloudflare:workers";
 //   GET /w/<name>/commit?message=...    a commit of the ledger
 //   GET /w/<name>/kv?set=...            the root's key-value API
 //   GET /w/<name>/alarm?in=<ms>         set the root's alarm, <ms> from now
-//   GET /fork?from=<a>&to=<b>[&ledgerAt=<hash>][&rootAt=<hash>]
+//   GET /fork?from=<a>&to=<b>[&ledgerAt=<hash>][&rootAt=<hash>][&replace=1]
+//   GET /delete-unfinished?name=<a>     remove what an interrupted fork left
 //   GET /restore?target=<a>&from=<b>[&stop=1]
 
 // The facets' code. A real application loads it from a bundle or a
@@ -141,6 +142,8 @@ export default {
       const options = { name: q("to") };
       if (q("ledgerAt")) options.facets = { ledger: { at: q("ledgerAt") } };
       if (q("rootAt")) options.at = q("rootAt");
+      // Takes over a target that an interrupted fork left unfinished.
+      if (q("replace") === "1") options.replaceUnfinished = true;
       try {
         const id = await ns.fork(ns.idFromName(q("from")), options);
         return Response.json({ id: id.toString() });
@@ -153,6 +156,13 @@ export default {
         const options = q("stop") === "1" ? { stop: true } : {};
         return Response.json(
           await ns.restore(ns.idFromName(q("target")), ns.idFromName(q("from")), options));
+      } catch (error) {
+        return fail(error);
+      }
+    }
+    if (url.pathname === "/delete-unfinished") {
+      try {
+        return Response.json(await ns.deleteUnfinished(ns.idFromName(q("name"))));
       } catch (error) {
         return fail(error);
       }

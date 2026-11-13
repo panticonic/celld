@@ -729,6 +729,18 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       `Upgrade` header belongs to the object that opened it, also when opened by
       a continuation after its event, and opens without waiting for the input
       gate. Detail in `docs/fork/upstream-findings.md` (E9).
+    - **Interrupted fork targets and error codes.** A fork that stopped before
+      it completed left a target that could be neither retried nor deleted
+      (only `celld cell import` had `--replace-unfinished`).
+      `env.NS.fork(source, { replaceUnfinished: true })` takes it over,
+      `env.NS.deleteUnfinished(id)` and `celld cell delete-unfinished` remove it
+      (only a publication that never finished: an object is refused). Errors of
+      fork, restore, import and delete carry a stable `code` (`ERR_OBJECT_EXISTS`,
+      `ERR_OBJECT_UNFINISHED`, ...), on the JavaScript error and, with `--json`,
+      in the CLI output, which also exits with a status per code, so a caller
+      does not match message text. Table in `docs/services/object-fork.md`
+      ("Errors"). These are gaps of the fork's own features, not upstream
+      defects.
 
 ## 4. Determinism: fixes over the earlier plans
 

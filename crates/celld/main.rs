@@ -3577,7 +3577,15 @@ fn main() -> anyhow::Result<()> {
     if let Some(workers) = celld::env_vars::positive::<usize>("CELLD_TOKIO_THREADS")? {
         builder.worker_threads(workers);
     }
-    builder.build()?.block_on(async_main(telemetry_config))
+    let result = builder.build()?.block_on(async_main(telemetry_config));
+    // A command that failed with a stable code has already said so; its status
+    // is the answer and `main` adds nothing (`celld cell import`).
+    if let Err(error) = &result {
+        if let Some(exit) = error.downcast_ref::<celld::cell_cli::Exit>() {
+            exit_flushed(exit.0);
+        }
+    }
+    result
 }
 
 async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyhow::Result<()> {

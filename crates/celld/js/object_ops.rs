@@ -54,7 +54,10 @@ pub(super) fn op_object_export(
             .split_once(':')
             .is_some_and(|(target_class, _)| target_class == class);
         if !same_class || !celld_logic::cell::valid_cell_scope(&target) || target == cell {
-            return Err(format!("invalid fork target {target:?}"));
+            return Err(format!(
+                "{}: invalid fork target {target:?}",
+                crate::object_image::codes::INVALID_TARGET
+            ));
         }
         let options: serde_json::Value = if options.is_empty() {
             serde_json::Value::Null
@@ -71,12 +74,26 @@ pub(super) fn op_object_export(
             .get("staging")
             .and_then(|staging| staging.as_str())
             .map(str::to_string);
+        // A fork may take over the target of a publication that stopped
+        // before it completed (`celld cell import --replace-unfinished`).
+        let existing = if options
+            .get("replaceUnfinished")
+            .and_then(|replace| replace.as_bool())
+            == Some(true)
+        {
+            crate::object_image::Existing::ReplaceUnfinished
+        } else {
+            crate::object_image::Existing::Refuse
+        };
         if let Some(restored) = &staging_for {
             let same = restored
                 .split_once(':')
                 .is_some_and(|(restored_class, _)| restored_class == class);
             if !same || !celld_logic::cell::valid_cell_scope(restored) {
-                return Err(format!("invalid restore target {restored:?}"));
+                return Err(format!(
+                    "{}: invalid restore target {restored:?}",
+                    crate::object_image::codes::INVALID_TARGET
+                ));
             }
         }
         let root = storage::root_file(&cell)?;
@@ -117,12 +134,13 @@ pub(super) fn op_object_export(
             index,
             options,
             staging_for,
+            existing,
             storage::root_file(&cell)?.epoch,
         ))
     })();
     let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::R2);
     let id = asyncrt::enqueue(async move {
-        let (root, index, options, staging_for, epoch) = prepared?;
+        let (root, index, options, staging_for, existing, epoch) = prepared?;
         let mut image = vec![root];
         if !index.is_empty() {
             let (root_scope, target_scope) = (cell.clone(), target.clone());
@@ -143,18 +161,53 @@ pub(super) fn op_object_export(
         // durable before anything is published.
         await_egress_gate(gate).await?;
         tracing::info!(cell = %cell, target = %target, "fork export: root proved; publishing");
-        let bucket = crate::r2_store::store()
-            .map_err(|_| "fork needs a fleet bucket (celld dev provides one)".to_string())?;
+        let bucket = crate::r2_store::store().map_err(|_| {
+            format!(
+                "{}: fork needs a fleet bucket (celld dev provides one)",
+                crate::object_image::codes::NO_BUCKET
+            )
+        })?;
         let bytes = crate::object_image::publish_new(
             bucket,
             &target,
             &image,
-            crate::object_image::Existing::Refuse,
+            existing,
             staging_for.as_deref(),
         )
         .await
-        .map_err(|error| format!("{error:#}"))?;
+        .map_err(|error| crate::object_image::describe(&error))?;
         Ok(serde_json::json!({ "bytes": bytes, "components": image.len() }).to_string())
+    });
+    rv.set(promise_for(scope, id));
+}
+
+/// `__object_delete_unfinished(target)` — delete the leftovers of a
+/// publication of `target` that stopped before it completed
+/// (`object_image::delete_unfinished`). Resolves to `{ deleted }`, the number of
+/// objects removed. Refuses an object whose publication finished.
+pub(super) fn op_object_delete_unfinished(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let target = args.get(0).to_rust_string_lossy(scope);
+    let id = asyncrt::enqueue(async move {
+        if !celld_logic::cell::valid_cell_scope(&target) {
+            return Err(format!(
+                "{}: invalid target {target:?}",
+                crate::object_image::codes::INVALID_TARGET
+            ));
+        }
+        let bucket = crate::r2_store::store().map_err(|_| {
+            format!(
+                "{}: deleting an unfinished publication needs a fleet bucket (celld dev provides one)",
+                crate::object_image::codes::NO_BUCKET
+            )
+        })?;
+        let deleted = crate::object_image::delete_unfinished(bucket, &target)
+            .await
+            .map_err(|error| crate::object_image::describe(&error))?;
+        Ok(serde_json::json!({ "deleted": deleted }).to_string())
     });
     rv.set(promise_for(scope, id));
 }
@@ -240,11 +293,15 @@ pub(super) fn op_object_adopt_streams(
     let epoch = storage::root_file(&cell).map(|root| root.epoch);
     let id = asyncrt::enqueue(async move {
         let epoch = epoch?;
-        let bucket = crate::r2_store::store()
-            .map_err(|_| "restore needs a fleet bucket (celld dev provides one)".to_string())?;
+        let bucket = crate::r2_store::store().map_err(|_| {
+            format!(
+                "{}: restore needs a fleet bucket (celld dev provides one)",
+                crate::object_image::codes::NO_BUCKET
+            )
+        })?;
         crate::object_image::check_staging(bucket, &staging, &cell)
             .await
-            .map_err(|error| format!("restore: {error:#}"))?;
+            .map_err(|error| crate::object_image::describe(&error))?;
         let (path, engine) = host(move |reply| FacetReq::Adopt {
             root: cell,
             epoch,

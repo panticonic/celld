@@ -149,7 +149,9 @@ USAGE:
   celld cell list [CLASS] --bucket [s3://|gs://|az://]NAME[/PREFIX] [OPTIONS]
 
 Run `celld cell gc --help` for the report of superseded epochs, and
-`celld cell import --help` to create an object from database files.
+`celld cell import --help` to create an object from database files, and
+`celld cell delete-unfinished --help` to delete an import or fork that stopped
+before it completed.
 
 The listing is bounded by default, because a fleet can hold far more cells
 than an operator wants to read and each request returns at most {page}
@@ -197,11 +199,13 @@ pub async fn run(arguments: Vec<String>) -> anyhow::Result<()> {
         Some("list") => run_list(arguments.collect()).await,
         Some("gc") => run_gc(arguments.collect()).await,
         Some("import") => run_import(arguments.collect()).await,
+        Some("delete-unfinished") => run_delete_unfinished(arguments.collect()).await,
         None | Some("-h") | Some("--help") | Some("help") => {
             Output::new(Format::Text).help(&help_text())
         }
         Some(other) => bail!(
-            "unknown cell command: {other}; use celld cell list, celld cell gc or celld cell import"
+            "unknown cell command: {other}; use celld cell list, celld cell gc, celld cell import \
+             or celld cell delete-unfinished"
         ),
     }
 }
@@ -680,10 +684,18 @@ OPTIONS:
                            A facet database; ENGINE is sqlite (default) or dolt
   --id                     NAME is a hex object id, not a name
   --replace-unfinished     Take over an import that stopped before it completed
+                           (`celld cell delete-unfinished` removes it instead)
   --dev PROJECT            Use the local bucket of `celld dev` in PROJECT
   --json                   Print the result as JSON
 {FLEET_HELP}
-  -h, --help               Show this help"#
+  -h, --help               Show this help
+
+EXIT STATUS:
+  0 imported; 1 any other failure; and, with a code in the message (printed on
+  stdout as {{"error": {{"code", "message"}}}} with --json): 10 ERR_OBJECT_EXISTS,
+  11 ERR_OBJECT_UNFINISHED (retry with --replace-unfinished, or run
+  `celld cell delete-unfinished`), 13 ERR_OBJECT_NOT_FOUND,
+  14 ERR_OBJECT_ENGINE_MISMATCH"#
     )
 }
 
@@ -692,22 +704,8 @@ async fn run_import(arguments: Vec<String>) -> anyhow::Result<()> {
         return Output::new(Format::Text).help(&import_help_text());
     };
     let scope = import_scope(&options)?;
-    let bucket = match &options.dev {
-        Some(project) => {
-            let database = project.join(".celld/dev/objects.sqlite3");
-            if !database.is_file() {
-                bail!(
-                    "{} has no celld dev state; run `celld dev` there first",
-                    project.display()
-                );
-            }
-            crate::bucket::Bucket::open_dev(&database)?
-        }
-        None => {
-            let fleet = std::mem::take(&mut options.fleet);
-            fleet.resolve("celld cell import")?.open().await?
-        }
-    };
+    let bucket = open_object_bucket(&mut options, "celld cell import").await?;
+    let json = options.json;
     let bytes = crate::object_image::import(
         &bucket,
         &options.script,
@@ -717,7 +715,8 @@ async fn run_import(arguments: Vec<String>) -> anyhow::Result<()> {
         options.replace_unfinished,
     )
     .await
-    .with_context(|| format!("import {scope}"))?;
+    .with_context(|| format!("import {scope}"))
+    .map_err(|error| report(error, json))?;
     let mut out = Output::new(if options.json {
         Format::Json
     } else {
@@ -736,6 +735,206 @@ async fn run_import(arguments: Vec<String>) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// The bucket an object command addresses: the local one of `celld dev` in
+/// `--dev PROJECT`, or the fleet's.
+async fn open_object_bucket(
+    options: &mut ImportOptions,
+    command: &str,
+) -> anyhow::Result<crate::bucket::Bucket> {
+    match &options.dev {
+        Some(project) => {
+            let database = project.join(".celld/dev/objects.sqlite3");
+            if !database.is_file() {
+                bail!(
+                    "{} has no celld dev state; run `celld dev` there first",
+                    project.display()
+                );
+            }
+            crate::bucket::Bucket::open_dev(&database)
+        }
+        None => {
+            let fleet = std::mem::take(&mut options.fleet);
+            fleet.resolve(command)?.open().await
+        }
+    }
+}
+
+/// A command that failed with a stable code and has said so, on stdout as one
+/// JSON row with `--json` and on stderr otherwise. The process leaves with the
+/// status ([`crate::object_image::ObjectError::exit_code`]) and prints nothing
+/// more.
+#[derive(Debug)]
+pub struct Exit(pub i32);
+
+impl std::fmt::Display for Exit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "exit status {}", self.0)
+    }
+}
+
+impl std::error::Error for Exit {}
+
+/// What `--json` prints for a failure that has a code.
+struct Failure {
+    code: &'static str,
+    message: String,
+}
+
+impl Record for Failure {
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({ "error": { "code": self.code, "message": self.message } })
+    }
+
+    fn text(&self) -> Cow<'_, str> {
+        Cow::Owned(format!("error [{}]: {}", self.code, self.message))
+    }
+}
+
+/// Say that `error` failed the command, when it has a stable code, and turn it
+/// into [`Exit`]. An error without a code is returned as it is, and `main`
+/// prints it.
+fn report(error: anyhow::Error, json: bool) -> anyhow::Error {
+    let Some(code) = crate::object_image::error_code(&error) else {
+        return error;
+    };
+    let failure = Failure {
+        code,
+        message: format!("{error:#}"),
+    };
+    let said = if json {
+        let mut out = Output::new(Format::Json);
+        out.row(&failure).and_then(|()| out.finish())
+    } else {
+        note!("{}", failure.text());
+        Ok(())
+    };
+    match said {
+        Ok(()) => anyhow::Error::new(Exit(crate::object_image::ObjectError::exit_code(code))),
+        Err(error) => error,
+    }
+}
+
+/// `celld cell delete-unfinished`'s arguments: the object, as for an import.
+pub(crate) fn delete_unfinished_options_from_arguments(
+    arguments: Vec<String>,
+) -> anyhow::Result<Option<ImportOptions>> {
+    let mut options = ImportOptions::default();
+    let mut positional = Vec::new();
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        let mut value = |option: &str| {
+            arguments
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("{option} requires a value"))
+        };
+        match argument.as_str() {
+            "-h" | "--help" => return Ok(None),
+            "--json" => options.json = true,
+            "--id" => options.by_id = true,
+            "--dev" => options.dev = Some(std::path::PathBuf::from(value("--dev")?)),
+            other => {
+                if options.fleet.consume(other, &mut value)? {
+                    continue;
+                }
+                if other.starts_with('-') {
+                    bail!("unknown cell delete-unfinished option: {other}; run `celld cell delete-unfinished --help` for usage");
+                }
+                positional.push(other.to_string());
+            }
+        }
+    }
+    let [script, class, object]: [String; 3] = positional.try_into().map_err(|_| {
+        anyhow::anyhow!(
+            "celld cell delete-unfinished takes SCRIPT CLASS NAME; run `celld cell delete-unfinished --help`"
+        )
+    })?;
+    if class.contains(':') || !celld_logic::cell::valid_cell_scope(&class) {
+        bail!("a cell class must use ASCII letters, digits, and `_ - . $`, not {class:?}");
+    }
+    if options.dev.is_some() && options.fleet.bucket.is_some() {
+        bail!("celld cell delete-unfinished takes --dev or --bucket, not both");
+    }
+    options.script = script;
+    options.class = class;
+    options.object = object;
+    Ok(Some(options))
+}
+
+pub(crate) fn delete_unfinished_help_text() -> String {
+    format!(
+        r#"Delete what a fork, restore or import left when it stopped before it completed.
+
+USAGE:
+  celld cell delete-unfinished SCRIPT CLASS NAME
+                    (--bucket [s3://|gs://|az://]NAME[/PREFIX] | --dev PROJECT) [OPTIONS]
+
+The object is the one SCRIPT's namespace for CLASS gives idFromName(NAME) (with
+--id, NAME is the object's 64-digit hex id instead). Only a publication that
+never finished is deleted: its record still says so, and no node ever activated
+it. An object whose publication finished is refused, so this cannot delete an
+object. To retry instead of deleting, use `celld cell import --replace-unfinished`
+or env.NS.fork(source, {{ to, replaceUnfinished: true }}).
+
+OPTIONS:
+  --id                     NAME is a hex object id, not a name
+  --dev PROJECT            Use the local bucket of `celld dev` in PROJECT
+  --json                   Print the result as JSON
+{FLEET_HELP}
+  -h, --help               Show this help
+
+EXIT STATUS:
+  0 deleted; 1 any other failure; and, with a code in the message (printed on
+  stdout as {{"error": {{"code", "message"}}}} with --json): 10 ERR_OBJECT_EXISTS,
+  11 ERR_OBJECT_UNFINISHED, 12 ERR_OBJECT_NOT_UNFINISHED (the object finished),
+  13 ERR_OBJECT_NOT_FOUND, 14 ERR_OBJECT_ENGINE_MISMATCH"#
+    )
+}
+
+async fn run_delete_unfinished(arguments: Vec<String>) -> anyhow::Result<()> {
+    let Some(mut options) = delete_unfinished_options_from_arguments(arguments)? else {
+        return Output::new(Format::Text).help(&delete_unfinished_help_text());
+    };
+    let scope = import_scope(&options)?;
+    let bucket = open_object_bucket(&mut options, "celld cell delete-unfinished").await?;
+    let json = options.json;
+    let deleted = crate::object_image::delete_unfinished(&bucket, &scope)
+        .await
+        .with_context(|| format!("delete the unfinished publication of {scope}"))
+        .map_err(|error| report(error, json))?;
+    let mut out = Output::new(if json { Format::Json } else { Format::Text });
+    out.row(&Deleted {
+        scope: scope.clone(),
+        objects: deleted,
+    })?;
+    out.finish()?;
+    if !json {
+        note!("deleted the unfinished publication of {scope} ({deleted} stored objects)");
+    }
+    Ok(())
+}
+
+/// The unfinished publication a delete removed.
+struct Deleted {
+    scope: String,
+    objects: usize,
+}
+
+impl Record for Deleted {
+    fn json(&self) -> serde_json::Value {
+        let (class, id) = self.scope.split_once(':').unwrap_or(("", &self.scope));
+        serde_json::json!({
+            "scope": self.scope,
+            "class": class,
+            "id": id,
+            "deleted": self.objects,
+        })
+    }
+
+    fn text(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.scope)
+    }
 }
 
 /// The object an import created.
@@ -781,6 +980,55 @@ mod import_tests {
         assert_eq!((facet.name.as_str(), facet.file.to_str().unwrap()), ("a", "b=c"));
         assert!(parse_facet("nofile").is_err());
         assert!(parse_facet("=x.db").is_err());
+    }
+
+    #[test]
+    fn delete_unfinished_names_its_object_as_an_import_does() {
+        let options = delete_unfinished_options_from_arguments(arguments(&[
+            "app",
+            "UniversalDO",
+            "workspace/one",
+            "--dev",
+            "proj",
+            "--json",
+        ]))
+        .unwrap()
+        .unwrap();
+        assert!(options.json);
+        let import = import_options_from_arguments(arguments(&[
+            "app",
+            "UniversalDO",
+            "workspace/one",
+            "--file",
+            "root.sqlite",
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(import_scope(&options).unwrap(), import_scope(&import).unwrap());
+        // It takes no database files, and refuses both buckets.
+        assert!(delete_unfinished_options_from_arguments(arguments(&[
+            "app", "C", "n", "--file", "x"
+        ]))
+        .is_err());
+        assert!(delete_unfinished_options_from_arguments(arguments(&["app", "C"])).is_err());
+        assert!(delete_unfinished_options_from_arguments(arguments(&["--help"]))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn a_coded_failure_leaves_with_the_status_of_its_code() {
+        use crate::object_image::{codes, coded, ObjectError};
+        let error = coded(codes::UNFINISHED, "x").context("import C:abc");
+        // `--json`: the failure is said on stdout by `report`; here only the
+        // status it ends in is checked, and that an uncoded error passes through.
+        assert_eq!(ObjectError::exit_code(codes::EXISTS), 10);
+        assert_eq!(ObjectError::exit_code(codes::UNFINISHED), 11);
+        assert_eq!(ObjectError::exit_code("ERR_SOMETHING_ELSE"), 1);
+        let plain = report(anyhow::anyhow!("no code"), true);
+        assert!(plain.downcast_ref::<Exit>().is_none());
+        let coded_failure = report(error, true);
+        assert_eq!(coded_failure.downcast_ref::<Exit>().map(|exit| exit.0), Some(11));
     }
 
     #[test]

@@ -6106,7 +6106,7 @@ class DurableObjectNamespace {
     );
     const text = await response.text();
     if (!response.ok) {
-      const error = new Error("restore: " + text);
+      const error = __codedError(text, "restore: ");
       const code = response.headers.get("x-celld-code");
       if (code) error.code = code;
       throw error;
@@ -6115,6 +6115,20 @@ class DurableObjectNamespace {
   }
   getByName(name, options) {
     return this.get(this.idFromName(name), options);
+  // celld fork: delete the leftovers of a fork, restore or import of `id` that
+  // stopped before it completed (its publication never finished, so nothing
+  // ever activated it). Resolves to `{ deleted }`, the number of stored objects
+  // removed. An object whose publication finished is refused
+  // (ERR_OBJECT_NOT_UNFINISHED), a missing one too (ERR_OBJECT_NOT_FOUND).
+  async deleteUnfinished(id) {
+    if (!(id instanceof DurableObjectId) || id._className !== this._className)
+      throw new TypeError("Durable Object ID is not valid for this namespace");
+    try {
+      return JSON.parse(await __object_delete_unfinished(id._scope()));
+    } catch (error) {
+      throw __codedError(String(error && error.message || error), "deleteUnfinished: ");
+    }
+  }
   }
   get(id) {
     const className = this._className;
@@ -6323,6 +6337,11 @@ const __forkOptions = (options, where = "fork options") => {
   }
   if (options.facets !== undefined) {
     if (options.facets === null || typeof options.facets !== "object")
+  if (options.replaceUnfinished !== undefined) {
+    if (typeof options.replaceUnfinished !== "boolean")
+      throw new TypeError(where + ".replaceUnfinished must be a boolean.");
+    out.replaceUnfinished = options.replaceUnfinished;
+  }
       throw new TypeError(where + ".facets must be an object.");
     out.facets = {};
     for (const [name, value] of Object.entries(options.facets))
@@ -6332,11 +6351,20 @@ const __forkOptions = (options, where = "fork options") => {
 };
 const __objectExport = async (namespace, sourceId, targetId, options, what = "fork") => {
   const params = new URLSearchParams({ to: targetId._scope(), options: JSON.stringify(options) });
+// A failure of a fork, restore or import arrives as `CODE: message` when the
+// host gave it a stable code (docs/services/object-fork.md, "Errors"): the
+// error keeps the message text and carries the code as `code`.
+const __codedError = (text, what) => {
+  const match = /^(ERR_[A-Z_]+): ([^]*)$/.exec(text);
+  const error = new Error(what + (match === null ? text : match[2]));
+  if (match !== null) error.code = match[1];
+  return error;
+};
   const response = await namespace.get(sourceId).fetch(
     "https://celld.internal" + __OBJECT_EXPORT_PATH + "?" + params, { method: "POST" },
   );
   const text = await response.text();
-  if (!response.ok) throw new Error(what + ": " + text);
+  if (!response.ok) throw __codedError(text, what + ": ");
   return JSON.parse(text);
 };
 // A restore in progress on this isolate, by root scope. Every event waits

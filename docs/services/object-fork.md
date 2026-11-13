@@ -32,6 +32,7 @@ const copy = await env.WORKSPACE.fork(sourceId);                     // a new un
 const backup = await env.WORKSPACE.fork(sourceId, { name: "backup/1" }); // idFromName
 await env.WORKSPACE.fork(sourceId, { to: someId });                  // an id of this namespace
 await env.WORKSPACE.fork(sourceId, { facets: { ledger: { at: hash } } });
+await env.WORKSPACE.fork(sourceId, { to: someId, replaceUnfinished: true }); // see below
 ```
 
 `fork()` resolves to the new object's id once every component of the copy is
@@ -56,6 +57,22 @@ their contents, are not versioned with the root's commits.
 **A fork never overwrites an object.** The target is claimed with a
 conditional create of its ownership record. A target that exists, including
 one a fork, restore or import is still writing, refuses the fork.
+
+**An interrupted fork leaves a target that nothing activates**, and that is not
+an object yet: its record says it is still being published. Such a target
+refuses a fork (`ERR_OBJECT_UNFINISHED`), and there are two ways out. Fork onto
+it again with `replaceUnfinished: true`: the fork takes the target over,
+clears what the interrupted publication left, and publishes (an object that
+finished is still refused, `ERR_OBJECT_EXISTS`). Or delete it:
+
+```js
+await env.WORKSPACE.deleteUnfinished(id);   // { deleted: 2 }, the stored objects removed
+```
+
+which refuses an object whose publication finished (`ERR_OBJECT_NOT_UNFINISHED`;
+it is an object, not a leftover) and one that does not exist
+(`ERR_OBJECT_NOT_FOUND`). `celld cell import --replace-unfinished` and
+`celld cell delete-unfinished` do the same from the command line.
 
 **Consistency.** The source exports itself, as an event of its own:
 
@@ -156,10 +173,33 @@ becomes celld's (values keep their V8 serialization), and workerd's
 `_cf_METADATA`, its alarm, is dropped. The object is created as a fork is:
 claimed conditionally, with every database uploaded before any node can
 activate it. An import that stopped before it completed leaves an object
-that no node activates; `--replace-unfinished` takes it over.
+that no node activates; `--replace-unfinished` takes it over, and
+`celld cell delete-unfinished SCRIPT CLASS NAME` removes it.
 
 The import writes the bucket directly, so the object must not be addressed
 until the import returns.
+
+## Errors
+
+A failure of a fork, restore, import or `deleteUnfinished` carries a stable
+`code`, so a caller does not match message text. In JavaScript it is `error.code`
+(the message is unchanged); `celld cell import` and `celld cell delete-unfinished`
+print it on stdout with `--json` as `{"error": {"code": "...", "message": "..."}}`
+(on stderr as `error [CODE]: ...` otherwise) and leave with the status in the
+table. An error without a code, or one a script has no use to tell apart, leaves
+with status 1.
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| `ERR_OBJECT_EXISTS` | 10 | The target is an object. |
+| `ERR_OBJECT_UNFINISHED` | 11 | The target is an interrupted publication: retry with `replaceUnfinished` / `--replace-unfinished`, or delete it. |
+| `ERR_OBJECT_NOT_UNFINISHED` | 12 | `deleteUnfinished` of an object whose publication finished. |
+| `ERR_OBJECT_NOT_FOUND` | 13 | The object, or the script's deployment, does not exist. |
+| `ERR_OBJECT_ENGINE_MISMATCH` | 14 | An imported database is not of the engine its place needs, or the class is not a SQLite-backed one of the deployment. |
+| `ERR_OBJECT_INVALID_TARGET` | 1 | The fork or restore target is not an id of the namespace, or is the source. |
+| `ERR_OBJECT_NO_BUCKET` | 1 | The node has no fleet bucket. |
+| `ERR_OBJECT_STAGING_INVALID` | 1 | A restore's staging copy is not the one for its target. |
+| `ERR_RESTORE_TARGET_ACTIVE` | 1 | A restore into an object that is running, without `stop`. |
 
 ## How it is built
 

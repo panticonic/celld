@@ -53,6 +53,93 @@ pub(crate) const RESTORE_TABLE: &str = "_cf_RESTORE";
 pub(crate) const FACET_INDEX_SQL: &str = "CREATE TABLE IF NOT EXISTS _cf_FACET_INDEX \
      (name TEXT PRIMARY KEY, engine TEXT NOT NULL) WITHOUT ROWID";
 
+/// Stable codes of the errors a fork, restore or import can answer, so a
+/// caller does not match message text. On a JavaScript error they are `code`
+/// (`env.NS.fork`, `restore`, `deleteUnfinished`); `celld cell import` and
+/// `celld cell delete-unfinished` print them with `--json` and exit with
+/// [`ObjectError::exit_code`].
+pub mod codes {
+    /// The target object exists.
+    pub const EXISTS: &str = "ERR_OBJECT_EXISTS";
+    /// The target has a publication that stopped before it completed; a fork
+    /// with `replaceUnfinished: true` or an import with `--replace-unfinished`
+    /// takes it over, and `deleteUnfinished` removes it.
+    pub const UNFINISHED: &str = "ERR_OBJECT_UNFINISHED";
+    /// Deleting an unfinished publication was asked of an object whose
+    /// publication finished: it is an object, not a leftover.
+    pub const NOT_UNFINISHED: &str = "ERR_OBJECT_NOT_UNFINISHED";
+    /// The object (or the deployment) does not exist.
+    pub const NOT_FOUND: &str = "ERR_OBJECT_NOT_FOUND";
+    /// A database is not of the engine its place needs, or the class is not a
+    /// SQLite-backed one of the deployment.
+    pub const ENGINE_MISMATCH: &str = "ERR_OBJECT_ENGINE_MISMATCH";
+    /// The fork target or the restore target names no object of the source's
+    /// namespace, or the source itself.
+    pub const INVALID_TARGET: &str = "ERR_OBJECT_INVALID_TARGET";
+    /// The node has no fleet bucket (or replication) to publish to.
+    pub const NO_BUCKET: &str = "ERR_OBJECT_NO_BUCKET";
+    /// A restore's staging copy is not the one for its target.
+    pub const STAGING_INVALID: &str = "ERR_OBJECT_STAGING_INVALID";
+}
+
+/// An error with a stable code. It travels inside an `anyhow::Error`
+/// ([`error_code`] finds it through the context a caller added) and across the
+/// isolate boundary as `CODE: message` ([`describe`], and the harness's
+/// `__codedError` back).
+#[derive(Debug)]
+pub struct ObjectError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl std::fmt::Display for ObjectError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ObjectError {}
+
+impl ObjectError {
+    /// The exit status `celld cell` leaves with: the generic failure (1) for
+    /// an error without a code or with one a script has no use to tell apart,
+    /// and one status for each outcome a script retries differently.
+    pub fn exit_code(code: &str) -> i32 {
+        match code {
+            codes::EXISTS => 10,
+            codes::UNFINISHED => 11,
+            codes::NOT_UNFINISHED => 12,
+            codes::NOT_FOUND => 13,
+            codes::ENGINE_MISMATCH => 14,
+            _ => 1,
+        }
+    }
+}
+
+pub(crate) fn coded(code: &'static str, message: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(ObjectError {
+        code,
+        message: message.into(),
+    })
+}
+
+/// The code of the first coded error in `error`'s chain.
+pub fn error_code(error: &anyhow::Error) -> Option<&'static str> {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ObjectError>())
+        .map(|coded| coded.code)
+}
+
+/// `CODE: message` for an error with a code, the message alone otherwise: how
+/// an error crosses into JavaScript, where the harness reads the code back.
+pub fn describe(error: &anyhow::Error) -> String {
+    match error_code(error) {
+        Some(code) => format!("{code}: {error:#}"),
+        None => format!("{error:#}"),
+    }
+}
+
 /// One database of an object: the root (an empty `path`) or the facet at
 /// `path` below it, as a whole-file image.
 #[derive(Clone, Debug)]
@@ -581,12 +668,23 @@ pub(crate) async fn publish_new(
                     );
                     token
                 }
-                (_, Some(_)) => bail!(
-                    "{target} has an unfinished publication (a fork, restore or import that \
-                     stopped before it completed); it is never activated, and an import with \
-                     --replace-unfinished can take it over"
-                ),
-                (_, None) => bail!("the target object {target} already exists"),
+                (_, Some(_)) => {
+                    return Err(coded(
+                        codes::UNFINISHED,
+                        format!(
+                            "{target} has an unfinished publication (a fork, restore or import \
+                             that stopped before it completed); it is never activated, and a \
+                             fork with replaceUnfinished or an import with --replace-unfinished \
+                             can take it over, or deleteUnfinished can remove it"
+                        ),
+                    ))
+                }
+                (_, None) => {
+                    return Err(coded(
+                        codes::EXISTS,
+                        format!("the target object {target} already exists"),
+                    ))
+                }
             }
         }
     };
@@ -631,16 +729,24 @@ pub(crate) async fn check_staging(
     let (body, _) = bucket
         .get(&format!("cells/{staging}/own.json"))
         .await?
-        .ok_or_else(|| anyhow!("the restore's staging object {staging} does not exist"))?;
+        .ok_or_else(|| {
+            coded(
+                codes::STAGING_INVALID,
+                format!("the restore's staging object {staging} does not exist"),
+            )
+        })?;
     let record: serde_json::Value =
         serde_json::from_slice(&body).context("decode the staging record")?;
-    ensure!(
-        record.get("staging_for").and_then(|v| v.as_str()) == Some(target)
-            && record.get("epoch").and_then(|v| v.as_u64()) == Some(1)
-            && record.get("node").and_then(|v| v.as_str()) == Some("")
-            && record.get("publishing").is_none(),
-        "{staging} is not a restore staging object for {target}"
-    );
+    if !(record.get("staging_for").and_then(|v| v.as_str()) == Some(target)
+        && record.get("epoch").and_then(|v| v.as_u64()) == Some(1)
+        && record.get("node").and_then(|v| v.as_str()) == Some("")
+        && record.get("publishing").is_none())
+    {
+        return Err(coded(
+            codes::STAGING_INVALID,
+            format!("{staging} is not a restore staging object for {target}"),
+        ));
+    }
     Ok(())
 }
 
@@ -659,6 +765,52 @@ pub(crate) async fn discard(bucket: &crate::bucket::Bucket, cell: &str) -> anyho
         "could not delete every object of {cell}"
     );
     Ok(())
+}
+
+/// Delete the leftovers of a publication that stopped before it completed
+/// (its record still says `publishing`, so no node ever activated it): every
+/// object under the target, its record included. Refuses an object whose
+/// publication finished, which is an object and not a leftover, and one that
+/// does not exist. Answers how many objects it deleted.
+pub(crate) async fn delete_unfinished(
+    bucket: &crate::bucket::Bucket,
+    target: &str,
+) -> anyhow::Result<usize> {
+    let key = format!("cells/{target}/own.json");
+    let Some((body, _)) = bucket.get(&key).await? else {
+        return Err(coded(
+            codes::NOT_FOUND,
+            format!("the object {target} does not exist"),
+        ));
+    };
+    let record: serde_json::Value =
+        serde_json::from_slice(&body).context("decode the ownership record")?;
+    if record.get("publishing").is_none() {
+        return Err(coded(
+            codes::NOT_UNFINISHED,
+            format!(
+                "{target} is not an unfinished publication: its publication finished, so it \
+                 is an object"
+            ),
+        ));
+    }
+    let keys: Vec<String> = bucket
+        .list(&format!("cells/{target}"))
+        .await?
+        .into_iter()
+        .map(|meta| meta.location.to_string())
+        // The record last: while it stands the object stays unfinished, so a
+        // delete that stops half way can be repeated.
+        .filter(|location| location != &key)
+        .collect();
+    let gone = bucket.delete_many(&keys).await;
+    ensure!(
+        gone.len() == keys.len(),
+        "could not delete every object of {target}"
+    );
+    let record = bucket.delete_many(std::slice::from_ref(&key)).await;
+    ensure!(record.len() == 1, "could not delete the record of {target}");
+    Ok(keys.len() + 1)
 }
 
 /// Read back an object that [`publish_new`] wrote and nothing activated:
@@ -750,13 +902,17 @@ pub(crate) fn import_image(
                 file.display()
             )
         })?;
-        ensure!(
-            found == engine,
-            "{} ({what}) is a {} database, but {what} must be a {} database",
-            file.display(),
-            engine_name(found),
-            engine_name(engine)
-        );
+        if found != engine {
+            return Err(coded(
+                codes::ENGINE_MISMATCH,
+                format!(
+                    "{} ({what}) is a {} database, but {what} must be a {} database",
+                    file.display(),
+                    engine_name(found),
+                    engine_name(engine)
+                ),
+            ));
+        }
         match engine {
             Engine::Dolt => dolt_committed(&head),
             Engine::Sqlite => sqlite_image_from_file(file, &scratch_dir.join("import-read.db")),
@@ -821,7 +977,12 @@ pub(crate) async fn deployed_class_engine(
     let pointer = bucket
         .get(&format!("deploy/{script}/current.json"))
         .await?
-        .ok_or_else(|| anyhow!("script {script:?} has no deployment in this bucket"))?;
+        .ok_or_else(|| {
+            coded(
+                codes::NOT_FOUND,
+                format!("script {script:?} has no deployment in this bucket"),
+            )
+        })?;
     let pointer: serde_json::Value =
         serde_json::from_slice(&pointer.0).context("decode the deploy pointer")?;
     let prefix = pointer
@@ -845,7 +1006,13 @@ pub(crate) async fn deployed_class_engine(
     } else if listed("sqlite_classes") {
         Ok(Engine::Sqlite)
     } else {
-        bail!("class {class:?} is not a SQLite-backed Durable Object class of {script:?}'s deployment")
+        Err(coded(
+            codes::ENGINE_MISMATCH,
+            format!(
+                "class {class:?} is not a SQLite-backed Durable Object class of {script:?}'s \
+                 deployment"
+            ),
+        ))
     }
 }
 
@@ -1194,10 +1361,23 @@ mod tests {
             .await
             .unwrap_err();
         assert!(format!("{error:#}").contains("already exists"), "{error:#}");
+        assert_eq!(error_code(&error), Some(codes::EXISTS));
         let error = publish_new(&bucket, "C:abc", &image, Existing::ReplaceUnfinished, None)
             .await
             .unwrap_err();
         assert!(format!("{error:#}").contains("already exists"), "{error:#}");
+        assert_eq!(error_code(&error), Some(codes::EXISTS));
+        // The code survives the context a caller adds, and crosses into
+        // JavaScript as `CODE: message`.
+        let wrapped = error.context("fork C:abc");
+        assert_eq!(error_code(&wrapped), Some(codes::EXISTS));
+        assert!(describe(&wrapped).starts_with("ERR_OBJECT_EXISTS: fork C:abc"));
+        assert_eq!(describe(&anyhow!("plain")), "plain");
+        // Only an object whose publication finished is not a leftover.
+        let error = delete_unfinished(&bucket, "C:abc").await.unwrap_err();
+        assert_eq!(error_code(&error), Some(codes::NOT_UNFINISHED));
+        let error = delete_unfinished(&bucket, "C:nothing").await.unwrap_err();
+        assert_eq!(error_code(&error), Some(codes::NOT_FOUND));
         // An unfinished publication is never activated, and only an explicit
         // takeover replaces it.
         bucket
@@ -1217,6 +1397,23 @@ mod tests {
             .await
             .unwrap_err();
         assert!(format!("{error:#}").contains("unfinished"), "{error:#}");
+        assert_eq!(error_code(&error), Some(codes::UNFINISHED));
+        // A leftover can be deleted, and then the target is free again.
+        assert_eq!(delete_unfinished(&bucket, "C:def").await.unwrap(), 2);
+        assert!(bucket.list("cells/C:def").await.unwrap().is_empty());
+        publish_new(&bucket, "C:def", &image, Existing::Refuse, None)
+            .await
+            .unwrap();
+        discard(&bucket, "C:def").await.unwrap();
+        bucket
+            .put_cas(
+                "cells/C:def/own.json",
+                publishing_record("x").unwrap(),
+                None,
+            )
+            .await
+            .unwrap()
+            .unwrap();
         publish_new(
             &bucket,
             "C:def",

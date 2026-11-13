@@ -443,7 +443,7 @@ pub(crate) fn consumer_config(config: &crate::js::WorkerConfig) -> Result<serde_
         .collect();
     let ms = |duration: std::time::Duration| duration.as_millis().min(i64::MAX as u128) as i64;
     let admission = ms(crate::engine_api::admission_wait());
-    let handler = ms(crate::engine_api::handler_budget());
+    let handler = ms(crate::engine_api::configured_handler_budget());
     let settlement = i64::try_from(crate::actor::operation_deadline_ms()?).unwrap_or(i64::MAX);
     let lease = effective_queue_lease_duration(celld_logic::queue::lease_duration_ms(
         admission, handler, settlement,

@@ -930,6 +930,7 @@ async fn load_worker_at_pointer(
     let crons = manifest.crons.clone();
     let containers = manifest.containers.clone();
     let fence_image = manifest.fence_image.clone();
+    let codegen_classes = crate::deploy::declared_codegen_classes(&manifest.raw_metadata);
     Ok(LoadedDeployment {
         options: WorkerConfigOptions {
             src,
@@ -957,6 +958,7 @@ async fn load_worker_at_pointer(
         crons,
         containers,
         fence_image,
+        codegen_classes,
     })
 }
 
@@ -979,6 +981,9 @@ pub struct LoadedDeployment {
     pub containers: Vec<crate::container::ContainerSpec>,
     /// See `Manifest::fence_image`.
     pub fence_image: Option<String>,
+    /// Classes the deployment declared `celld.durable_objects.<Class>.codegen`
+    /// for. Everything else is confined.
+    pub codegen_classes: Vec<String>,
 }
 
 fn bindings<'a>(

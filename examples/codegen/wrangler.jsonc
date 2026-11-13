@@ -1,0 +1,17 @@
+{
+  "name": "codegen",
+  "main": "index.mjs",
+  "no_bundle": true,
+  "compatibility_date": "2026-01-01",
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "CONFINED", "class_name": "Confined" },
+      { "name": "TRUSTED", "class_name": "Trusted" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Confined", "Trusted"] }],
+  // Every isolate refuses eval, new Function and WebAssembly compilation from
+  // bytes, as workerd does. Only a class declared here may use them.
+  "celld": { "durable_objects": { "Trusted": { "codegen": true } } }
+}

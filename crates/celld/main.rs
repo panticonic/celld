@@ -441,6 +441,8 @@ struct RemoteRouteRetry {
     dispatcher: celld_logic::routing::Dispatcher,
     generation: Option<(String, u64)>,
     blocked: bool,
+    /// `u64::MAX` when the node runs without implicit deadlines: the retry
+    /// then ends on the caller's cancellation or a route that resolves.
     deadline_ms: u64,
     next_wait_ms: u64,
 }
@@ -449,12 +451,14 @@ impl RemoteRouteRetry {
     const INITIAL_WAIT_MS: u64 = 10;
     const MAX_WAIT_MS: u64 = 250;
 
-    fn new(operation_deadline_ms: u64) -> Self {
+    fn new(operation_deadline_ms: Option<u64>) -> Self {
         Self {
             dispatcher: celld_logic::routing::Dispatcher::default(),
             generation: None,
             blocked: false,
-            deadline_ms: celld::asyncrt::mono_ms().saturating_add(operation_deadline_ms),
+            deadline_ms: operation_deadline_ms.map_or(u64::MAX, |deadline| {
+                celld::asyncrt::mono_ms().saturating_add(deadline)
+            }),
             next_wait_ms: Self::INITIAL_WAIT_MS,
         }
     }
@@ -4058,6 +4062,14 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                     crons,
                     containers: Vec::new(),
                     fence_image: None,
+                    // The local-script equivalent of `celld.durable_objects`.
+                    codegen_classes: std::env::var("CELLD_TEST_CODEGEN_CLASSES")
+                        .unwrap_or_default()
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_string)
+                        .collect(),
                 }),
                 GenerationOptions {
                     node: node.clone(),
@@ -4224,7 +4236,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
             DEFAULT_MAX_OUTBOUND_WEBSOCKETS,
         )?,
         max_request_body_bytes,
-        operation_deadline_ms: celld::actor::operation_deadline_ms()?,
+        operation_deadline_ms: celld::actor::operation_deadline()?,
         follower: follower.clone(),
     };
 

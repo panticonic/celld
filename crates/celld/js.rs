@@ -1875,6 +1875,7 @@ struct LoaderEnv {
     routes: Vec<LoaderEnvRoute>,
 }
 
+#[derive(Clone)]
 pub struct WorkerConfig {
     src: String,
     /// The canonical module name for `src`. Dynamic Workers preserve the
@@ -1928,6 +1929,13 @@ pub struct WorkerConfig {
     resource_limits: Option<ResourceLimits>,
     /// Whether a Dynamic Worker can receive a tail report sender on a fetch.
     tail_reporting: bool,
+    /// Whether the isolates built from this configuration may generate code
+    /// from strings (`eval`, `new Function`) and compile WebAssembly from
+    /// bytes. Off unless the deployment declared it for the class these
+    /// isolates host, or a loader that held it granted it to a loaded worker.
+    /// It is part of the pool identity (`pool_key`): an isolate has one
+    /// answer, so enabled and confined code never share one.
+    codegen: bool,
     /// `triggers.crons` from the deployment. Empty for a loaded worker and for
     /// any script without cron triggers.
     pub crons: Vec<String>,
@@ -2068,11 +2076,29 @@ impl WorkerConfig {
             loader_env: None,
             resource_limits: None,
             tail_reporting: false,
+            codegen: false,
             crons: Vec::new(),
             containers: Vec::new(),
             generation: 0,
             main_imports,
             module_imports,
+        }
+    }
+
+    /// Grant or withhold code generation from strings. See `codegen`.
+    pub fn with_codegen(mut self, allowed: bool) -> Self {
+        self.codegen = allowed;
+        self
+    }
+
+    /// The key of the isolate pool these cells live in. Code generation is a
+    /// per-isolate property, so a codegen-enabled class gets a pool of its
+    /// own, apart from the confined classes of the same script.
+    pub fn pool_key(&self) -> String {
+        if self.codegen {
+            format!("{}\u{0}codegen", self.script_name)
+        } else {
+            self.script_name.clone()
         }
     }
 
@@ -5792,6 +5818,63 @@ fn settle_isolate_heap(isolate: &mut v8::Isolate) {
     isolate.low_memory_notification();
 }
 
+/// `WebAssembly.Module(bytes)`, `compile`, `instantiate(bytes)` and the
+/// streaming forms ask this. A module the bundle imports reaches the isolate
+/// already compiled, through the host, and is never asked.
+unsafe extern "C" fn wasm_codegen_allowed(
+    context: v8::Local<v8::Context>,
+    _source: v8::Local<v8::String>,
+) -> bool {
+    context.is_code_generation_from_strings_allowed()
+}
+
+/// Isolate slot: whether this isolate holds code generation from strings. A
+/// Worker Loader reads it to refuse granting a loaded worker more than the
+/// loader itself holds.
+struct CodegenGrant(bool);
+
+/// What a Worker Loader's `WorkerCode.celld` asks for. Keys are the shared
+/// declaration contract (docs/fork/design.md section 3a); the ones another
+/// capability owns are validated here and honored where that capability lands.
+fn loader_celld_codegen(
+    code: &serde_json::Value,
+    loader_holds_codegen: bool,
+) -> Result<bool, String> {
+    let Some(celld) = code.get("celld") else {
+        return Ok(false);
+    };
+    let Some(celld) = celld.as_object() else {
+        return Err("worker loader: WorkerCode field `celld` must be an object".to_string());
+    };
+    let mut codegen = false;
+    for (key, value) in celld {
+        match key.as_str() {
+            "codegen" => {
+                codegen = value.as_bool().ok_or_else(|| {
+                    "worker loader: `celld.codegen` must be a boolean".to_string()
+                })?;
+            }
+            "residency" | "egressIdentity" => {}
+            other => {
+                return Err(format!(
+                    "worker loader: WorkerCode `celld.{other}` is not supported"
+                ))
+            }
+        }
+    }
+    // A loader cannot grant more than it holds. Refusing, not quietly
+    // dropping the request, keeps a caller from believing its worker can eval.
+    if codegen && !loader_holds_codegen {
+        return Err(
+            "worker loader: `celld.codegen` was requested, but the loading Worker does not \
+             hold code generation; declare it for the loading class in the deployment config \
+             (`celld.durable_objects.<Class>.codegen`)"
+                .to_string(),
+        );
+    }
+    Ok(codegen)
+}
+
 impl Worker {
     /// Compile the worker module, wire the DO harness, and extract the entry
     /// `fetch`. `do_classes` come from the manifest; `bindings` maps a binding
@@ -5838,6 +5921,10 @@ impl Worker {
         isolate.set_slot(Arc::new(ModuleRegistry::default()));
         isolate.set_slot(loader_owner.clone());
         isolate.set_slot(crate::generation::GenerationTag(config.generation));
+        isolate.set_slot(CodegenGrant(config.codegen));
+        // V8 does not tie WebAssembly compilation from bytes to the context's
+        // string-codegen flag, so it is answered here, from that same flag.
+        isolate.set_allow_wasm_code_generation_callback(wasm_codegen_allowed);
         // Retains the config so `/bundle` can project it later. Nothing is
         // walked or copied here: a worker that never reads its own bundle pays
         // only this `Arc` clone.
@@ -5849,6 +5936,13 @@ impl Worker {
         let (context, fetch) = {
             v8::scope!(let hs, &mut isolate);
             let context = v8::Context::new(hs, Default::default());
+            // Codegen confinement, before any script runs in this context:
+            // with this off `eval`, `new Function` and the other string
+            // compilers throw `EvalError`, and so does compiling WebAssembly
+            // from bytes (V8 ties that check to this flag when no separate
+            // WebAssembly callback is installed). Workers behave the same.
+            // Only a class that declared `codegen` gets the V8 default.
+            context.set_allow_generation_from_strings(config.codegen);
             let cs = &mut v8::ContextScope::new(hs, context);
             let tc = std::pin::pin!(v8::TryCatch::new(cs));
             let scope = &mut tc.init();
@@ -5944,6 +6038,7 @@ impl Worker {
             inject_workflows(scope, script_name, &config.workflow_bindings)?;
             inject_containers(scope, &config.containers)?;
             inject_kv_limits(scope)?;
+            bootstrap::inject_deadline_policy(scope)?;
             inject_queue_config(scope, &config)?;
             populate_cf_exports(scope, ns, do_classes)?;
             register_entrypoints(scope, ns)?;
@@ -7444,6 +7539,11 @@ fn op_loader_load(
         None => None,
     };
     let tail_reporting = args.get(6).boolean_value(scope);
+    let loader_holds_codegen = scope.get_slot::<CodegenGrant>().is_some_and(|grant| grant.0);
+    let codegen = match loader_celld_codegen(&code, loader_holds_codegen) {
+        Ok(codegen) => codegen,
+        Err(error) => return loader_throw(scope, &error),
+    };
     let Some(main) = code.get("mainModule").and_then(|v| v.as_str()) else {
         return loader_throw(scope, "worker loader: missing mainModule");
     };
@@ -7685,6 +7785,7 @@ fn op_loader_load(
         .with_egress(egress)
         .with_resource_limits(limits)
         .with_tail_reporting(tail_reporting)
+        .with_codegen(codegen)
         .with_loader_env(loader_env),
     );
     handle.spawn(async move {
@@ -9196,9 +9297,13 @@ fn op_fetch(
         // of parking run_loop forever — the hang the Drop guard can't catch.
         let fetch_timeout = crate::env_vars::positive_or("CELLD_FETCH_TIMEOUT_S", 120)
             .expect("validated CELLD_FETCH_TIMEOUT_S");
-        let mut rb = client
-            .request(m, &url)
-            .timeout(std::time::Duration::from_secs(fetch_timeout));
+        let mut rb = client.request(m, &url);
+        // The timeout covers the whole exchange, body included, so it also
+        // ends a long streaming response. --no-implicit-deadlines leaves the
+        // exchange to the caller's AbortSignal and the connection itself.
+        if !crate::deadlines::implicit_deadlines_disabled() {
+            rb = rb.timeout(std::time::Duration::from_secs(fetch_timeout));
+        }
         // reqwest omits Content-Length for an empty Vec, which collapses the
         // wire representation of `Some([])` into the representation of
         // `None`. Install the zero length here unless the Worker supplied a
@@ -12680,3 +12785,45 @@ pub fn init_engine_for_tests() {
 
 #[cfg(celld_internal_tests)]
 include!(env!("CELLD_INTERNAL_JS_OBSERVERS"));
+
+#[cfg(test)]
+mod loader_codegen_grant_tests {
+    use super::loader_celld_codegen;
+    use serde_json::json;
+
+    #[test]
+    fn a_loader_that_holds_codegen_can_grant_it() {
+        let code = json!({ "celld": { "codegen": true } });
+        assert_eq!(loader_celld_codegen(&code, true), Ok(true));
+    }
+
+    #[test]
+    fn a_loader_cannot_grant_more_than_it_holds() {
+        let code = json!({ "celld": { "codegen": true } });
+        let error = loader_celld_codegen(&code, false).unwrap_err();
+        assert!(error.contains("does not hold code generation"), "{error}");
+    }
+
+    #[test]
+    fn a_loaded_worker_is_confined_unless_it_asks() {
+        for code in [
+            json!({}),
+            json!({ "celld": {} }),
+            json!({ "celld": { "codegen": false } }),
+        ] {
+            assert_eq!(loader_celld_codegen(&code, true), Ok(false));
+            assert_eq!(loader_celld_codegen(&code, false), Ok(false));
+        }
+    }
+
+    #[test]
+    fn a_malformed_or_unknown_request_is_refused() {
+        for code in [
+            json!({ "celld": true }),
+            json!({ "celld": { "codegen": "yes" } }),
+            json!({ "celld": { "eval": true } }),
+        ] {
+            assert!(loader_celld_codegen(&code, true).is_err(), "{code}");
+        }
+    }
+}

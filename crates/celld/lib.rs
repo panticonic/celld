@@ -51,6 +51,7 @@ pub mod container;
 pub mod control_plane;
 pub mod d1_cli;
 pub mod dead_node_gc;
+pub mod deadlines;
 pub mod deploy;
 pub mod dev;
 pub mod docker;

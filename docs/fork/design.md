@@ -200,8 +200,8 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
    operator-released cell. No storage is shared yet (§3.2's prefix
    reference remains future work).
 6. **Wake triggers are TEMP on Dolt cells.** Dolt versions persistent
-   triggers (\`dolt_schemas\`), so reset/merge/checkout could drop the
-   \`_cf_WAKE\` triggers and user commits would carry them; Dolt cells create
+   triggers (`dolt_schemas`), so reset/merge/checkout could drop the
+   `_cf_WAKE` triggers and user commits would carry them; Dolt cells create
    them per connection and re-ensure them after every mutating operation.
 
 ## 4. Determinism: fixes over the earlier plans

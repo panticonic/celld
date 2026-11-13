@@ -1,0 +1,11 @@
+{
+  "name": "facet-abort",
+  "main": "index.mjs",
+  "no_bundle": true,
+  "compatibility_date": "2026-01-01",
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "durable_objects": {
+    "bindings": [{ "name": "ROOT", "class_name": "Root" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Root"] }]
+}

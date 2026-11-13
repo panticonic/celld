@@ -719,6 +719,10 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       here has a deadline of its own: a block that never ends holds only its
       object (30 s limit by default), and does not delay the node stopping.
       Detail in `docs/fork/upstream-findings.md` (E6).
+    - **Facet abort (E7).** `ctx.facets.abort` rejects the calls pending on the
+      facet with the abort reason, ends the facet's fetches in flight, and a root
+      handler settled by another event's turn answers although an operation of
+      its own never ends. Detail in `docs/fork/upstream-findings.md` (E7).
 
 ## 4. Determinism: fixes over the earlier plans
 

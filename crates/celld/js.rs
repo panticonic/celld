@@ -3836,6 +3836,12 @@ impl InFlight {
         self.retired() && !self.has_refed_ops()
     }
 
+    /// Whether the handler settled in another event's turn since the driver
+    /// last looked. See `watch_settlement`.
+    pub(crate) fn take_settled_hint(&self) -> bool {
+        self.context.take_settled_hint()
+    }
+
     /// Whether an operation can keep this event alive.
     pub(crate) fn has_refed_ops(&self) -> bool {
         self.ops != self.unrefed_ops
@@ -5402,6 +5408,7 @@ fn start_cell_event<'s>(
     match started {
         Ok(promise) => {
             tc.perform_microtask_checkpoint();
+            watch_settlement(tc, promise, &context);
             if capture_frames {
                 ws_capture_set_promise(&context, v8::Global::new(tc, promise));
             }
@@ -5938,12 +5945,57 @@ fn cancel(tc: &mut v8::PinScope, entry: &mut InFlight, shutdown: bool) {
 
 /// Answer a request whose handler promise has settled, and retire its
 /// `waitUntil` work once that settles too.
+/// Tell the event's driver when its handler promise settles.
+///
+/// A driver that waits on an operation only wakes for that operation, and the
+/// handler can settle without it: another event's turn ran the continuation.
+/// The reaction runs in the turn that settles the promise, finds the event by
+/// the token it carries, and wakes the driver, which then looks in
+/// (`Wake::Poll`). The reaction adds no result of its own and cannot observe
+/// the value.
+fn watch_settlement(
+    tc: &mut v8::PinScope,
+    promise: v8::Local<v8::Promise>,
+    context: &IoContext,
+) {
+    fn settled(
+        scope: &mut v8::PinScope,
+        args: v8::FunctionCallbackArguments,
+        _rv: v8::ReturnValue<v8::Value>,
+    ) {
+        let Ok(id) = v8::Local::<v8::BigInt>::try_from(args.data()) else {
+            return;
+        };
+        let (id, lossless) = id.u64_value();
+        if !lossless {
+            return;
+        }
+        if let Some(context) = actor_runtime_state(scope).io_context(id) {
+            context.note_settled();
+        }
+    }
+    let Some((id, _)) = context.continuation.as_ref() else {
+        return;
+    };
+    if !matches!(promise.state(), v8::PromiseState::Pending) {
+        return;
+    }
+    let token = v8::BigInt::new_from_u64(tc, *id);
+    let Some(reaction) = v8::Function::builder(settled).data(token.into()).build(tc) else {
+        return;
+    };
+    // The derived promise is never observed; neither reaction throws, so it
+    // cannot reject.
+    let _ = promise.then2(tc, reaction, reaction);
+}
+
 fn settle(tc: &mut v8::PinScope, entry: &mut InFlight) {
     if entry.reply.is_some() {
         let promise = v8::Local::new(tc, &entry.promise);
         match promise.state() {
             v8::PromiseState::Pending => {}
             v8::PromiseState::Fulfilled => {
+                entry.context.take_settled_hint();
                 let guard = CurrentGuard::enter(entry.context.clone());
                 let value = promise.result(tc);
                 entry.answer_settled(tc, value);
@@ -5953,6 +6005,7 @@ fn settle(tc: &mut v8::PinScope, entry: &mut InFlight) {
                 drop(guard);
             }
             v8::PromiseState::Rejected => {
+                entry.context.take_settled_hint();
                 let guard = CurrentGuard::enter(entry.context.clone());
                 let reason = reject_reason(tc, promise);
                 // The handler is what failed, so an alarm's failure here
@@ -8957,6 +9010,60 @@ fn op_facet_rpc(
     rv.set(promise_for(scope, async_id));
 }
 
+/// The fetches in flight to each facet, by the facet's scope, so that aborting
+/// the facet can end them. A call into a facet is a request of the facet's own
+/// cell; without this the facet's handler runs on, and the caller's operation
+/// never ends.
+static FACET_FETCHES: OnceLock<Mutex<HashMap<String, HashSet<RequestId>>>> = OnceLock::new();
+
+fn facet_fetches() -> &'static Mutex<HashMap<String, HashSet<RequestId>>> {
+    FACET_FETCHES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// A fetch into a facet, listed for as long as the guard lives.
+struct FacetFetch {
+    scope: String,
+    request_id: RequestId,
+}
+
+impl FacetFetch {
+    fn start(scope: &str) -> Self {
+        let request_id = next_request_id();
+        facet_fetches()
+            .lock()
+            .unwrap()
+            .entry(scope.to_string())
+            .or_default()
+            .insert(request_id);
+        Self {
+            scope: scope.to_string(),
+            request_id,
+        }
+    }
+}
+
+impl Drop for FacetFetch {
+    fn drop(&mut self) {
+        let mut fetches = facet_fetches().lock().unwrap();
+        if let Some(requests) = fetches.get_mut(&self.scope) {
+            requests.remove(&self.request_id);
+            if requests.is_empty() {
+                fetches.remove(&self.scope);
+            }
+        }
+    }
+}
+
+/// End every fetch in flight to the facet at `scope`, as an abort of the facet
+/// does. Each one is cancelled as a client's disconnect cancels a request: its
+/// handler is told, and the caller's call ends with an error.
+fn abort_facet_fetches(scope: &str) {
+    let requests = facet_fetches().lock().unwrap().remove(scope);
+    for request_id in requests.into_iter().flatten() {
+        abort_request(request_id);
+    }
+}
+
 fn op_facet_fetch(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -9037,8 +9144,9 @@ fn op_facet_fetch(
         )
         .await?;
         let (reply, receive) = tokio::sync::oneshot::channel();
+        let fetch = FacetFetch::start(&facet.scope);
         let job = CellJob::Fetch {
-            request_id: None,
+            request_id: Some(fetch.request_id),
             scope: facet.scope.clone(),
             name: None,
             url,
@@ -9055,6 +9163,7 @@ fn op_facet_fetch(
             trace,
         ));
         let replied = receive.await;
+        drop(fetch);
         if let Ok(Err(_)) = &replied {
             facet.gate_reply().await?;
         }
@@ -9112,6 +9221,12 @@ fn op_facet_abort(
             Some((root, epoch, path)) => take_recorded_facets_below(root, *epoch, path),
             None => Vec::new(),
         };
+        // The calls in flight end first: workerd rejects them with the abort,
+        // and a handler that never settles must not keep its caller waiting.
+        abort_facet_fetches(&facet_scope);
+        for RecordedFacet { scope, .. } in &below {
+            abort_facet_fetches(scope);
+        }
         for RecordedFacet { slot, scope, .. } in below {
             if let Err(error) = slot.turn(|worker| worker.own_cell(&scope, None)).await {
                 tracing::warn!(facet = %scope, %error, "a facet did not close with its parent");
@@ -9134,6 +9249,7 @@ fn op_facet_abort(
         // Close the sockets whether or not the close turn succeeded: no
         // later event can reach a facet that its parent aborted.
         for scope in &closed {
+            abort_facet_fetches(scope);
             ws_close_facet(scope, ABORTED);
         }
         if let (true, Some((root, epoch, _))) = (recorded, &root) {
@@ -11729,6 +11845,9 @@ pub struct IoContext {
     /// Wakes this event's driver when `handed` grows or a pending entrypoint
     /// starts. Both changes can make the driver's current wait obsolete.
     handed_wake: tokio::sync::Notify,
+    /// Set when this event's handler promise settled, in whichever turn that
+    /// happened. See `watch_settlement`.
+    settled_hint: AtomicBool,
     /// IDs of nested `WorkerEntrypoint` calls that have not settled. The
     /// driver consumes these IDs only when the request has no native work, so
     /// it can reject the calls instead of timing out the enclosing event.
@@ -11916,6 +12035,7 @@ impl IoContext {
             handed: Mutex::new(Some(Vec::new())),
             handed_len: AtomicUsize::new(0),
             handed_wake: tokio::sync::Notify::new(),
+            settled_hint: AtomicBool::new(false),
             pending_events: Mutex::new(HashSet::new()),
             subrequest_limit: limits.and_then(|limits| limits.sub_requests),
             subrequests: AtomicUsize::new(0),
@@ -11949,6 +12069,7 @@ impl IoContext {
             handed: Mutex::new(Some(Vec::new())),
             handed_len: AtomicUsize::new(0),
             handed_wake: tokio::sync::Notify::new(),
+            settled_hint: AtomicBool::new(false),
             pending_events: Mutex::new(HashSet::new()),
             subrequest_limit: runtime_state
                 .resource_limits
@@ -12003,6 +12124,24 @@ impl IoContext {
     /// wakes the driver through `handed_ready` instead.
     fn has_handed_ops(&self) -> bool {
         self.handed_len.load(Ordering::Acquire) != 0
+    }
+
+    /// Record that this event's handler promise settled, and wake its driver.
+    ///
+    /// The handler can settle in another event's turn: a promise it awaits is
+    /// resolved or rejected there, and V8 runs the continuation in that
+    /// checkpoint. This event's driver is then parked on an operation of its
+    /// own, which may never finish (a call into a facet that was aborted, a
+    /// request nobody answers), and nothing else would tell it to look.
+    fn note_settled(&self) {
+        self.settled_hint.store(true, Ordering::Release);
+        self.handed_wake.notify_one();
+    }
+
+    /// Whether the handler settled since the driver last looked, clearing the
+    /// answer.
+    pub(crate) fn take_settled_hint(&self) -> bool {
+        self.settled_hint.swap(false, Ordering::AcqRel)
     }
 
     fn accepts_handed_ops(&self) -> bool {

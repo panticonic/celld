@@ -2422,6 +2422,11 @@ async fn wake(ops: &mut Ops, entry: &mut js::InFlight, budget: Duration) -> Wake
         // this driver here rather than through `adopt`, because the turn that
         // took it belongs to another entry. See `js::adopt`.
         adopt(ops, entry.take_handed_ops());
+        // The handler settled in another event's turn, with an operation of
+        // this event still pending: look in and answer.
+        if entry.take_settled_hint() {
+            return Wake::Poll;
+        }
         // A WorkerEntrypoint call is its own PendingEvent. When no referenced
         // native operation can move it, reject that call inside JavaScript.
         // An unreferenced signal listener cannot make progress and must not

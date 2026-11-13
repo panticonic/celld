@@ -82,6 +82,7 @@ seeds.
 | E3 | A graceful shutdown with an open WebSocket waits out the full 25 s drain, then the client sees close code 1006 instead of 1001. | **Yes**, for the preserved restart that `celld dev` and `POST /shutdown?handoff=preserve` use. See below. | |
 | E5 | An alarm set far in the future (year 2100) panics the node: "invalid deadline", `actor/effects.rs:252`. Found while testing object fork. | **Yes.** See below. | |
 | E4 | static-assets: `/index.html` redirects with 307 rather than a permanent redirect. A 404 is served as `Not found` with `content-type: application/json`. | No. | |
+| E7 | A request in flight to a facet is not ended when the facet is aborted (`ctx.facets.abort`, or the parent's release): the facet's handler keeps running, the caller's call never settles, and the caller's own response is never sent even when it caught or raced the call. A handler that another event's turn settles is not noticed either while one of its own operations is pending: the driver waits on that operation alone, and for an operation that never ends the event's response is never sent. workerd rejects the pending call with the abort reason. Found by Vibestudio (retiring an object with a request in flight). Both are in upstream code (`op_facet_fetch`, the drive loop's `wake`). | **Yes.** See below. | |
 | E6 | A promise continuation that runs after the event that created it ended cannot use its Durable Object. `blockConcurrencyWhile` (and so `transaction()`) rejects with "the cell event ended before it could acquire an input gate"; `fetch`, a stub call or an RPC call starts, and its promise never settles. workerd allows all of it while the object is alive. Found by Vibestudio's agent runtime, which starts blocks from background continuations. Upstream refuses it on purpose (`RETIRED_INPUT_GATE`, `op_gate_acquire`) and drops the op of an owner that is gone. | **Yes.** See below. | |
 
 **E6 detail.** A continuation keeps the token of the event that created it. When
@@ -109,6 +110,20 @@ A block that never ends holds its object (`--no-implicit-deadlines`; by default
 it is reset after 30 s) and nothing else: a request queued behind it is released
 when the node stops, and the node stops and starts again.
 Scenario `continuations`, example `examples/continuations`.
+
+**E7 detail.** Three parts. (1) The facet stub rejects every call still pending
+on an aborted run with the abort reason (`ctx.facets.abort(name, reason)`, and
+the parent's release): `record.abortion` is raced against each call, whatever
+the host does with the request behind it. (2) A fetch into a facet is a request
+of the facet's own cell, now listed with an id (`FACET_FETCHES`), and an abort
+cancels each one as a client's disconnect cancels a request, so the facet's
+handler is told and the caller's host operation ends with an error instead of
+waiting forever (a facet RPC is not cancelled this way: the call rejects in
+JavaScript, and the facet's event is left to its isolate). (3) The reply of a
+root handler that settles in another event's turn: each cell event watches its
+handler promise (`watch_settlement`), and a settlement wakes the driver, which
+looks in (`Wake::Poll`) instead of waiting out an operation that may never end.
+Scenario `facet-abort`, example `examples/facet-abort`.
 
 **E5 detail.** The actor arms every timer in a `tokio_util` `DelayQueue`, whose
 timer wheel spans about two years, and `insert` and `reset` panic on a delay

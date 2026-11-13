@@ -42,6 +42,9 @@ supports, one service or API at a time:
   against `celld dev`
 - `egress/` — outbound traffic through a node egress proxy, with a test that
   checks the identity each request carries (`node test.mjs`)
+- `facet-abort/` — a request in flight to a facet ends when the facet is aborted,
+  and a root handler another request settles answers; driven by
+  `tests/e2e/scenarios/compat-facet-abort.mjs`
 - `facets/` — a Durable Object facet over a class the Worker Loader starts
 - `codegen/` — `eval`, `new Function` and WebAssembly compilation are refused
   everywhere except a Durable Object class that declares `codegen`; no build

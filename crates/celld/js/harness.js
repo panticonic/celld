@@ -2736,10 +2736,17 @@ class DurableObjectFacets {
     record = {
       aborted: false,
       error: undefined,
+      // Rejects with the abort reason, to end every call still pending on this
+      // run of the facet (workerd rejects them), whatever the host does with
+      // the request it was serving.
+      abortion: null,
+      reject: null,
       owner: this._owner + ":" + this._next++,
       started: null,
       stub: null,
     };
+    record.abortion = new Promise((_, reject) => { record.reject = reject; });
+    record.abortion.catch(() => {});
     const barrier = this._barriers.get(name);
     const start = () => record.started ??= Promise.resolve(barrier)
       .then(getStartupOptions)
@@ -2782,7 +2789,10 @@ class DurableObjectFacets {
       });
     const invoke = async (operation) => {
       if (record.aborted) throw record.error;
-      return operation(await start());
+      return Promise.race([
+        (async () => operation(await start()))(),
+        record.abortion,
+      ]);
     };
     const target = {};
     // Methods share the loaded-worker RPC transport. A facet stub is not
@@ -2842,6 +2852,7 @@ class DurableObjectFacets {
     if (record === undefined) return Promise.resolve();
     record.aborted = true;
     record.error = reason;
+    record.reject(reason);
     this._running.delete(name);
     const barrier = record.started === null ? Promise.resolve() : record.started
       .then(([loader, className]) =>
@@ -2908,6 +2919,7 @@ class DurableObjectFacets {
     for (const record of this._running.values()) {
       record.aborted = true;
       record.error = reason;
+      record.reject(reason);
     }
     this._running.clear();
     this._barriers.clear();

@@ -3465,6 +3465,7 @@ fn shutdown_accept_failure_test_action() -> Action {
         advertise: None,
         unsafe_public_advertise: false,
         trust_forwarded_headers: false,
+        egress: Default::default(),
         dev_store: None,
         p2p: Default::default(),
     })
@@ -3712,6 +3713,15 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
         }
         Action::Run(settings) => settings,
     };
+    // Before any isolate exists, so the first outbound request already takes
+    // the configured route. A bad URL or secret stops startup here.
+    if settings.egress.install()? {
+        tracing::info!(
+            event = "egress_proxy",
+            proxy = settings.egress.proxy.as_deref().unwrap_or_default(),
+            "all outbound traffic is routed through the egress proxy"
+        );
+    }
     // Operators need the applied worker count to verify CELLD_TOKIO_THREADS;
     // a count of process threads also includes unrelated, lazily started
     // thread pools, so it cannot stand in for this value.

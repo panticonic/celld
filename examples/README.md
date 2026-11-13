@@ -26,6 +26,8 @@ supports, one service or API at a time:
 - `residency/` — an in-memory counter kept resident by `ctx.residency.hold()`
   past idle eviction, and evicted after `release()`; `run.sh` scripts it
   against `celld dev`
+- `egress/` — outbound traffic through a node egress proxy, with a test that
+  checks the identity each request carries (`node test.mjs`)
 - `facets/` — a Durable Object facet over a class the Worker Loader starts
 - `codegen/` — `eval`, `new Function` and WebAssembly compilation are refused
   everywhere except a Durable Object class that declares `codegen`; no build

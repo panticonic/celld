@@ -19,6 +19,9 @@ pub(crate) struct Settings {
     /// Whether forwarded scheme and host headers can set `request.url`.
     /// This option is off unless a trusted proxy replaces both headers.
     pub(crate) trust_forwarded_headers: bool,
+    /// The node-level egress proxy and its HMAC secret. When set, every
+    /// outbound request of every isolate goes through the proxy.
+    pub(crate) egress: celld::egress::NodeSettings,
     /// Set only by the `celld dev` supervisor for its child node. No fleet
     /// flag or public environment variable selects the local backend.
     pub(crate) dev_store: Option<std::path::PathBuf>,
@@ -154,6 +157,7 @@ pub(crate) fn action_from_process() -> anyhow::Result<Action> {
         advertise: configured_advertise,
         unsafe_public_advertise: celld::env_vars::flag("CELLD_UNSAFE_PUBLIC_ADVERTISE", false)?,
         trust_forwarded_headers: celld::env_vars::flag("CELLD_TRUST_FORWARDED_HEADERS", false)?,
+        egress: celld::egress::NodeSettings::from_environment(),
         dev_store: if diagnose {
             None
         } else {
@@ -231,6 +235,27 @@ pub(crate) fn action_from_process() -> anyhow::Result<Action> {
             "--unsafe-public-advertise" => settings.unsafe_public_advertise = true,
             "--trust-forwarded-headers" => settings.trust_forwarded_headers = true,
             "--no-implicit-deadlines" => celld::deadlines::disable_implicit_deadlines(),
+            "--egress-proxy" => {
+                settings.egress.proxy = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--egress-proxy requires a URL"))?,
+                );
+            }
+            "--egress-secret" => {
+                settings.egress.secret = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--egress-secret requires a value"))?,
+                );
+                settings.egress.secret_file = None;
+            }
+            "--egress-secret-file" => {
+                settings.egress.secret_file = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--egress-secret-file requires a path"))?
+                        .into(),
+                );
+                settings.egress.secret = None;
+            }
             "--peer" if diagnose => {
                 let peer = args
                     .next()
@@ -357,6 +382,15 @@ OPTIONS:
                          result, an explicit cancellation, an eviction or
                          shutdown. Deadlines an application sets (timeouts,
                          step timeouts, queue visibility) are unchanged
+  --egress-proxy URL     Send every outbound request of every isolate (fetch,
+                         outbound WebSocket, connect()) to this http:// or
+                         https:// proxy, which admits it by the caller identity
+                         celld attaches and authenticates with HMAC. Needs an
+                         egress secret. Without it, isolates dial directly
+  --egress-secret-file PATH
+                         File holding the egress HMAC secret (16+ bytes)
+  --egress-secret VALUE  The secret itself; prefer the file or the environment,
+                         since arguments are visible to other local users
   -h, --help             Show this help
   -V, --version          Show the celld version
 
@@ -379,6 +413,9 @@ ENVIRONMENT:
   CELLD_P2P_KEY_FILE, CELLD_P2P_RELAY, CELLD_P2P_DISCOVERY, CELLD_P2P_BIND
                                   Same as the --p2p-* options
   CELLD_P2P_MAX_STREAMS           Open p2p streams per node (default: 4096)
+  CELLD_EGRESS_PROXY              Egress proxy URL; same as --egress-proxy
+  CELLD_EGRESS_SECRET             Egress HMAC secret; same as --egress-secret
+  CELLD_EGRESS_SECRET_FILE        Egress HMAC secret file; same as --egress-secret-file
   CELLD_NODE                      Node-session ID (default: generated)
   CELLD_WATCH                     Local SQLite/replication working directory
   CELLD_ESBUILD                   Override esbuild executable path

@@ -133,24 +133,16 @@ pub(super) fn op_tcp_connect(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    match &actor_runtime_state(scope).egress {
-        EgressPolicy::Allow => {}
-        EgressPolicy::Deny => {
-            return loader_throw(
-                scope,
-                "This worker is not permitted to access the internet via global functions.",
-            );
-        }
-        // A Fetcher is still an authority boundary for sockets. celld's
-        // service protocol has no bidirectional CONNECT tunnel, so refusing is
-        // required: a direct TcpStream here would silently bypass the broker.
-        EgressPolicy::Broker(_) => {
-            return loader_throw(
-                scope,
-                "A globalOutbound Fetcher cannot broker connect() in celld.",
-            );
-        }
-    }
+    let route = match egress_route(scope, Traffic::Connect) {
+        Ok(route) => route,
+        Err(message) => return loader_throw(scope, message),
+    };
+    let proxy = match route {
+        EgressRoute::Direct => None,
+        EgressRoute::Proxy(route) => Some(route),
+        // `egress_route` never offers a socket a Fetcher.
+        EgressRoute::Broker(_) => unreachable!("connect() is never brokered"),
+    };
     let raw = args.get(0).to_rust_string_lossy(scope);
     let request: ConnectArgs = match serde_json::from_str(&raw) {
         Ok(request) => request,
@@ -163,17 +155,30 @@ pub(super) fn op_tcp_connect(
     let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::Tcp);
     let async_id = asyncrt::enqueue(async move {
         await_egress_gate(gate).await?;
-        let stream = tokio::net::TcpStream::connect((request.hostname.as_str(), request.port))
-            .await
-            .map_err(|error| {
-                format!(
-                    "connection to {}:{} failed: {error}",
-                    request.hostname, request.port
-                )
-            })?;
-        let remote = stream.peer_addr().map(|a| a.to_string()).ok();
-        let local = stream.local_addr().map(|a| a.to_string()).ok();
-        let mut stream: Duplex = Box::new(stream);
+        let (mut stream, remote, local): (Duplex, Option<String>, Option<String>) = match proxy {
+            // The hostname is resolved by the proxy, not here, so a name the
+            // proxy refuses is never looked up from this node.
+            Some(route) => {
+                let (tunnel, local) =
+                    crate::egress::connect_tunnel(&route, &request.hostname, request.port).await?;
+                let remote = Some(format!("{}:{}", request.hostname, request.port));
+                (Box::new(tunnel), remote, local)
+            }
+            None => {
+                let stream =
+                    tokio::net::TcpStream::connect((request.hostname.as_str(), request.port))
+                        .await
+                        .map_err(|error| {
+                            format!(
+                                "connection to {}:{} failed: {error}",
+                                request.hostname, request.port
+                            )
+                        })?;
+                let remote = stream.peer_addr().map(|a| a.to_string()).ok();
+                let local = stream.local_addr().map(|a| a.to_string()).ok();
+                (Box::new(stream), remote, local)
+            }
+        };
         if request.secure {
             let host = request.expected_host.unwrap_or(request.hostname);
             stream = handshake(stream, host).await?;

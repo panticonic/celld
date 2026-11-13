@@ -69,6 +69,11 @@ Worker Loader binding, so it cannot load another Worker. It reaches only the
 loader. celld passes host operations to its internal scripts as function
 parameters, never as globals, so `globalThis` exposes none.
 
+A node can send all outbound traffic through an
+[egress proxy](egress.md). The loader names the loaded Worker to that proxy
+with `celld: { egressIdentity: "..." }` in the `WorkerCode`; the loaded code
+cannot choose it.
+
 When `WorkerCode` omits `globalOutbound`, the loaded Worker inherits the egress
 policy of the loader. A `null` value makes `fetch()` and `connect()` throw. A
 Fetcher brokers each `fetch()` through the loader. A `connect()` or a WebSocket

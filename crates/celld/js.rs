@@ -1936,6 +1936,8 @@ pub struct WorkerConfig {
     loader_bindings: Vec<String>,
     /// Ambient outbound authority. Loaded workers may be denied.
     egress: EgressPolicy,
+    /// What names this Worker to the node's egress proxy. See [`egress`].
+    egress_base: EgressBase,
     /// Structured-clone values and host-minted service routes that a loaded
     /// worker receives. Loader-only; empty for a normal worker.
     loader_env: Option<LoaderEnv>,
@@ -2069,6 +2071,7 @@ impl WorkerConfig {
             .map(|(_name, source)| modules::scan_external_imports(source))
             .collect();
         let declares_queue_consumer = !queue_consumers.is_empty();
+        let egress_base = EgressBase::deployed(&script_name);
         let queue_consumers = queue_consumers
             .into_iter()
             .map(|config| QueueConsumerRegistration {
@@ -2098,6 +2101,7 @@ impl WorkerConfig {
             asset_binding: None,
             loader_bindings: Vec::new(),
             egress: EgressPolicy::Allow,
+            egress_base,
             loader_env: None,
             resource_limits: None,
             tail_reporting: false,
@@ -2216,6 +2220,19 @@ impl WorkerConfig {
     /// Set this Worker's ambient outbound authority (loaded workers only).
     fn with_egress(mut self, egress: EgressPolicy) -> Self {
         self.egress = egress;
+        self
+    }
+
+    /// Name the deployment this Worker belongs to in the identity it presents
+    /// to the node's egress proxy: the deployment's fleet-wide version string.
+    pub fn with_deployment(mut self, version: &str) -> Self {
+        self.egress_base.deployment = Arc::from(version);
+        self
+    }
+
+    /// The identity a loaded worker presents, derived from its loader's.
+    fn with_egress_base(mut self, base: EgressBase) -> Self {
+        self.egress_base = base;
         self
     }
 
@@ -2517,6 +2534,7 @@ struct ActorRuntimeState {
     /// an event's lifetime merely to flush its output.
     ws_capture_touched: Mutex<Vec<Weak<IoContext>>>,
     egress: EgressPolicy,
+    egress_base: EgressBase,
     resource_limits: Option<ResourceLimits>,
     tail_reporting: bool,
     /// `WorkerConfig::residency_grant`, for a loaded worker.
@@ -5949,6 +5967,7 @@ impl Worker {
         let runtime_state = Arc::new(ActorRuntimeState {
             promises: std::sync::Mutex::new(PromiseMap::new()),
             egress: config.egress.clone(),
+            egress_base: config.egress_base.clone(),
             resource_limits: config.resource_limits,
             tail_reporting: config.tail_reporting,
             residency_grant: config.residency_grant,
@@ -7622,6 +7641,15 @@ fn op_loader_load(
         Ok(codegen) => codegen,
         Err(error) => return loader_throw(scope, &error),
     };
+    // The identity this worker presents to the node's egress proxy is its
+    // loader's, extended by the loader's own `celld.egressIdentity`. It is read
+    // here, from the loader's WorkerCode, and nowhere the loaded code reaches.
+    let egress_base = match loader_egress_identity(&code) {
+        Ok(identity) => actor_runtime_state(scope)
+            .egress_base
+            .loaded_child(identity),
+        Err(error) => return loader_throw(scope, &error),
+    };
     let Some(main) = code.get("mainModule").and_then(|v| v.as_str()) else {
         return loader_throw(scope, "worker loader: missing mainModule");
     };
@@ -7861,6 +7889,7 @@ fn op_loader_load(
         .with_main_module_name(main.to_string())
         .with_generation(generation)
         .with_egress(egress)
+        .with_egress_base(egress_base)
         .with_resource_limits(limits)
         .with_residency_grant(celld.residency == Some(true))
         .with_tail_reporting(tail_reporting)
@@ -9176,17 +9205,13 @@ fn op_fetch(
     if let Err(error) = context.charge_subrequest() {
         return loader_throw(scope, &error);
     }
-    let egress = actor_runtime_state(scope).egress.clone();
-    // A loaded worker with globalOutbound: null has no ambient egress: it must
-    // reach the world through `env` capabilities. Message matches workerd.
-    if egress == EgressPolicy::Deny {
-        return loader_throw(
-            scope,
-            "This worker is not permitted to access the internet via global \
-             functions like fetch(). It must use capabilities (such as \
-             bindings in 'env') to talk to the outside world.",
-        );
-    }
+    // One decision for all outbound traffic. A loaded worker with
+    // globalOutbound: null has no ambient egress: it must reach the world
+    // through `env` capabilities. Message matches workerd.
+    let route = match egress_route(scope, Traffic::Fetch) {
+        Ok(route) => route,
+        Err(message) => return loader_throw(scope, message),
+    };
     let method = args.get(0).to_rust_string_lossy(scope);
     let url = args.get(1).to_rust_string_lossy(scope);
     // A body is a typed array, as it is for `__svc_call`, `__do_call` and
@@ -9240,66 +9265,78 @@ fn op_fetch(
         "follow" | "manual" | "error" => {}
         other => return loader_throw(scope, &format!("fetch: unknown redirect mode {other}")),
     }
-    if let EgressPolicy::Broker(broker) = egress {
-        let (request_id, cancel, cancel_guard) = if cancellable {
-            let request_id = next_do_request_id();
-            let (cancel_sender, cancel_receiver) = tokio::sync::oneshot::channel();
-            do_call_cancels()
-                .lock()
-                .unwrap()
-                .insert(request_id, cancel_sender);
-            (
-                Some(request_id),
-                Some(cancel_receiver),
-                Some(DoCallCancelGuard::new(request_id)),
-            )
-        } else {
-            (None, None, None)
-        };
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::Fetch);
-        let request = SvcCallReq {
-            cancel,
-            generation: broker.generation,
-            script: broker.script,
-            entrypoint: broker.entrypoint,
-            url,
-            method,
-            body: body.unwrap_or_else(|| RequestBody::Bytes(Vec::new().into())),
-            body_guard,
-            headers,
-            reply: tx,
-        };
-        let stream_service = http_stream_service();
-        let id = asyncrt::enqueue(async move {
-            let mut cancel_guard = cancel_guard;
-            gated_channel_send(gate, &SVC_CALL_TX, request, "no service binding channel").await?;
-            let result = match rx.await {
-                Ok(Ok(response)) => encode_http_response(response, true, &stream_service),
-                Ok(Err(error)) => Err(format!("{error}")),
-                Err(error) => Err(format!("globalOutbound Fetcher dropped: {error}")),
+    let proxy = match route {
+        EgressRoute::Direct => None,
+        EgressRoute::Proxy(route) => Some(route),
+        EgressRoute::Broker(broker) => {
+            let (request_id, cancel, cancel_guard) = if cancellable {
+                let request_id = next_do_request_id();
+                let (cancel_sender, cancel_receiver) = tokio::sync::oneshot::channel();
+                do_call_cancels()
+                    .lock()
+                    .unwrap()
+                    .insert(request_id, cancel_sender);
+                (
+                    Some(request_id),
+                    Some(cancel_receiver),
+                    Some(DoCallCancelGuard::new(request_id)),
+                )
+            } else {
+                (None, None, None)
             };
-            if let Some(cancel_guard) = cancel_guard.as_mut() {
-                cancel_guard.disarm();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::Fetch);
+            let request = SvcCallReq {
+                cancel,
+                generation: broker.generation,
+                script: broker.script,
+                entrypoint: broker.entrypoint,
+                url,
+                method,
+                body: body.unwrap_or_else(|| RequestBody::Bytes(Vec::new().into())),
+                body_guard,
+                headers,
+                reply: tx,
+            };
+            let stream_service = http_stream_service();
+            let id = asyncrt::enqueue(async move {
+                let mut cancel_guard = cancel_guard;
+                gated_channel_send(gate, &SVC_CALL_TX, request, "no service binding channel").await?;
+                let result = match rx.await {
+                    Ok(Ok(response)) => encode_http_response(response, true, &stream_service),
+                    Ok(Err(error)) => Err(format!("{error}")),
+                    Err(error) => Err(format!("globalOutbound Fetcher dropped: {error}")),
+                };
+                if let Some(cancel_guard) = cancel_guard.as_mut() {
+                    cancel_guard.disarm();
+                }
+                result
+            });
+            let promise = promise_for(scope, id);
+            if let Some(request_id) = request_id {
+                attach_cancel_id(scope, promise, request_id);
             }
-            result
-        });
-        let promise = promise_for(scope, id);
-        if let Some(request_id) = request_id {
-            attach_cancel_id(scope, promise, request_id);
+            rv.set(promise);
+            return;
         }
-        rv.set(promise);
-        return;
-    }
-    // Select the client only for direct egress: a broker must not initialize
-    // an unused network client and its TLS stack.
-    let client = match redirect.as_str() {
-        "follow" if context.subrequest_limit.is_some() => context.redirect_counting_client(),
-        "follow" => HTTP.with(|client| client.clone()),
-        "manual" => HTTP_MANUAL.with(|client| client.clone()),
-        "error" => HTTP_ERROR.with(|client| client.clone()),
-        _ => unreachable!("the redirect mode was validated above"),
     };
+    // Select the client only for direct egress: a broker must not initialize
+    // an unused network client and its TLS stack, and a proxied request never
+    // touches reqwest (see `egress::fetch`).
+    let client = if proxy.is_some() {
+        None
+    } else {
+        Some(match redirect.as_str() {
+            "follow" if context.subrequest_limit.is_some() => context.redirect_counting_client(),
+            "follow" => HTTP.with(|client| client.clone()),
+            "manual" => HTTP_MANUAL.with(|client| client.clone()),
+            "error" => HTTP_ERROR.with(|client| client.clone()),
+            _ => unreachable!("the redirect mode was validated above"),
+        })
+    };
+    // Followed redirects of a proxied request are subrequests of this
+    // invocation, charged like the direct client's redirect policy charges them.
+    let redirect_budget = Arc::downgrade(&context);
     // The creating context, read here while JS is still running: the op
     // future resolves on whatever worker polls it, far from any CPED.
     let trace = current_trace_context(scope);
@@ -9376,6 +9413,81 @@ fn op_fetch(
         // of parking run_loop forever — the hang the Drop guard can't catch.
         let fetch_timeout = crate::env_vars::positive_or("CELLD_FETCH_TIMEOUT_S", 120)
             .expect("validated CELLD_FETCH_TIMEOUT_S");
+        if let Some(route) = proxy {
+            // Through the node's egress proxy: every hop, redirects included,
+            // is a signed forward-proxy request, and the destination is never
+            // resolved or dialed from here.
+            let request_body = match body {
+                None => crate::egress::FetchBody::None,
+                Some(RequestBody::Bytes(bytes)) => crate::egress::FetchBody::Bytes(bytes),
+                Some(RequestBody::Stream(stream_id)) => match body_guard.take_stream(stream_id) {
+                    Ok(stream) => crate::egress::FetchBody::Stream(stream),
+                    Err(error) => {
+                        finish(false, None, Some(error.clone()));
+                        return Err(error);
+                    }
+                },
+            };
+            let mode = match redirect.as_str() {
+                "follow" => crate::egress::RedirectMode::Follow,
+                "manual" => crate::egress::RedirectMode::Manual,
+                _ => crate::egress::RedirectMode::Error,
+            };
+            let request = crate::egress::FetchRequest {
+                method: method.clone(),
+                url: url.clone(),
+                headers,
+                body: request_body,
+            };
+            let in_flight = crate::egress::fetch(
+                &route,
+                request,
+                mode,
+                (!crate::deadlines::implicit_deadlines_disabled())
+                    .then(|| std::time::Duration::from_secs(fetch_timeout)),
+                || match redirect_budget.upgrade() {
+                    Some(context) => context.charge_subrequest(),
+                    None => Ok(()),
+                },
+            );
+            let sent = match cancel {
+                Some(cancel) => crate::asyncrt::select_biased! {
+                    "a cancel that is ready wins a tie, so an aborted request never \
+                     hands back a response and never leaves a body stream nobody reads";
+                    _ = cancel => None,
+                    result = in_flight => Some(result),
+                },
+                None => Some(in_flight.await),
+            };
+            let Some(sent) = sent else {
+                let error = "fetch: the request was aborted".to_string();
+                finish(false, None, Some(error.clone()));
+                return Err(error);
+            };
+            return match sent {
+                Ok(response) => {
+                    let Some(stream_id) = stream_service
+                        .register_source(HttpStreamSource::Stream(response.body))
+                    else {
+                        let error = format!("fetch: {HTTP_STREAM_REGISTRATION_CLOSED}");
+                        finish(false, Some(response.status), Some(error.clone()));
+                        return Err(error);
+                    };
+                    finish(true, Some(response.status), None);
+                    Ok(serde_json::json!({
+                        "status": response.status,
+                        "streamId": stream_id,
+                        "headers": response.headers,
+                    })
+                    .to_string())
+                }
+                Err(error) => {
+                    finish(false, None, Some(error.clone()));
+                    Err(error)
+                }
+            };
+        }
+        let client = client.expect("direct egress selects a client");
         let mut rb = client.request(m, &url);
         // The timeout covers the whole exchange, body included, so it also
         // ends a long streaming response. --no-implicit-deadlines leaves the
@@ -10139,6 +10251,8 @@ fn webcrypto_return_bytes(
 
 mod container;
 mod crypto;
+mod egress;
+use egress::{egress_route, loader_egress_identity, EgressBase, EgressRoute, Traffic};
 mod html_rewriter;
 mod residency;
 mod p2p;

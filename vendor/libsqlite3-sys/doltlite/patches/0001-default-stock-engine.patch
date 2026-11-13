@@ -1,0 +1,28 @@
+--- a/sqlite3.c	2026-11-13 12:33:10.006515000 +0100
++++ b/sqlite3.c	2026-11-13 12:38:40.469930582 +0100
+@@ -504195,6 +504195,11 @@
+   ** under-read. */
+   if( !useOrig && (vfsFlags & SQLITE_OPEN_MAIN_DB)!=0 ){
+     const char *zEngine = sqlite3_uri_parameter(zFilename, "doltlite_engine");
++#ifdef DOLTLITE_DEFAULT_STOCK
++    /* celld: a new or empty file defaults to the stock engine. A caller
++    ** opts into the prolly store with doltlite_engine=prolly. */
++    if( zEngine==0 ) zEngine = "sqlite";
++#endif
+     useOriginSource = sqlite3_uri_boolean(zFilename, "lazy_origin", 0);
+     if( sqlite3_uri_boolean(zFilename, "immutable", 0)
+      && (vfsFlags & SQLITE_OPEN_MEMORY)==0
+@@ -504315,7 +504320,13 @@
+       return rc;
+     }
+     *ppBtree = p;  /* registerDoltiteFunctions reads db->aDb[0].pBt */
++#ifdef DOLTLITE_DEFAULT_STOCK
++    /* celld: a stock-engine connection exposes no dolt_* surface; only a
++    ** prolly connection registers the version-control functions. */
++    rc = SQLITE_OK;
++#else
+     rc = hasMainBtree ? SQLITE_OK : registerDoltiteFunctions(db);
++#endif
+     if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
+       *ppBtree = 0;
+       sqlite3BtreeClose(p);

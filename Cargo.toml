@@ -160,3 +160,10 @@ urlpattern = "=0.4.2"
 v8 = "152.1"
 # 1.0.10 drops the emSign ECC root, whose intermediate CA keys are public.
 webpki-roots = "1.0.10"
+
+# DoltLite spike: the only SQLite in the binary is the DoltLite amalgamation.
+# rusqlite 0.31's `bundled` build of libsqlite3-sys 0.28 compiles it instead of
+# stock SQLite; stock-format files go through DoltLite's orig_ b-tree/pager.
+# See vendor/libsqlite3-sys/doltlite.
+[patch.crates-io]
+libsqlite3-sys = { path = "vendor/libsqlite3-sys" }

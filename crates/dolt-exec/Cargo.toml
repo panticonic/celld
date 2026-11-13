@@ -1,0 +1,37 @@
+# Deterministic execution core for Dolt cells (docs/fork/design.md §3a, §4).
+#
+# This is its own small crate rather than a module of `celld` so that it, and
+# the conformance tests that prove determinism across threads, timezones and
+# fresh databases, build against only rusqlite and the patched DoltLite
+# amalgamation instead of the whole runtime. `celld` re-exports it as
+# `celld::dolt_exec` (crates/celld/dolt_exec.rs).
+[package]
+name = "celld-dolt-exec"
+version = "0.6.3"
+edition = "2021"
+rust-version = "1.94.1"
+license = "Apache-2.0"
+build = "build.rs"
+
+[lib]
+path = "lib.rs"
+
+[lints.clippy]
+disallowed_macros = "forbid"
+
+[dependencies]
+# A direct dependency on the vendored libsqlite3-sys (the DoltLite build) is
+# what lets build.rs read the DEP_SQLITE3_* build metadata it publishes.
+libsqlite3-sys = { version = "0.28", features = ["bundled"] }
+rusqlite = { workspace = true, features = ["bundled", "hooks"] }
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[build-dependencies]
+sha2.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+sqlite-vec.workspace = true
+tempfile.workspace = true

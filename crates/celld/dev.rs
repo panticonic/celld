@@ -99,6 +99,8 @@ struct StackOptions {
     logs: bool,
     watch: bool,
     watch_ignores: Vec<Pattern>,
+    /// `--inspector-addr` and its companion flags, forwarded to the node.
+    inspector: Vec<String>,
 }
 
 struct Store {
@@ -309,7 +311,8 @@ impl ShutdownSignals {
 pub fn print_help() -> anyhow::Result<()> {
     crate::cli_output::Output::new(crate::cli_output::Format::Text).help(
         &format!("celld dev — run an application with persistent local storage\n\n\
-USAGE:\n  celld dev [PROJECT] [--host IP] [--port PORT] [--logs] [--no-watch] [--clean]\n\n\
+USAGE:\n  celld dev [PROJECT] [--host IP] [--port PORT] [--logs] [--no-watch] [--clean]\n\
+            [--inspector-addr HOST:PORT]\n\n\
 PROJECT is a directory or a Wrangler config. It defaults to the current\n\
 directory. celld stores all local state in PROJECT/.celld/dev, and it keeps\n\
 that state across a restart. A configuration change does not migrate the\n\
@@ -321,7 +324,7 @@ an entry of these files that cannot be a binding is skipped with a warning.\n\
 The entries override the vars of the config.\n\n\
 The node it starts inherits CELLD_NO_IMPLICIT_DEADLINES=1, which arms none of\n\
 celld's own time-based watchdogs (see `celld --help`).\n\n\
-OPTIONS:\n  --host IP              Worker listener host (default: 127.0.0.1)\n  --port PORT            Worker listener port (default: {DEFAULT_PORT})\n  --clean                Delete PROJECT/.celld/dev before the server starts\n  --logs                 Show the node warning and information logs\n  --no-watch             Do not rebuild when a project file changes\n  --watch-ignore PATTERN Ignore a project-relative glob; repeat as needed\n  -h, --help             Show this help"
+OPTIONS:\n  --host IP              Worker listener host (default: 127.0.0.1)\n  --port PORT            Worker listener port (default: {DEFAULT_PORT})\n  --clean                Delete PROJECT/.celld/dev before the server starts\n  --logs                 Show the node warning and information logs\n  --no-watch             Do not rebuild when a project file changes\n  --inspector-addr ADDR  Serve the V8 inspector here (loopback; see docs/services/inspector.md)\n  --watch-ignore PATTERN Ignore a project-relative glob; repeat as needed\n  -h, --help             Show this help"
         ),
     )
 }
@@ -334,11 +337,22 @@ fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Optio
     let mut logs = false;
     let mut watch = true;
     let mut watch_ignores = Vec::new();
+    let mut inspector = Vec::new();
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--help" | "-h" => return Ok(None),
             "--clean" => clean = true,
+            "--inspector-addr" => {
+                let value = arguments
+                    .next()
+                    .context("--inspector-addr requires a value")?;
+                inspector.push("--inspector-addr".to_string());
+                inspector.push(value);
+            }
+            "--inspector-allow-non-loopback" => {
+                inspector.push("--inspector-allow-non-loopback".to_string());
+            }
             "--logs" => logs = true,
             "--no-watch" => watch = false,
             "--watch-ignore" => {
@@ -381,6 +395,7 @@ fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Optio
             logs,
             watch,
             watch_ignores,
+            inspector,
         },
     }))
 }
@@ -606,6 +621,7 @@ async fn run_stack(
         state,
         options.listener,
         options.logs,
+        &options.inspector,
         project_hash,
         store,
         console,
@@ -637,6 +653,7 @@ async fn run_stack(
                     state,
                     options.listener,
                     options.logs,
+                    &options.inspector,
                     project_hash,
                     store,
                     console,
@@ -664,6 +681,7 @@ async fn start_node(
     state: &Path,
     listener: SocketAddr,
     logs: bool,
+    inspector: &[String],
     project_hash: &str,
     store: &Store,
     console: &Console,
@@ -699,6 +717,7 @@ async fn start_node(
             "--internal-listen",
             "127.0.0.1:0",
         ])
+        .args(inspector)
         .env("CELLD_INTERNAL_DEV_STORE", &store.database)
         .env("CELLD_WATCH", state.join("runtime"))
         .env("CELLD_NODE", format!("dev-{}", &project_hash[..12]))

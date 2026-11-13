@@ -24,10 +24,14 @@ has not been run yet.
 | Iroh P2P binding | merged | `docs/services/p2p.md` |
 | Vibestore local bucket | merged | `docs/fork/vibestore.md` |
 | Fixes for the upstream defects the harness found | in progress | `docs/fork/upstream-findings.md` |
-| V8 inspector, Windows port | in progress | |
+| V8 inspector (CDP: discovery, evaluate, CPU profiles, heap snapshots, breakpoints) | merged | `docs/services/inspector.md` |
 | Chronolog `transport-iroh` | done (Chronolog branch `feature/transport-iroh`) | |
 | Chronolog node on the fork | in progress (Chronolog branch `feature/celld-host`) | |
-| Vibestudio compatibility audit | in progress (Vibestudio branch `audit/celld-compat`) | |
+| Windows port (compile and cross-link; CI workflow for a real Windows run) | merged | `docs/fork/windows.md` |
+| Vibestudio compatibility audit | done (Vibestudio branch `audit/celld-compat`, `docs/celld-compat-audit.md`) | fork bugs A1 and A2 fixed |
+| Dolt facets: Vibestudio's userland DOs are facets (audit V9) | in progress | |
+| Vibestudio runtime cutover | in progress (Vibestudio branch `feat/celld-runtime`) | |
+| Vibestudio Dolt redesign: GAD, agents, eval, durable base, Chronolog | in progress (Vibestudio branch `design/dolt-redesign`) | |
 
 ## 1. Goal
 

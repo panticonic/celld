@@ -1944,7 +1944,7 @@ pub struct WorkerConfig {
     /// `fetch` and provide only `queue`.
     declares_queue_consumer: bool,
     workflow_bindings: Vec<WorkflowBinding>,
-    vars: Vec<(String, String)>,
+    vars: Vec<(String, crate::engine_api::VarValue)>,
     node: String,
     /// The worker's non-main modules, so the main module can import siblings.
     modules: Vec<(String, ModuleSource)>,
@@ -2349,6 +2349,8 @@ pub struct WorkerIsolate {
     /// turns run on whatever tokio worker holds the isolate. See
     /// `storage::Cells`.
     cells: storage::Cells,
+    /// The V8 inspector, when the node runs one (`--inspector-addr`).
+    inspector: Option<inspector::IsolateInspector>,
 }
 
 /// An isolate's context and the entry `fetch` that lives in it.
@@ -3029,9 +3031,18 @@ impl Drop for WorkerIsolate {
         // normally; this removes only the registry's ownership reference.
         let loaded_children = take_loader_owner(&self.loader_owner);
         let limit = self.original_heap_limit;
+        let inspector = self.inspector.take();
         {
             let (mut locker, _cells) = self.lock();
             locker.remove_near_heap_limit_callback(near_heap_limit, limit);
+            // The inspector's sessions and C++ state belong to the isolate, so
+            // they go while it is locked and before it is disposed.
+            if let Some(inspector) = inspector {
+                v8::scope!(let hs, &mut *locker);
+                let context = v8::Local::new(hs, &self.realm.context);
+                inspector.context_destroyed(context);
+                drop(inspector);
+            }
         }
         drop(loaded_children);
     }
@@ -6031,9 +6042,23 @@ impl Worker {
             tree: OnceLock::new(),
         }));
         isolate.add_near_heap_limit_callback(near_heap_limit, heap_limit_state_ptr);
+        let inspector = crate::inspector::enabled().then(|| {
+            let kind = if config.origin == WorkerOrigin::Dynamic {
+                crate::inspector::TargetKind::Dynamic
+            } else {
+                crate::inspector::TargetKind::Pool
+            };
+            inspector::IsolateInspector::attach(
+                &mut isolate,
+                crate::inspector::Target::new(kind, script_name, do_classes),
+            )
+        });
         let (context, fetch) = {
             v8::scope!(let hs, &mut isolate);
             let context = v8::Context::new(hs, Default::default());
+            if let Some(inspector) = &inspector {
+                inspector.context_created(hs, context, script_name);
+            }
             // Codegen confinement, before any script runs in this context:
             // with this off `eval`, `new Function` and the other string
             // compilers throw `EvalError`, and so does compiling WebAssembly
@@ -6308,6 +6333,7 @@ impl Worker {
                 compat,
                 loader_owner,
                 cells: storage::Cells::default(),
+                inspector,
             }),
         })
     }
@@ -6330,6 +6356,7 @@ impl Worker {
         storage: Option<CellStorage<'_>>,
     ) -> Result<celld_logic::wake::AlarmSnapshot> {
         let compat = self.inner.as_ref().expect("live worker isolate").compat;
+        let adopting = storage.is_some();
         let (mut locker, _cells) = self.lock();
         v8::scope!(let hs, &mut *locker);
         let realm = self.realm(hs);
@@ -6337,6 +6364,7 @@ impl Worker {
         let cs = &mut v8::ContextScope::new(hs, context);
         let tc = std::pin::pin!(v8::TryCatch::new(cs));
         let alarm = adopt_cell(&mut tc.init(), cell, storage, compat)?;
+        self.inspector_cell(cell, adopting);
         // The source identity belongs to this installed SQLite turn. Reading
         // it from the pool after this guard drops reaches no cell connection.
         Ok(observe_alarm(cell, alarm))
@@ -12822,6 +12850,7 @@ fn op_text_decoder_free(
 
 #[doc(hidden)]
 pub mod bootstrap;
+mod inspector;
 pub mod modules;
 mod v8_strings;
 use bootstrap::{

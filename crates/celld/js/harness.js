@@ -1552,22 +1552,16 @@ class DoltStorage {
   // Resolves to { outcome: "accepted" } or
   // { outcome: "rejected", code, statementIndex }; an operational failure
   // (I/O, corruption) throws, because the program's fate is then unknown.
-  execute(program, context = {}) {
+  //
+  // options.log: { sql, bindings? }, a statement run after the program in
+  // the same transaction (as application SQL), so the program's effects and
+  // the log row commit together. It may name :outcome, :rejection_code and
+  // :failing_statement_index, which are bound from the outcome.
+  execute(program, context = {}, options = {}) {
     if (typeof program === "string") program = [{ sql: program }];
     if (!Array.isArray(program)) throw new TypeError("dolt.execute: program must be an array");
-    const steps = program.map((step, i) => {
-      if (typeof step === "string") step = { sql: step };
-      if (!step || typeof step.sql !== "string")
-        throw new TypeError(`dolt.execute: statement ${i} needs a sql string`);
-      const bindings = (step.bindings || []).map((binding) => {
-        const out = { value: __doltTagValue(binding.value) };
-        if (typeof binding.index === "number") out.index = binding.index;
-        else if (typeof binding.name === "string") out.name = binding.name;
-        else throw new TypeError(`dolt.execute: statement ${i} has a binding with no index or name`);
-        return out;
-      });
-      return { sql: step.sql, bindings };
-    });
+    const steps = program.map((step, i) => __doltStatement(step, `statement ${i}`));
+    const log = options.log == null ? null : __doltStatement(options.log, "the log statement");
     if (context.nowMs == null || context.seed == null)
       throw new TypeError("dolt.execute: context.nowMs and context.seed are required");
     let actor = null;
@@ -1581,9 +1575,63 @@ class DoltStorage {
         schemaAdmin: !!context.schemaAdmin,
         limits: context.limits || {},
       },
+      log,
     });
   }
+  // A local read (Spec 10 section 7): one read-only statement under the
+  // local-read authorizer and a step budget, on the checked-out branch.
+  // Values keep their storage class: INTEGER is a bigint, REAL a number,
+  // TEXT a string, BLOB a Uint8Array, NULL null. Bindings take the values
+  // execute() takes. options: { limits?, maxRows? (default 10000) }.
+  // A refused statement throws an Error whose `code` is the Chronolog
+  // local-read code (SQL_PROFILE_VIOLATION, SQL_PREPARE_FAILED, ...).
+  query(sql, bindings = [], options = {}) {
+    const step = __doltStatement({ sql, bindings }, "dolt.query");
+    const result = this._op("query", {
+      sql: step.sql,
+      bindings: step.bindings,
+      limits: options.limits || {},
+      maxRows: options.maxRows == null ? 10000 : Number(options.maxRows),
+    });
+    if (result.error) {
+      const error = new Error("dolt.query: " + result.error);
+      error.code = result.error;
+      throw error;
+    }
+    return {
+      columns: result.columns,
+      rows: result.rows.map((row) => row.map(__doltUntagValue)),
+    };
+  }
   engineDigest() { return this._op("engineDigest", {}); }
+}
+function __doltStatement(step, what) {
+  if (typeof step === "string") step = { sql: step };
+  if (!step || typeof step.sql !== "string")
+    throw new TypeError(`dolt: ${what} needs a sql string`);
+  const bindings = (step.bindings || []).map((binding) => {
+    const out = { value: __doltTagValue(binding.value) };
+    if (typeof binding.index === "number") out.index = binding.index;
+    else if (typeof binding.name === "string") out.name = binding.name;
+    else throw new TypeError(`dolt: ${what} has a binding with no index or name`);
+    return out;
+  });
+  return { sql: step.sql, bindings };
+}
+function __doltUntagValue({ t, v }) {
+  switch (t) {
+    case "null": return null;
+    case "int": return BigInt(v);
+    case "real": return typeof v === "number" ? v : Number(v);
+    case "text": return v;
+    case "blob": {
+      const binary = atob(v.replace(/-/g, "+").replace(/_/g, "/"));
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes;
+    }
+    default: throw new TypeError("dolt.query: unknown value type " + t);
+  }
 }
 function __doltBytes(value, what) {
   if (value instanceof Uint8Array) return value;

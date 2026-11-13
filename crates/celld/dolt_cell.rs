@@ -395,6 +395,7 @@ pub(crate) fn run(connection: &Connection, op: &str, args: &Value) -> anyhow::Re
             Ok(summary)
         }
         "execute" => execute(connection, args),
+        "query" => query(connection, args),
         "engineDigest" => Ok(Value::String(crate::dolt_exec::engine_digest_hex())),
         other => bail!("unknown dolt operation {other:?}"),
     }
@@ -932,77 +933,33 @@ mod tests {
 /// ```json
 /// { "program": [{ "sql": "...", "bindings": [{ "index": 1, "value": { "t": "int", "v": "9007199254740993" } }] }],
 ///   "context": { "nowMs": "1700000000000", "seed": "1", "actor": "<base64url>" | null,
-///                "schemaAdmin": false, "limits": { "maxVmSteps": 1000000, ... } } }
+///                "schemaAdmin": false, "limits": { "maxVmSteps": 1000000, ... } },
+///   "log": null | { "sql": "INSERT ...", "bindings": [...] } }
 /// ```
+///
+/// With `log`, the program runs through
+/// [`crate::dolt_exec::execute_in_transaction`] inside a transaction this
+/// function opens, and the log statement runs after it in the same
+/// transaction, so the program's effects and its log row commit together or
+/// not at all. The log statement runs as application SQL (the cell's
+/// authorizer, no pinned clock) and may name the parameters `:outcome`
+/// (`'accepted'`/`'rejected'`), `:rejection_code` and
+/// `:failing_statement_index`, which are bound from the outcome.
 ///
 /// The executor installs its own authorizer and progress handler for the
 /// program and clears them; `storage::dolt_op` reinstalls the cell's
 /// application authorizer afterwards.
 fn execute(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
     use crate::dolt_exec::{
-        execute as run_program, ExecContext, ExecError, Limits, Outcome, Parameter, Profile,
-        Program, SqlValue, Statement,
+        execute as run_program, execute_in_transaction, ExecContext, Limits, Outcome, Profile, Program,
     };
     use base64::Engine as _;
-
-    fn integer(value: &Value, what: &str) -> anyhow::Result<i64> {
-        match value {
-            Value::String(text) => text
-                .parse::<i64>()
-                .map_err(|_| anyhow!("{what} must be a 64-bit integer")),
-            Value::Number(number) => number
-                .as_i64()
-                .ok_or_else(|| anyhow!("{what} must be a 64-bit integer")),
-            _ => bail!("{what} must be an integer"),
-        }
-    }
-    fn sql_value(value: &Value) -> anyhow::Result<SqlValue> {
-        let tag = value["t"].as_str().ok_or_else(|| anyhow!("binding value has no type tag"))?;
-        Ok(match tag {
-            "null" => SqlValue::Null,
-            "int" => SqlValue::Integer(integer(&value["v"], "an INTEGER binding")?),
-            "real" => {
-                let real = value["v"]
-                    .as_f64()
-                    .ok_or_else(|| anyhow!("a REAL binding must be a finite number"))?;
-                anyhow::ensure!(real.is_finite(), "a REAL binding must be finite");
-                SqlValue::Real(real)
-            }
-            "text" => SqlValue::Text(
-                value["v"].as_str().ok_or_else(|| anyhow!("a TEXT binding must be a string"))?.to_string(),
-            ),
-            "blob" => SqlValue::Blob(
-                base64::engine::general_purpose::URL_SAFE_NO_PAD
-                    .decode(value["v"].as_str().unwrap_or_default())
-                    .context("a BLOB binding must be base64url")?,
-            ),
-            other => bail!("unknown binding type {other:?}"),
-        })
-    }
 
     let steps = args["program"]
         .as_array()
         .ok_or_else(|| anyhow!("program must be an array of statements"))?
         .iter()
-        .map(|step| {
-            let sql = step["sql"].as_str().ok_or_else(|| anyhow!("a statement needs `sql`"))?;
-            let mut statement = Statement::new(sql);
-            for binding in step["bindings"].as_array().into_iter().flatten() {
-                let parameter = match (&binding["index"], &binding["name"]) {
-                    (Value::Number(index), Value::Null) => Parameter::Index(
-                        index
-                            .as_u64()
-                            .filter(|index| *index >= 1)
-                            .ok_or_else(|| anyhow!("a binding index is 1-based"))?
-                            as usize,
-                    ),
-                    (Value::Null, Value::String(name)) => Parameter::Name(name.clone()),
-                    _ => bail!("a binding names exactly one of `index` or `name`"),
-                };
-                statement = statement.bind(parameter, sql_value(&binding["value"])?);
-            }
-            Ok(statement)
-        })
+        .map(statement)
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     let context = &args["context"];
@@ -1019,8 +976,233 @@ fn execute(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
         );
     }
     ctx.profile = Profile::Consensus { schema_admin: context["schemaAdmin"].as_bool().unwrap_or(false) };
-    let limits = &context["limits"];
-    let mut chosen = Limits::default();
+    ctx.limits = limits(&context["limits"], Limits::default())?;
+    let program = Program::new(steps);
+
+    let log = match args.get("log").filter(|value| !value.is_null()) {
+        None => None,
+        Some(log) => Some(statement(log).context("log")?),
+    };
+    let Some(log) = log else {
+        let outcome = run_program(connection, &program, &ctx).map_err(|error| anyhow!("{error}"))?;
+        return Ok(outcome_json(&outcome));
+    };
+
+    // execute_in_transaction needs foreign_keys ON before the transaction
+    // begins (it cannot change inside one).
+    let foreign_keys: i64 = connection.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+    if foreign_keys != 1 {
+        connection.execute_batch("PRAGMA foreign_keys = ON")?;
+    }
+    let result = (|| -> anyhow::Result<Outcome> {
+        connection.execute_batch("BEGIN IMMEDIATE")?;
+        let outcome = match execute_in_transaction(connection, &program, &ctx) {
+            Ok(outcome) => outcome,
+            // Not a deterministic outcome: nothing of this program, and no
+            // log row, may persist.
+            Err(error) => bail!("{error}"),
+        };
+        // A write statement that exhausted the step budget makes SQLite roll
+        // the whole transaction back; the state is the one before BEGIN, so a
+        // fresh transaction for the log row is equivalent.
+        if connection.is_autocommit() {
+            connection.execute_batch("BEGIN IMMEDIATE")?;
+        }
+        crate::storage::with_user_sql_authorizer(connection, || run_log_statement(connection, &log, &outcome))?;
+        connection.execute_batch("COMMIT")?;
+        Ok(outcome)
+    })();
+    if result.is_err() && !connection.is_autocommit() {
+        let _ = connection.execute_batch("ROLLBACK");
+    }
+    if foreign_keys != 1 && connection.is_autocommit() {
+        let _ = connection.execute_batch("PRAGMA foreign_keys = OFF");
+    }
+    Ok(outcome_json(&result?))
+}
+
+fn outcome_json(outcome: &crate::dolt_exec::Outcome) -> Value {
+    match outcome {
+        crate::dolt_exec::Outcome::Accepted => json!({ "outcome": "accepted" }),
+        crate::dolt_exec::Outcome::Rejected { code, statement_index } => json!({
+            "outcome": "rejected",
+            "code": code,
+            "statementIndex": statement_index,
+        }),
+    }
+}
+
+/// The log statement of `execute`: the caller's bindings plus the outcome
+/// parameters it names. Stepped to completion; rows are discarded.
+fn run_log_statement(
+    connection: &Connection,
+    log: &crate::dolt_exec::Statement,
+    outcome: &crate::dolt_exec::Outcome,
+) -> anyhow::Result<()> {
+    use crate::dolt_exec::{Outcome, Parameter, SqlValue};
+    use rusqlite::types::Value as Sql;
+
+    let mut prepared = connection.prepare(&log.sql).context("prepare the log statement")?;
+    let to_sql = |value: &SqlValue| match value {
+        SqlValue::Null => Sql::Null,
+        SqlValue::Integer(v) => Sql::Integer(*v),
+        SqlValue::Real(v) => Sql::Real(*v),
+        SqlValue::Text(v) => Sql::Text(v.clone()),
+        SqlValue::Blob(v) => Sql::Blob(v.clone()),
+    };
+    let index_of = |prepared: &rusqlite::Statement<'_>, name: &str| -> anyhow::Result<Option<usize>> {
+        if name.starts_with([':', '@', '$', '?']) {
+            return Ok(prepared.parameter_index(name)?);
+        }
+        for prefix in [':', '@', '$'] {
+            if let Some(index) = prepared.parameter_index(&format!("{prefix}{name}"))? {
+                return Ok(Some(index));
+            }
+        }
+        Ok(None)
+    };
+    let count = prepared.parameter_count();
+    let mut bound = vec![false; count];
+    let mut bind = |prepared: &mut rusqlite::Statement<'_>, index: usize, value: Sql| -> anyhow::Result<()> {
+        anyhow::ensure!(index >= 1 && index <= count && !bound[index - 1], "log binding {index} is invalid or repeated");
+        bound[index - 1] = true;
+        prepared.raw_bind_parameter(index, value)?;
+        Ok(())
+    };
+    for binding in &log.bindings {
+        let index = match &binding.parameter {
+            Parameter::Index(index) => *index,
+            Parameter::Name(name) => {
+                index_of(&prepared, name)?.ok_or_else(|| anyhow!("the log statement has no parameter {name:?}"))?
+            }
+        };
+        bind(&mut prepared, index, to_sql(&binding.value))?;
+    }
+    let (kind, code, statement_index) = match outcome {
+        Outcome::Accepted => ("accepted", Sql::Null, Sql::Null),
+        Outcome::Rejected { code, statement_index } => (
+            "rejected",
+            Sql::Text(code.clone()),
+            statement_index.map_or(Sql::Null, |index| Sql::Integer(index as i64)),
+        ),
+    };
+    for (name, value) in [
+        ("outcome", Sql::Text(kind.into())),
+        ("rejection_code", code),
+        ("failing_statement_index", statement_index),
+    ] {
+        if let Some(index) = index_of(&prepared, name)? {
+            bind(&mut prepared, index, value)?;
+        }
+    }
+    anyhow::ensure!(bound.iter().all(|b| *b), "every parameter of the log statement must be bound");
+    let mut rows = prepared.raw_query();
+    while rows.next()?.is_some() {}
+    Ok(())
+}
+
+/// `ctx.storage.dolt.query(sql, bindings, { limits, maxRows })`: one
+/// read-only statement under the local-read authorizer, with exact values
+/// (`{ t, v }` tagged like `execute`'s bindings). A refusal answers
+/// `{ "error": "<code>" }` rather than throwing, so the caller sees the code.
+fn query(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
+    use crate::dolt_exec::{local_query, Limits, SqlValue};
+    use base64::Engine as _;
+
+    let statement = statement(args)?;
+    let limits = limits(&args["limits"], Limits::default())?;
+    let max_rows = args["maxRows"].as_u64().unwrap_or(10_000) as usize;
+    match local_query(connection, &statement, &limits, max_rows) {
+        Ok(result) => {
+            let rows = result
+                .rows
+                .iter()
+                .map(|row| {
+                    Value::Array(
+                        row.iter()
+                            .map(|value| match value {
+                                SqlValue::Null => json!({ "t": "null" }),
+                                SqlValue::Integer(v) => json!({ "t": "int", "v": v.to_string() }),
+                                // A non-finite REAL (9e999) has no JSON form.
+                                SqlValue::Real(v) if v.is_finite() => json!({ "t": "real", "v": v }),
+                                SqlValue::Real(v) => json!({ "t": "real", "v": v.to_string() }),
+                                SqlValue::Text(v) => json!({ "t": "text", "v": v }),
+                                SqlValue::Blob(v) => json!({
+                                    "t": "blob",
+                                    "v": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v),
+                                }),
+                            })
+                            .collect(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            Ok(json!({ "columns": result.columns, "rows": rows }))
+        }
+        Err(code) if code.starts_with("operational:") => Err(anyhow!("{code}")),
+        Err(code) => Ok(json!({ "error": code })),
+    }
+}
+
+fn integer(value: &Value, what: &str) -> anyhow::Result<i64> {
+    match value {
+        Value::String(text) => text
+            .parse::<i64>()
+            .map_err(|_| anyhow!("{what} must be a 64-bit integer")),
+        Value::Number(number) => number
+            .as_i64()
+            .ok_or_else(|| anyhow!("{what} must be a 64-bit integer")),
+        _ => bail!("{what} must be an integer"),
+    }
+}
+
+fn sql_value(value: &Value) -> anyhow::Result<crate::dolt_exec::SqlValue> {
+    use crate::dolt_exec::SqlValue;
+    use base64::Engine as _;
+    let tag = value["t"].as_str().ok_or_else(|| anyhow!("binding value has no type tag"))?;
+    Ok(match tag {
+        "null" => SqlValue::Null,
+        "int" => SqlValue::Integer(integer(&value["v"], "an INTEGER binding")?),
+        "real" => {
+            let real = value["v"]
+                .as_f64()
+                .ok_or_else(|| anyhow!("a REAL binding must be a finite number"))?;
+            anyhow::ensure!(real.is_finite(), "a REAL binding must be finite");
+            SqlValue::Real(real)
+        }
+        "text" => SqlValue::Text(
+            value["v"].as_str().ok_or_else(|| anyhow!("a TEXT binding must be a string"))?.to_string(),
+        ),
+        "blob" => SqlValue::Blob(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(value["v"].as_str().unwrap_or_default())
+                .context("a BLOB binding must be base64url")?,
+        ),
+        other => bail!("unknown binding type {other:?}"),
+    })
+}
+
+/// `{ sql, bindings: [{ index | name, value }] }` in the harness's encoding.
+fn statement(step: &Value) -> anyhow::Result<crate::dolt_exec::Statement> {
+    use crate::dolt_exec::{Parameter, Statement};
+    let sql = step["sql"].as_str().ok_or_else(|| anyhow!("a statement needs `sql`"))?;
+    let mut statement = Statement::new(sql);
+    for binding in step["bindings"].as_array().into_iter().flatten() {
+        let parameter = match (&binding["index"], &binding["name"]) {
+            (Value::Number(index), Value::Null) => Parameter::Index(
+                index
+                    .as_u64()
+                    .filter(|index| *index >= 1)
+                    .ok_or_else(|| anyhow!("a binding index is 1-based"))? as usize,
+            ),
+            (Value::Null, Value::String(name)) => Parameter::Name(name.clone()),
+            _ => bail!("a binding names exactly one of `index` or `name`"),
+        };
+        statement = statement.bind(parameter, sql_value(&binding["value"])?);
+    }
+    Ok(statement)
+}
+
+fn limits(limits: &Value, mut chosen: crate::dolt_exec::Limits) -> anyhow::Result<crate::dolt_exec::Limits> {
     if let Some(value) = limits["maxSqlBytes"].as_u64() { chosen.max_sql_bytes = value as usize; }
     if let Some(value) = limits["maxVmSteps"].as_u64() { chosen.max_vm_steps = value; }
     if let Some(value) = limits["progressGranularity"].as_u64() {
@@ -1030,18 +1212,5 @@ fn execute(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
         chosen.max_value_bytes = u32::try_from(value).context("limits.maxValueBytes")?;
     }
     if let Some(value) = limits["maxSteps"].as_u64() { chosen.max_steps = value as usize; }
-    ctx.limits = chosen;
-
-    match run_program(connection, &Program::new(steps), &ctx) {
-        Ok(Outcome::Accepted) => Ok(json!({ "outcome": "accepted" })),
-        Ok(Outcome::Rejected { code, statement_index }) => Ok(json!({
-            "outcome": "rejected",
-            "code": code,
-            "statementIndex": statement_index,
-        })),
-        // Not a deterministic outcome: the program's fate is unknown, so the
-        // caller must not record one. It surfaces as a thrown error.
-        Err(error @ ExecError::Operational { .. }) => Err(anyhow!("{error}")),
-        Err(error) => Err(anyhow!("{error}")),
-    }
+    Ok(chosen)
 }

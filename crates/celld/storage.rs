@@ -766,6 +766,18 @@ fn is_dolt_connection(connection: &Connection) -> bool {
     })
 }
 
+/// Run `callback` as application SQL (the cell's authorizer, `_cf_` names
+/// reserved) on a connection whose authorizer is currently lifted, as inside
+/// `dolt_op`, and lift it again afterwards.
+pub(crate) fn with_user_sql_authorizer<T>(connection: &Connection, callback: impl FnOnce() -> T) -> T {
+    use rusqlite::hooks::{AuthContext, Authorization};
+
+    install_authorizer(connection);
+    let result = as_user_sql(callback);
+    connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+    result
+}
+
 /// Install the application authorizer for the connection's engine.
 fn install_authorizer(connection: &Connection) {
     if is_dolt_connection(connection) {

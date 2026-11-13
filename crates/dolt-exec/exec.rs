@@ -568,6 +568,140 @@ pub fn check_statement(conn: &Connection, sql: &str, mode: AuthMode, options: Au
     }
 }
 
+/// The result of [`local_query`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct LocalRows {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<SqlValue>>,
+}
+
+/// Run one read-only statement under the [`AuthMode::LocalRead`] authorizer
+/// and the step budget of `limits` (per statement), returning every row with
+/// its exact storage class (Chronolog Spec 10 section 7, local reads). The
+/// clock is not pinned: local reads may use the real one.
+///
+/// `Err` carries a Chronolog local-read code: `SQL_PROFILE_VIOLATION`
+/// (authorizer), `SQL_PREPARE_FAILED`, `SQL_MULTIPLE_STATEMENTS`,
+/// `SQL_STATEMENT_TOO_LARGE`, `SQL_INVALID_SOURCE`, `SQL_BINDING_INVALID`,
+/// `SQL_STEP_LIMIT`, `SQL_RESULT_LIMIT` (more than `max_rows` rows), or
+/// `SQL_EXECUTION_FAILED:<message>` for any other step error.
+pub fn local_query(
+    conn: &Connection,
+    statement: &Statement,
+    limits: &Limits,
+    max_rows: usize,
+) -> Result<LocalRows, String> {
+    limits.validate().map_err(|e| e.to_string())?;
+    let db = unsafe { conn.handle() };
+    unsafe { register_state(db) }.map_err(|e| format!("operational: {e}"))?;
+    let sql = statement.sql.as_bytes();
+    if sql.contains(&0) {
+        return Err("SQL_INVALID_SOURCE".into());
+    }
+    if sql.len() > limits.max_sql_bytes {
+        return Err("SQL_STATEMENT_TOO_LARGE".into());
+    }
+    let auth = RefCell::new(Authorizer::new(AuthMode::LocalRead, AuthOptions::default()));
+    let budget = Budget {
+        callbacks: Cell::new(0),
+        max_callbacks: limits.max_vm_steps.div_ceil(u64::from(limits.progress_granularity)).max(1),
+        exceeded: Cell::new(false),
+    };
+    let _controls = Controls::install(db, &auth, &budget, limits.progress_granularity);
+    let code_of = |fail: Fail| -> String {
+        match fail {
+            Fail::Reject(code) => match code.as_str() {
+                "denied" => "SQL_PROFILE_VIOLATION".into(),
+                "prepare" => "SQL_PREPARE_FAILED".into(),
+                "step_limit" => "SQL_STEP_LIMIT".into(),
+                "too_large" => "SQL_RESULT_LIMIT".into(),
+                "binding" => "SQL_BINDING_INVALID".into(),
+                other => format!("SQL_EXECUTION_FAILED:{other}"),
+            },
+            Fail::Fatal(e) => format!("operational: {e}"),
+        }
+    };
+    let mut raw: *mut sys::sqlite3_stmt = ptr::null_mut();
+    let mut tail: *const c_char = ptr::null();
+    let rc = unsafe {
+        sys::sqlite3_prepare_v2(db, sql.as_ptr() as *const c_char, sql.len() as c_int, &mut raw, &mut tail)
+    };
+    let stmt = Stmt(raw);
+    if rc != sys::SQLITE_OK {
+        return Err(code_of(map_error(db, &budget, &auth, Phase::Prepare)));
+    }
+    if stmt.0.is_null() {
+        return Err("SQL_PREPARE_FAILED".into());
+    }
+    let consumed = (tail as usize).wrapping_sub(sql.as_ptr() as usize);
+    match sql.get(consumed..).and_then(|rest| std::str::from_utf8(rest).ok()) {
+        Some(rest) if is_trivia_only(rest) => {}
+        _ => return Err("SQL_MULTIPLE_STATEMENTS".into()),
+    }
+    // Belt and braces: the LocalRead authorizer denies every write, and a
+    // statement SQLite itself knows to write is refused before it steps.
+    if unsafe { sys::sqlite3_stmt_readonly(stmt.0) } == 0 {
+        return Err("SQL_PROFILE_VIOLATION".into());
+    }
+    bind_all(stmt.0, statement).map_err(code_of)?;
+    auth.borrow_mut().in_step = true;
+    let count = unsafe { sys::sqlite3_column_count(stmt.0) };
+    let columns = (0..count)
+        .map(|i| unsafe {
+            let p = sys::sqlite3_column_name(stmt.0, i);
+            if p.is_null() {
+                format!("column_{i}")
+            } else {
+                CStr::from_ptr(p).to_string_lossy().into_owned()
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut rows = Vec::new();
+    loop {
+        match unsafe { sys::sqlite3_step(stmt.0) } {
+            sys::SQLITE_ROW => {
+                if rows.len() >= max_rows {
+                    return Err("SQL_RESULT_LIMIT".into());
+                }
+                let mut row = Vec::with_capacity(count as usize);
+                for i in 0..count {
+                    row.push(unsafe { column_value(stmt.0, i) });
+                }
+                rows.push(row);
+            }
+            sys::SQLITE_DONE => return Ok(LocalRows { columns, rows }),
+            _ => return Err(code_of(map_error(db, &budget, &auth, Phase::Step))),
+        }
+    }
+}
+
+/// One result column with its exact storage class.
+unsafe fn column_value(stmt: *mut sys::sqlite3_stmt, i: c_int) -> SqlValue {
+    match sys::sqlite3_column_type(stmt, i) {
+        sys::SQLITE_INTEGER => SqlValue::Integer(sys::sqlite3_column_int64(stmt, i)),
+        sys::SQLITE_FLOAT => SqlValue::Real(sys::sqlite3_column_double(stmt, i)),
+        sys::SQLITE_TEXT => {
+            let p = sys::sqlite3_column_text(stmt, i);
+            let n = sys::sqlite3_column_bytes(stmt, i);
+            if p.is_null() {
+                SqlValue::Text(String::new())
+            } else {
+                SqlValue::Text(String::from_utf8_lossy(std::slice::from_raw_parts(p, n as usize)).into_owned())
+            }
+        }
+        sys::SQLITE_BLOB => {
+            let p = sys::sqlite3_column_blob(stmt, i);
+            let n = sys::sqlite3_column_bytes(stmt, i);
+            if p.is_null() || n == 0 {
+                SqlValue::Blob(Vec::new())
+            } else {
+                SqlValue::Blob(std::slice::from_raw_parts(p as *const u8, n as usize).to_vec())
+            }
+        }
+        _ => SqlValue::Null,
+    }
+}
+
 fn bind_all(stmt: *mut sys::sqlite3_stmt, statement: &Statement) -> Result<(), Fail> {
     let count = unsafe { sys::sqlite3_bind_parameter_count(stmt) } as usize;
     let mut bound = vec![false; count];

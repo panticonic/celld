@@ -242,6 +242,41 @@ impl Slot {
         self.turn_in(TurnLane::Cell(scope.to_string()), f).await
     }
 
+    /// A stateless turn that gives up instead of panicking when the isolate
+    /// was retired while the caller waited. The inspector's pump uses it: a
+    /// debugger message can race the pool freeing the slot it targets.
+    pub(crate) async fn turn_if_live<T>(&self, f: impl FnOnce(&mut js::Worker) -> T) -> Option<T> {
+        struct Counted<'a>(&'a Slot);
+        impl Drop for Counted<'_> {
+            fn drop(&mut self) {
+                self.0.turns.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+        self.turns.fetch_add(1, Ordering::Relaxed);
+        let _turn = Counted(self);
+        let _scheduled = self.turn_scheduler.acquire(TurnLane::Stateless).await;
+        let mut worker = self.worker.lock().await;
+        let worker = worker.as_mut()?;
+        Some(self.run_turn(worker, f))
+    }
+
+    /// Run the body of a turn, on the thread a recording CPU profile pins the
+    /// isolate to when it has one (see `inspector::PinnedThread`), and
+    /// otherwise on this one.
+    fn run_turn<T>(&self, worker: &mut js::Worker, f: impl FnOnce(&mut js::Worker) -> T) -> T {
+        let me = self.me.clone();
+        let body = move |worker: &mut js::Worker| {
+            let previous = CURRENT_SLOT.replace(Some(me));
+            let result = f(worker);
+            CURRENT_SLOT.set(previous);
+            result
+        };
+        match worker.inspector_pin() {
+            Some(pin) => pin.run(|| body(worker)),
+            None => body(worker),
+        }
+    }
+
     async fn turn_in<T>(&self, lane: TurnLane, f: impl FnOnce(&mut js::Worker) -> T) -> T {
         struct Counted<'a>(&'a Slot);
         impl Drop for Counted<'_> {
@@ -262,10 +297,7 @@ impl Slot {
             TurnLane::Stateless => "stateless".to_string(),
             TurnLane::Cell(scope) => scope,
         });
-        let previous = CURRENT_SLOT.replace(Some(self.me.clone()));
-        let result = f(worker);
-        CURRENT_SLOT.set(previous);
-        result
+        self.run_turn(worker, f)
     }
 
     /// Reserve one event through its complete lifetime, including the reply
@@ -319,7 +351,8 @@ impl Slot {
     /// A dynamic Worker owns exactly one isolate, so it needs no
     /// admission, growth, or retirement policy.
     fn outside_pool(worker: js::Worker, loaded_worker: bool) -> Arc<Self> {
-        Arc::new_cyclic(|me| Slot {
+        let inspector_target = worker.inspector_target();
+        let slot = Arc::new_cyclic(|me| Slot {
             me: me.clone(),
             id: 0,
             heap_id: next_heap_id(),
@@ -336,7 +369,11 @@ impl Slot {
             retiring: AtomicBool::new(false),
             #[cfg(celld_internal_tests)]
             turn_observations: Mutex::new(Vec::new()),
-        })
+        });
+        if let Some(target) = inspector_target {
+            target.attach(&slot);
+        }
+        slot
     }
 
     /// Whether this slot holds a Worker Loader's Worker.
@@ -621,6 +658,7 @@ impl Pool {
         let reusable = slots.iter().position(|slot| slot.is_reusable());
         let id = reusable.unwrap_or(slots.len());
         let heap_id = next_heap_id();
+        let inspector_target = worker.inspector_target();
         let slot = Arc::new_cyclic(|me| Slot {
             me: me.clone(),
             id,
@@ -639,6 +677,9 @@ impl Pool {
             #[cfg(celld_internal_tests)]
             turn_observations: Mutex::new(Vec::new()),
         });
+        if let Some(target) = inspector_target {
+            target.attach(&slot);
+        }
         if let Some(id) = reusable {
             slots[id] = slot.clone();
         } else {

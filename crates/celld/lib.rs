@@ -70,6 +70,7 @@ pub mod generation;
 pub mod host_channels;
 pub mod host_services;
 pub mod http_streams;
+pub mod inspector;
 pub mod js;
 pub mod kv_blob;
 pub mod kv_cli;

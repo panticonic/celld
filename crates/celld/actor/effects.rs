@@ -4,7 +4,7 @@
 
 use super::{CompletedEffect, EffectFuture, Ownership, TimerArm, TimerSlots};
 use crate::ownership_store::now_ms;
-use celld_logic::{CasGuard, Event, Failure, LeaseCasOutcome, NodeLeaseRecord, OpId};
+use celld_logic::{CasGuard, Event, Failure, LeaseCasOutcome, NodeLeaseRecord, OpId, Timer};
 use futures_util::stream::FuturesUnordered;
 use std::future::Future;
 use tokio_util::time::{delay_queue, DelayQueue};
@@ -226,6 +226,61 @@ impl StepOutput {
     }
 }
 
+/// The longest a single delay-queue entry is armed for.
+///
+/// `DelayQueue` panics ("invalid deadline") on a delay past its timer wheel's
+/// range, about two years, and an alarm can be set for any date: a `setAlarm`
+/// for the year 2100 took the node down. A deadline further out is armed in
+/// chunks of this length. When a chunk expires with the deadline still ahead,
+/// the loop arms the next one (see `production.rs`); the timer reaches the
+/// core only at its deadline, exactly as a nearer one does.
+pub(crate) const MAX_DELAY_CHUNK_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+
+/// A chunk that expires this far (or less) ahead of its deadline is the
+/// deadline: Tokio's timer rounds, and the clock the deadline is on is read a
+/// moment after it. Further ahead means a chunk ended, or the clock jumped,
+/// and either way the remainder is armed again.
+pub(crate) const EARLY_FIRE_TOLERANCE_MS: u64 = 1_000;
+
+/// The delay to arm for a deadline `left_ms` away: all of it, up to a chunk.
+pub(crate) fn delay_for(left_ms: u64) -> std::time::Duration {
+    std::time::Duration::from_millis(left_ms.min(MAX_DELAY_CHUNK_MS))
+}
+
+/// What an expired delay-queue entry means.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Expiry {
+    /// The deadline is here: the timer fires.
+    Fire(Timer),
+    /// A chunk of a far deadline ended; the next chunk is armed.
+    Rearmed,
+    /// The arm was replaced or cancelled while it waited.
+    Stale,
+}
+
+/// Settle an entry the delay queue has expired, `now_mono_ms` being the
+/// node's monotonic clock.
+pub(crate) fn expire(
+    delays: &mut DelayQueue<TimerArm>,
+    timers: &mut TimerSlots<(delay_queue::Key, u64)>,
+    arm: TimerArm,
+    now_mono_ms: u64,
+) -> Expiry {
+    let left = arm.at_mono_ms.saturating_sub(now_mono_ms);
+    if left > EARLY_FIRE_TOLERANCE_MS {
+        if !timers.is_current(&arm.slot, arm.ordinal) {
+            return Expiry::Stale;
+        }
+        let key = delays.insert(arm.clone(), delay_for(left));
+        timers.install(&arm, (key, arm.at_mono_ms));
+        return Expiry::Rearmed;
+    }
+    match timers.fire(&arm.slot, arm.ordinal) {
+        Some(_) => Expiry::Fire(arm.timer),
+        None => Expiry::Stale,
+    }
+}
+
 pub(crate) fn drain_step_output(
     out: &mut StepOutput,
     effects: &mut FuturesUnordered<EffectFuture>,
@@ -246,13 +301,128 @@ pub(crate) fn drain_step_output(
         }
     }
     for arm in out.timers.drain(..) {
-        let delay = std::time::Duration::from_millis(
-            arm.at_mono_ms.saturating_sub(crate::asyncrt::mono_ms()),
-        );
+        let delay = delay_for(arm.at_mono_ms.saturating_sub(crate::asyncrt::mono_ms()));
         let key = delays.insert(arm.clone(), delay);
         // The deadline rides along so a resume can re-aim the delay.
         if let Some((displaced, _)) = timers.install(&arm, (key, arm.at_mono_ms)) {
             delays.remove(&displaced);
         }
+    }
+}
+
+#[cfg(test)]
+mod far_deadline_tests {
+    use super::*;
+
+    #[test]
+    fn a_far_deadline_is_armed_in_a_bounded_chunk() {
+        assert_eq!(delay_for(0), std::time::Duration::ZERO);
+        assert_eq!(delay_for(1_500), std::time::Duration::from_millis(1_500));
+        let chunk = std::time::Duration::from_millis(MAX_DELAY_CHUNK_MS);
+        assert_eq!(delay_for(MAX_DELAY_CHUNK_MS), chunk);
+        assert_eq!(delay_for(MAX_DELAY_CHUNK_MS + 1), chunk);
+        // An alarm set for the year 2100, from 2026: 74 years.
+        assert_eq!(delay_for(74 * 365 * 24 * 60 * 60 * 1000), chunk);
+        assert_eq!(delay_for(u64::MAX), chunk);
+    }
+
+    type Slots = TimerSlots<(delay_queue::Key, u64)>;
+
+    /// Arm `timer` for `at` the way production does: the Actor numbers the
+    /// arm, the drain puts it in the delay queue and records its key.
+    fn arm(
+        delays: &mut DelayQueue<TimerArm>,
+        slots: &mut Slots,
+        timer: Timer,
+        at: u64,
+        now: u64,
+    ) -> (TimerArm, delay_queue::Key) {
+        let (arm, _) = TimerSlots::<()>::default().arm(timer, at, ());
+        let key = delays.insert(arm.clone(), delay_for(at.saturating_sub(now)));
+        slots.install(&arm, (key, at));
+        (arm, key)
+    }
+
+    const DAY: u64 = 24 * 60 * 60 * 1000;
+
+    fn alarm_timer() -> Timer {
+        Timer::CellAlarm {
+            cell: "Agent:1".to_string(),
+            generation: 1,
+        }
+    }
+
+    /// An alarm far ahead is armed in chunks and reaches the core only at its
+    /// deadline: each chunk's expiry arms the next, and nothing fires early.
+    #[tokio::test]
+    async fn a_far_alarm_fires_at_its_deadline_not_at_a_chunk() {
+        let mut delays = DelayQueue::new();
+        let mut slots = Slots::default();
+        let (now, deadline) = (1_000_000_u64, 1_000_000 + 20 * DAY);
+        let (first, key) = arm(&mut delays, &mut slots, alarm_timer(), deadline, now);
+        assert_eq!(delays.len(), 1);
+
+        // The first chunk (7 days) ends 13 days short of the deadline.
+        let expired = delays.remove(&key).into_inner();
+        let outcome = expire(&mut delays, &mut slots, expired, now + 7 * DAY);
+        assert_eq!(outcome, Expiry::Rearmed);
+        assert_eq!(delays.len(), 1, "the next chunk is armed");
+        assert!(slots.is_current(&first.slot, first.ordinal), "still the current arm");
+        // The second ends 6 days short: what is left is under a chunk.
+        let key = slots.values().next().unwrap().0;
+        let expired = delays.remove(&key).into_inner();
+        let outcome = expire(&mut delays, &mut slots, expired, now + 14 * DAY);
+        assert_eq!(outcome, Expiry::Rearmed);
+        // The last lands on the deadline and fires.
+        let key = slots.values().next().unwrap().0;
+        let expired = delays.remove(&key).into_inner();
+        let outcome = expire(&mut delays, &mut slots, expired, deadline);
+        assert_eq!(outcome, Expiry::Fire(alarm_timer()));
+        assert_eq!(delays.len(), 0);
+        assert!(!slots.is_current(&first.slot, first.ordinal), "a fired arm is spent");
+    }
+
+    /// An ordinary timer fires at its deadline, a moment early or late, and a
+    /// spent arm never fires again.
+    #[tokio::test]
+    async fn an_ordinary_timer_fires_once() {
+        let mut delays = DelayQueue::new();
+        let mut slots = Slots::default();
+        let timer = Timer::NodeLeaseRenew { generation: 3 };
+        let (_, key) = arm(&mut delays, &mut slots, timer.clone(), 5_000, 0);
+        let expired = delays.remove(&key).into_inner();
+        // Tokio fired it 1 ms early: that is still the deadline.
+        let outcome = expire(&mut delays, &mut slots, expired.clone(), 4_999);
+        assert_eq!(outcome, Expiry::Fire(timer));
+        let outcome = expire(&mut delays, &mut slots, expired, 5_000);
+        assert_eq!(outcome, Expiry::Stale);
+    }
+
+    /// A deadline replaced while its chunk waited is not carried on.
+    #[tokio::test]
+    async fn a_replaced_far_arm_is_not_rearmed() {
+        let mut delays = DelayQueue::new();
+        let mut slots = Slots::default();
+        let (_, key) = arm(&mut delays, &mut slots, alarm_timer(), 20 * DAY, 0);
+        let stale = delays.remove(&key).into_inner();
+        // A newer arm of the same slot takes it over.
+        let mut newer = stale.clone();
+        newer.ordinal += 1;
+        let spare = delays.insert(newer.clone(), delay_for(DAY));
+        slots.install(&newer, (spare, 30 * DAY));
+        let outcome = expire(&mut delays, &mut slots, stale, 7 * DAY);
+        assert_eq!(outcome, Expiry::Stale);
+        assert_eq!(delays.len(), 1, "only the newer arm is waiting");
+    }
+
+    /// The delay queue is what refused a far deadline ("invalid deadline"), so
+    /// it is what the chunk has to fit.
+    #[tokio::test]
+    async fn the_delay_queue_takes_the_largest_chunk_and_the_far_deadline() {
+        let mut queue = DelayQueue::new();
+        queue.insert((), delay_for(MAX_DELAY_CHUNK_MS));
+        queue.insert((), delay_for(74 * 365 * 24 * 60 * 60 * 1000));
+        queue.insert((), delay_for(u64::MAX));
+        assert_eq!(queue.len(), 3);
     }
 }

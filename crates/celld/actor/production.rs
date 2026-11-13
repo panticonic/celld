@@ -3,6 +3,7 @@
 //! The production selector for the Actor execution domain.
 
 use super::*;
+use super::effects::{delay_for, expire, Expiry};
 use futures_util::StreamExt as _;
 
 impl Actor {
@@ -39,9 +40,14 @@ impl Actor {
                     reaim_delays(&mut delays, &timer_slots);
                 }
                 Some(expired) = delays.next(), if !delays.is_empty() => {
-                    let arm = expired.into_inner();
-                    if timer_slots.fire(&arm.slot, arm.ordinal).is_some() {
-                        self.step(ActorInput::TimerFired(arm.timer), &mut out);
+                    // A bounded chunk of a far deadline ends before the deadline;
+                    // `expire` arms the next one, and the timer reaches the
+                    // core at its deadline, as a near one does.
+                    let now = crate::asyncrt::mono_ms();
+                    if let Expiry::Fire(timer) =
+                        expire(&mut delays, &mut timer_slots, expired.into_inner(), now)
+                    {
+                        self.step(ActorInput::TimerFired(timer), &mut out);
                     }
                 }
             }
@@ -57,6 +63,6 @@ fn reaim_delays(
     let now = crate::asyncrt::mono_ms();
     for (key, at_mono_ms) in timers.values() {
         let left = at_mono_ms.saturating_sub(now);
-        delays.reset(key, std::time::Duration::from_millis(left));
+        delays.reset(key, delay_for(left));
     }
 }

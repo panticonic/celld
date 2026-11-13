@@ -80,8 +80,22 @@ seeds.
 | E1 | `new Response("text")` is sent with no `content-type`. workerd sends `text/plain;charset=UTF-8`. | **Yes.** `Response` defaults `content-type` to `text/plain;charset=UTF-8` for a string (or other non-object) body, per Fetch's "extract a body". Blob type, `URLSearchParams` and `FormData` already carried theirs; streams, `ArrayBuffer` and views carry none; `Response.json` already set JSON. Responses rebuilt from host results pass `__rawBody` so they never gain a header the origin did not send. `Request` has the same gap and is not changed. | |
 | E2 | The dev-mode R2 etag is a counter, not the content MD5, so identical writes get different etags. This contradicts `docs/services/r2.md`. | No. | |
 | E3 | A graceful shutdown with an open WebSocket waits out the full 25 s drain, then the client sees close code 1006 instead of 1001. | **Yes**, for the preserved restart that `celld dev` and `POST /shutdown?handoff=preserve` use. See below. | |
-| E5 | An alarm set far in the future (year 2100) panics the node: "invalid deadline", `actor/effects.rs:252`. Found while testing object fork. | No. |
+| E5 | An alarm set far in the future (year 2100) panics the node: "invalid deadline", `actor/effects.rs:252`. Found while testing object fork. | **Yes.** See below. | |
 | E4 | static-assets: `/index.html` redirects with 307 rather than a permanent redirect. A 404 is served as `Not found` with `content-type: application/json`. | No. | |
+
+**E5 detail.** The actor arms every timer in a `tokio_util` `DelayQueue`, whose
+timer wheel spans about two years, and `insert` and `reset` panic on a delay
+beyond it. A `setAlarm` for any date past that took the node down, and the alarm
+was durable, so the node panicked again at each start while it was pending. The
+fix is at the arming: a deadline is armed for at most a chunk (7 days,
+`MAX_DELAY_CHUNK_MS`). When a chunk expires with the deadline still more than a
+second ahead, `actor::effects::expire` arms the next chunk, for the same arm,
+and the timer reaches the core at its deadline as a near one does. `reaim_delays`
+(the resume path) clamps the same way. The e2e `alarm` scenario sets an alarm for
+2100 and keeps it across a restart, SIGKILL and restore, then replaces it with a
+near one; `actor::effects` has unit tests for the chunking. Before the fix that
+scenario fails with the panic. Not changed: the deterministic test drivers, which
+never arm a far timer.
 
 **E3 detail.** `celld dev` turns SIGTERM into `POST /shutdown?handoff=preserve`,
 a same-node restart that keeps cells resident. That drain waited for the shell to

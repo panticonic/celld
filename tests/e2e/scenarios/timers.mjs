@@ -6,6 +6,7 @@ import { get, restart, crash, restore, run, waitLog, M } from "../lib/dsl.mjs";
 // bounded: celld fires an alarm within ~1 s of its due time on a quiet node,
 // so a firing that takes > 15 s is a failure, not slowness.
 const ALARM_WAIT = { timeoutMs: 15000, intervalMs: 250, why: "alarm is due 2 s after /arm; bound is generous for startup" };
+const FAR = Date.UTC(2100, 0, 1); // an alarm 74 years out
 const idle = (fires) => get("/", { status: 200, json: { fires, pendingAlarm: null } });
 const alarm = {
   example: "alarm",
@@ -30,6 +31,20 @@ const alarm = {
     get("/arm", { status: 200, json: { armed: true, at: M.any() } }),
     restore(),
     get("/", { status: 200, json: { fires: 3, pendingAlarm: null } }, { poll: ALARM_WAIT, name: "alarm armed before restore fires after restore" }),
+    // An alarm set for the year 2100 used to panic the node ("invalid
+    // deadline" in the actor's delay queue). It is armed, reported, kept across
+    // a restart, a SIGKILL and a restore, and replacing it with a near one still
+    // fires.
+    get("/arm-far", { status: 200, json: { armed: true, at: FAR } }),
+    get("/", { status: 200, json: { fires: 3, pendingAlarm: FAR } }, { name: "a far alarm is pending" }),
+    restart(),
+    get("/", { status: 200, json: { fires: 3, pendingAlarm: FAR } }, { name: "a far alarm survives a restart" }),
+    crash(),
+    get("/", { status: 200, json: { fires: 3, pendingAlarm: FAR } }, { name: "a far alarm survives SIGKILL" }),
+    restore(),
+    get("/", { status: 200, json: { fires: 3, pendingAlarm: FAR } }, { name: "a far alarm survives a restore" }),
+    get("/arm", { status: 200, json: { armed: true, at: M.any() } }),
+    get("/", { status: 200, json: { fires: 4, pendingAlarm: null } }, { poll: ALARM_WAIT, name: "a near alarm replaces it and fires" }),
   ],
 };
 

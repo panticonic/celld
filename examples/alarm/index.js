@@ -11,6 +11,15 @@ export class Agent {
         at: await this.state.storage.getAlarm(),
       });
     }
+    if (url.pathname === "/arm-far") {
+      // An alarm can be set for any date. celld arms such a deadline in
+      // bounded pieces and fires it when it is due; it must not stop the node.
+      await this.state.storage.setAlarm(Date.UTC(2100, 0, 1));
+      return Response.json({
+        armed: true,
+        at: await this.state.storage.getAlarm(),
+      });
+    }
     const fires = (await this.state.storage.get("fires")) ?? 0;
     return Response.json({
       fires,

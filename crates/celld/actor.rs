@@ -176,6 +176,13 @@ impl<V> TimerSlots<V> {
         displaced
     }
 
+    /// Whether `ordinal` is still the arm of `slot`.
+    pub fn is_current(&self, slot: &TimerSlot, ordinal: u64) -> bool {
+        self.armed
+            .get(slot)
+            .is_some_and(|(armed, _)| *armed == ordinal)
+    }
+
     /// Removes the current arm only when both parts of its identity match.
     pub fn fire(&mut self, slot: &TimerSlot, ordinal: u64) -> Option<V> {
         if self

@@ -1,6 +1,6 @@
 // Scenarios for the fork-only examples: codegen confinement, deadlines,
 // residency, the P2P binding, and the three examples whose own scripts are
-// larger than a scenario (dolt, dolt-facets, egress), which run here as they
+// larger than a scenario (dolt, dolt-facets, dolt-remotes, egress), which run here as they
 // are. Each script keeps working standalone, as its README says.
 import { execFile } from "node:child_process";
 import dgram from "node:dgram";
@@ -230,7 +230,7 @@ const p2p = {
 };
 
 // ------------------------------------------------- scripts run as they are
-// dolt and dolt-facets are scripted end to end (commit, branch, merge, fork,
+// dolt, dolt-facets and dolt-remotes are scripted end to end (commit, branch, merge, fork,
 // restart, restore) and egress runs three nodes against a fake network; their
 // scripts start their own nodes, so these scenarios start none and run the
 // script against the binary under test on a free port.
@@ -294,6 +294,20 @@ const doltFacets = scripted(
   (dir, t) => ({ file: path.join(dir, "demo.sh"), args: [t.celld.bin] }),
   { requires: [needs("jq")] },
 );
+const doltRemotes = scripted(
+  "dolt-remotes",
+  "dolt remotes between cells (F7): grants, fetch, pull with a resolver, push, a carrier of the application's own, a Dolt facet as a holder, fork inherits nothing, restart and restore (examples/dolt-remotes/demo.sh), and the same on two nodes of one fleet (cluster.sh)",
+  (dir, t) => ({ file: path.join(dir, "demo.sh"), args: [t.celld.bin] }),
+  { requires: [needs("jq")] },
+);
+doltRemotes.steps.push(
+  run(`the same work across two nodes of one fleet passes`, async (t) => {
+    const [p1, q1, p2, q2] = [await freePort(), await freePort(), await freePort(), await freePort()];
+    await script(t, path.join(EXAMPLES_DIR, "dolt-remotes", "cluster.sh"), [t.celld.bin], {
+      P1: String(p1), Q1: String(q1), P2: String(p2), Q2: String(q2),
+    });
+  }),
+);
 const egress = scripted(
   "egress",
   "egress: identity at the proxy for fetch, redirects, WebSocket, connect(), loaded workers; wrong secret; no proxy (examples/egress/test.mjs)",
@@ -303,4 +317,4 @@ const egress = scripted(
   }),
 );
 
-export default [codegen, deadlinesDefault, deadlinesOff, residency, p2p, dolt, doltFacets, egress];
+export default [codegen, deadlinesDefault, deadlinesOff, residency, p2p, dolt, doltFacets, doltRemotes, egress];

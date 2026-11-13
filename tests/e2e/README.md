@@ -149,7 +149,7 @@ restore-from-log, with the counters/data continuing across each.
 | codegen, deadlines (slow) | `eval`/`new Function`/Wasm compilation refused except for a declaring class or a granting loader; `blockConcurrencyWhile` past 30 s resets the object, and completes under `CELLD_NO_IMPLICIT_DEADLINES=1` |
 | residency (slow) | a residency hold keeps an object past idle eviction, and releasing it lets it go |
 | p2p | two nodes over Iroh: dial, `closed` on a clean end and on a reset, an alarm's stream used by later requests, an inbound stream kept by a handler |
-| dolt, dolt-facets, egress | the examples' own scripts (`demo.sh`, `test.mjs`) run against the binary under test on a free port: Dolt commits, branches, merge, fork and restore; Dolt facets; identity at the egress proxy |
+| dolt, dolt-facets, dolt-remotes, egress | the examples' own scripts (`demo.sh`, `cluster.sh`, `test.mjs`) run against the binary under test on a free port: Dolt commits, branches, merge, fork and restore; Dolt facets; Dolt remotes between cells (fetch, pull, push, grants, one fleet of two nodes); identity at the egress proxy |
 | pi, opencode | skipped: need a live LLM endpoint (non-deterministic) |
 
 ## Toolchains (bootstrapped into `<scratch>/tools`)

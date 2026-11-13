@@ -31,6 +31,7 @@ has not been run yet.
 | Chronolog node on the fork | two-node end-to-end test passes (Chronolog branch `feature/celld-host`, `HANDOFF-celld-host.md`); its fork APIs are merged | |
 | Windows port (compile and cross-link; CI workflow for a real Windows run) | merged | `docs/fork/windows.md` |
 | Fork polish: cell-owned P2P streams and `closed`, Ed25519 PKCS#8 v0, configurable node lease, far-future alarms (E5), per-class secrets (G3), e2e scenarios for every fork example | done (branch `feature/fork-polish`) | §3b.10-11, `docs/services/p2p.md`, `docs/fork/class-secrets.md`, `docs/README.md` (node lease) |
+| Dolt remotes between cells (F7): grants, fetch, pull, push over packs, on one node and across nodes of a fleet (patch 0004) | done (branch `feature/dolt-remotes`) | §3b.13, `docs/services/dolt-remotes.md` |
 | Vibestudio compatibility audit | done (Vibestudio branch `audit/celld-compat`, `docs/celld-compat-audit.md`) | fork bugs A1 and A2 fixed |
 | Vibestudio runtime cutover | partial, paused (Vibestudio branch `feat/celld-runtime`, `HANDOFF-celld-runtime.md`) | |
 | Dolt runtime for the Vibestudio redesign: merge resolver (F1), commit in a transaction (F2), class-declared local tables (F4), checkout independent of local state (F5), history reads (F6) | done (branch `feature/dolt-runtime-f1-f6`) | §3b.12, `docs/services/dolt-cells.md` |
@@ -73,15 +74,19 @@ has not been run yet.
    - ~~F4: local tables~~ `celld.durable_objects.C.doltLocal`, `FacetStartupOptions.celld.doltLocal`;
    - ~~F5: cheap checkout~~ the engine moves local tables by catalog entry (patch 0003);
    - ~~F6: read access to history and diff tables~~ verified and tested; `dolt.query` may call `dolt_merge_base` and `dolt_hashof*`.
-   Not done: F7 below.
-   - F7: Dolt remotes between cells. Locally this is chunk transfer through
-     DoltLite's `DoltliteRemote` vtable, behind a capability; across nodes,
-     the same transfer over the P2P binding. It is required for
+   - ~~F7: Dolt remotes between cells~~ done (§3b.13): required for
      **decentralized GAD** (user decision, 2026-11-13). GAD can stay one
      Dolt database if its size allows. Participants (agents, the user,
      contexts, later devices and other workspaces) work in parallel on their
      own forks or branches and merge back by fetch, push and merge, and no
-     single object serializes the work.
+     single object serializes the work. `ctx.storage.dolt.remote.{add,
+     remove, list, branches, grant, grants, revoke, serve}`, `fetch`, `pull`
+     (fetch and merge, with the F1 resolver) and `push` (fast-forward only,
+     applied by the target in its own turn), behind a class capability
+     (`doltRemotes`) and grants the source issues. Local and cross-node
+     through the one dispatch every call to a cell uses; over P2P the wire is
+     specified and carrier-neutral (`transport`, `remote.serve`), and the
+     cross-workspace run on two real nodes is not part of this change.
 6. Finish the Vibestudio runtime cutover (`feat/celld-runtime`, per its handoff).
 7. Vibestudio Dolt redesign, P0 onward. Q1–Q5 are answered; the GAD
    section (§5) is to be rewritten as decentralized before P5.
@@ -592,13 +597,13 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       engine's own rule is stricter than ours on punctuation only).
     - **Capability: a class declares it.** `celld.durable_objects.<Class>.
       doltRemotes: true` (§3a; same unknown-key refusal and manifest round trip
-      as `residency`, gated by `dolt-remotes-v1`, refused on a class that is
-      not a Dolt class). Without it `ctx.storage.dolt.remote` does not exist
-      and a request to serve or accept answers 403, so a class that never
-      asked for remotes can never be fetched from, whatever grants it holds. A
-      Dolt facet inherits the declaration of its root's class. Rejected: a
-      per-call flag (a capability is a property of the deployment, like codegen
-      and residency).
+      as `residency`, gated by `dolt-remotes-v1`). Without it
+      `ctx.storage.dolt.remote` does not exist and a request to serve or
+      accept answers 403, so a class that never asked for remotes can never be
+      fetched from, whatever grants it holds. A Dolt facet has the declaration
+      of the class of its id (its root's class, which may be a SQLite class, as
+      in Vibestudio's supervisor). Rejected: a per-call flag (a capability is a
+      property of the deployment, like codegen and residency).
     - **Authorization: an explicit grant held by the source.** "Same class" is
       too coarse (every fork is the same class, so any fork could read its
       source and every sibling) and a list in the `celld` block cannot name
@@ -682,11 +687,13 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       passes the authenticated peer to `serve`). The e2e scenario runs the
       loopback of this (a custom carrier inside one node); the cross-workspace
       run on two real nodes is not part of this change.
-    - **Not built.** A Dolt *facet* is a holder (fetch, pull, push to a root,
-      `merge`) and a source or push target only through its parent, which
-      relays the request bytes (`ctx.facets.get(n).remote.serve` is user code
-      over a facet RPC method): a facet is reached through its root's isolate
-      and cannot be routed to by id. Force push, tag transfer and deleting a
+    - **Not built.** A Dolt *facet* is a holder (fetch, pull, push to a root
+      cell, merge, tested in the example) and a source or push target only
+      through its parent, which relays the request bytes to `remote.serve`
+      over a facet call of its own: a facet is reached through its root's
+      isolate and has no id to route to. In a facet loaded by a Worker
+      Loader the built-in carrier needs a namespace binding of the source's
+      class (otherwise pass `transport`). Force push, tag transfer and deleting a
       remote branch are not offered. A pack is one in-memory buffer (2 GiB at
       most), and a source's turn is occupied for the duration of building it.
       Fork does not set up remotes (`remote.add` after a fork).

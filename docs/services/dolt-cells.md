@@ -184,7 +184,9 @@ write a `dolt_*` system table: versioning goes through `ctx.storage.dolt`.
 Functions with network or file reach (`dolt_clone`, `dolt_fetch`,
 `dolt_push`, `dolt_pull`, `dolt_remote`, credentials, `dolt_backup`) are
 denied to every statement; a cell's state leaves the node only through
-replication.
+replication, and between cells only through
+[Dolt remotes](dolt-remotes.md) (`ctx.storage.dolt.fetch`, `pull`, `push`), which
+move commits under a grant the source issues.
 
 ## Checkout
 

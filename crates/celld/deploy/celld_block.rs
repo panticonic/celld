@@ -368,6 +368,32 @@ mod tests {
     }
 
     #[test]
+    fn dolt_remotes_is_a_boolean_per_class_and_round_trips() {
+        let declaration = parse(
+            json!({ "celld": { "durable_objects": {
+                "Graph": { "doltRemotes": true, "doltLocal": ["outbox_%"] },
+                "Hub": { "doltRemotes": true },
+                "Off": { "doltRemotes": false },
+                "Plain": {}
+            } } }),
+            &["Graph", "Hub", "Off", "Plain"],
+        )
+        .unwrap();
+        // A SQLite class may declare it too: its Dolt facets inherit it.
+        assert_eq!(declaration.dolt_remotes_classes(), vec!["Graph".to_string(), "Hub".to_string()]);
+        let json = serde_json::to_value(&declaration).unwrap();
+        assert_eq!(json["durable_objects"]["Graph"]["doltRemotes"], true);
+        assert!(json["durable_objects"]["Plain"].get("doltRemotes").is_none());
+        let again: CelldDeclaration = serde_json::from_value(json).unwrap();
+        assert_eq!(again, declaration);
+        assert!(parse(
+            json!({ "celld": { "durable_objects": { "Graph": { "doltRemotes": "yes" } } } }),
+            &["Graph"]
+        )
+        .is_err());
+    }
+
+    #[test]
     fn a_class_the_config_does_not_declare_is_refused() {
         let error = parse(
             json!({ "celld": { "durable_objects": { "Ghost": { "residency": true } } } }),

@@ -130,6 +130,7 @@ the Cloudflare service.
 - [Workers](services/workers.md)
 - [Durable Objects / Cells](services/durable-objects.md)
 - [Durable Object Facets](services/durable-object-facets.md)
+- [Dolt remotes between cells](services/dolt-remotes.md): fetch, pull (merge with a resolver) and push between Dolt cells under grants the source issues, for decentralized work on one database, on one node, across nodes, or over a carrier of your own
 - [Object fork, restore and import](services/object-fork.md): copy or replace a whole object with its facets, or create one from database files
 - [Residency holds](services/residency.md): keep an object resident until it releases
 - [KV](services/kv.md)

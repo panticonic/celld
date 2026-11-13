@@ -56,6 +56,7 @@ const MAX_MESSAGE: usize = 1 << 30;
 const MAX_HAVES: usize = 200_000;
 
 /// What an operation answers: JSON for the caller's script, or bytes.
+#[derive(Debug)]
 pub(crate) enum Output {
     Json(Value),
     Bytes(Vec<u8>),
@@ -882,4 +883,371 @@ fn serve_push(
         crate::dolt_cell::call(connection, "dolt_branch", &[branch.clone(), tip.clone()])?;
     }
     Ok((json!({ "branch": branch, "hash": tip, "created": current.is_none(), "unchanged": false }), Vec::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cell(dir: &std::path::Path, name: &str) -> Connection {
+        let path = dir.join(name).to_string_lossy().into_owned();
+        let connection = crate::dolt_cell::open_connection(&path, celld_ltx::Engine::Dolt, None).unwrap();
+        crate::dolt_cell::attach_active_branch(&connection).unwrap();
+        crate::storage::schema(&connection).unwrap();
+        crate::dolt_cell::ensure_runtime(&connection, &[]).unwrap();
+        connection
+    }
+
+    fn commit(connection: &Connection, message: &str) -> String {
+        let hash = crate::dolt_cell::run(
+            connection,
+            "commit",
+            &json!({ "message": message, "author": "T <t@example.com>", "date": 1_700_000_000_000_i64 }),
+        )
+        .unwrap();
+        hash.as_str().unwrap().to_string()
+    }
+
+    /// A source with one committed note, and a fork of it (a copy of its file).
+    fn pair() -> (tempfile::TempDir, Connection, Connection) {
+        let dir = tempfile::tempdir().unwrap();
+        let source = cell(dir.path(), "source.db");
+        source
+            .execute_batch("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT); INSERT INTO notes VALUES (1, 'one');")
+            .unwrap();
+        commit(&source, "base");
+        drop(source);
+        std::fs::copy(dir.path().join("source.db"), dir.path().join("holder.db")).unwrap();
+        let source = cell(dir.path(), "source.db");
+        let holder = cell(dir.path(), "holder.db");
+        (dir, source, holder)
+    }
+
+    fn json_of(output: Output) -> Value {
+        match output {
+            Output::Json(value) => value,
+            Output::Bytes(_) => panic!("expected JSON"),
+        }
+    }
+
+    fn bytes_of(output: Output) -> Vec<u8> {
+        match output {
+            Output::Bytes(bytes) => bytes,
+            Output::Json(value) => panic!("expected bytes, got {value}"),
+        }
+    }
+
+    fn grant(source: &Connection, args: Value) -> Value {
+        json_of(run(source, "grant", &args, &[]).unwrap())
+    }
+
+    fn add_remote(holder: &Connection, token: &str) {
+        run(holder, "remoteAdd", &json!({ "name": "origin", "ref": "Graph:abc123", "token": token }), &[]).unwrap();
+    }
+
+    /// One request from the holder, answered by the source: the response.
+    fn exchange(holder: &Connection, source: &Connection, args: Value, input: &[u8]) -> Vec<u8> {
+        let request = bytes_of(run(holder, "remoteRequest", &args, input).unwrap());
+        bytes_of(run(source, "remoteServe", &json!({}), &request).unwrap())
+    }
+
+    fn fetch(holder: &Connection, source: &Connection) -> anyhow::Result<Value> {
+        let response = exchange(holder, source, json!({ "name": "origin", "op": "fetch" }), &[]);
+        run(holder, "remoteApply", &json!({ "name": "origin", "op": "fetch" }), &response).map(json_of)
+    }
+
+    fn push(holder: &Connection, source: &Connection, branch: &str, to: Option<&str>) -> anyhow::Result<Value> {
+        let refs = exchange(holder, source, json!({ "name": "origin", "op": "refs" }), &[]);
+        let response = exchange(
+            holder,
+            source,
+            json!({ "name": "origin", "op": "push", "branch": branch, "to": to }),
+            &refs,
+        );
+        run(holder, "remoteApply", &json!({ "name": "origin", "op": "push" }), &response).map(json_of)
+    }
+
+    fn head(connection: &Connection, rev: &str) -> String {
+        crate::dolt_cell::hash_of(connection, rev).unwrap()
+    }
+
+    #[test]
+    fn patterns_match_whole_names_with_star_as_the_only_wildcard() {
+        for (pattern, name, expected) in [
+            ("main", "main", true),
+            ("main", "main2", false),
+            ("*", "anything/at/all", true),
+            ("ctx/*", "ctx/a/b", true),
+            ("ctx/*", "ctx", false),
+            ("a*c", "abbbc", true),
+            ("a*c", "abbbd", false),
+            ("*x*", "ax", true),
+            ("m.in", "main", false),
+        ] {
+            assert_eq!(pattern_matches(pattern, name), expected, "{pattern} vs {name}");
+        }
+    }
+
+    #[test]
+    fn fetch_brings_tracking_branches_and_changes_nothing_else() {
+        let (_dir, source, holder) = pair();
+        let token = grant(&source, json!({ "fetch": true }))["token"].as_str().unwrap().to_string();
+        add_remote(&holder, &token);
+        source.execute("INSERT INTO notes VALUES (2, 'two')", []).unwrap();
+        let tip = commit(&source, "two");
+        let before = head(&holder, "HEAD");
+
+        let fetched = fetch(&holder, &source).unwrap();
+        assert_eq!(fetched["branches"]["main"], json!(tip));
+        assert_eq!(head(&holder, "origin/main"), tip);
+        assert_eq!(head(&holder, "HEAD"), before, "a fetch moves no branch");
+        let rows: i64 = holder.query_row("SELECT count(*) FROM notes", [], |row| row.get(0)).unwrap();
+        assert_eq!(rows, 1, "a fetch changes no working data");
+        let tracked = json_of(run(&holder, "remoteBranches", &json!({}), &[]).unwrap());
+        assert_eq!(tracked, json!([{ "name": "origin/main", "hash": tip }]));
+        // Fetching again finds nothing new.
+        assert_eq!(fetch(&holder, &source).unwrap()["branches"]["main"], json!(tip));
+    }
+
+    #[test]
+    fn a_token_is_the_only_authority_and_expires_and_revokes() {
+        let (_dir, source, holder) = pair();
+        add_remote(&holder, "made-up");
+        let error = format!("{:#}", fetch(&holder, &source).unwrap_err());
+        assert!(error.contains("[ERR_DOLT_REMOTE_FORBIDDEN]"), "{error}");
+
+        // A grant that never allowed fetch.
+        let push_only = grant(&source, json!({ "push": ["main"] }));
+        run(&holder, "remoteRemove", &json!({ "name": "origin" }), &[]).unwrap();
+        add_remote(&holder, push_only["token"].as_str().unwrap());
+        let error = format!("{:#}", fetch(&holder, &source).unwrap_err());
+        assert!(error.contains("does not allow fetch"), "{error}");
+
+        // Expired, then revoked.
+        let expired = grant(&source, json!({ "fetch": true, "expiresAt": 1 }));
+        run(&holder, "remoteRemove", &json!({ "name": "origin" }), &[]).unwrap();
+        add_remote(&holder, expired["token"].as_str().unwrap());
+        assert!(format!("{:#}", fetch(&holder, &source).unwrap_err()).contains("expired"));
+        let live = grant(&source, json!({ "fetch": true }));
+        run(&holder, "remoteRemove", &json!({ "name": "origin" }), &[]).unwrap();
+        add_remote(&holder, live["token"].as_str().unwrap());
+        fetch(&holder, &source).unwrap();
+        run(&source, "revoke", &json!({ "id": live["id"] }), &[]).unwrap();
+        assert!(format!("{:#}", fetch(&holder, &source).unwrap_err()).contains("[ERR_DOLT_REMOTE_FORBIDDEN]"));
+
+        // Only the hash of a token is stored, and a listing shows no token.
+        let stored: Vec<String> = source
+            .prepare(&format!("SELECT token_hash FROM {GRANTS_TABLE}"))
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        for grant in [&push_only, &expired, &live] {
+            let token = grant["token"].as_str().unwrap();
+            assert!(!stored.iter().any(|stored| stored == token));
+        }
+        let listed = json_of(run(&source, "grants", &json!({}), &[]).unwrap()).to_string();
+        for grant in [&push_only, &expired] {
+            assert!(!listed.contains(grant["token"].as_str().unwrap()), "{listed}");
+        }
+    }
+
+    #[test]
+    fn a_grant_bound_to_a_peer_refuses_everyone_else() {
+        let (_dir, source, holder) = pair();
+        let bound = grant(&source, json!({ "fetch": true, "peer": "node-1" }));
+        add_remote(&holder, bound["token"].as_str().unwrap());
+        let request = bytes_of(run(&holder, "remoteRequest", &json!({ "name": "origin", "op": "refs" }), &[]).unwrap());
+        for peer in [None, Some("node-2")] {
+            let response = serve(&source, &request, peer);
+            assert_eq!(response[0], 1, "peer {peer:?}");
+        }
+        let response = serve(&source, &request, Some("node-1"));
+        assert_eq!(response[0], 0);
+    }
+
+    #[test]
+    fn only_the_granted_branches_are_revealed_and_nothing_uncommitted() {
+        let (_dir, source, holder) = pair();
+        crate::dolt_cell::run(&source, "branchCreate", &json!({ "name": "private" })).unwrap();
+        crate::dolt_cell::run(&source, "checkout", &json!({ "branch": "private" })).unwrap();
+        source.execute("INSERT INTO notes VALUES (9, 'SECRET-COMMITTED')", []).unwrap();
+        commit(&source, "private work");
+        crate::dolt_cell::run(&source, "checkout", &json!({ "branch": "main" })).unwrap();
+        source.execute("INSERT INTO notes VALUES (8, 'SECRET-UNCOMMITTED')", []).unwrap();
+        let token = grant(&source, json!({ "fetch": true, "branches": ["main"] }))["token"].as_str().unwrap().to_string();
+        add_remote(&holder, &token);
+
+        let response = exchange(&holder, &source, json!({ "name": "origin", "op": "fetch" }), &[]);
+        for secret in ["SECRET-COMMITTED", "SECRET-UNCOMMITTED", "private work"] {
+            assert!(!response.windows(secret.len()).any(|window| window == secret.as_bytes()), "{secret} leaked");
+        }
+        let fetched = run(&holder, "remoteApply", &json!({ "name": "origin", "op": "fetch" }), &response).map(json_of).unwrap();
+        assert_eq!(fetched["branches"].as_object().unwrap().keys().collect::<Vec<_>>(), vec!["main"]);
+        // Asked for by name: not found, not "empty".
+        let response = exchange(&holder, &source, json!({ "name": "origin", "op": "fetch", "branches": ["private"] }), &[]);
+        let error = run(&holder, "remoteApply", &json!({ "name": "origin", "op": "fetch" }), &response).unwrap_err();
+        assert!(format!("{error:#}").contains("[ERR_DOLT_REMOTE_NOT_FOUND]"), "{error:#}");
+    }
+
+    #[test]
+    fn a_push_fast_forwards_and_never_forces() {
+        let (_dir, source, holder) = pair();
+        let token = grant(&source, json!({ "fetch": true, "push": ["main", "work/*"] }))["token"].as_str().unwrap().to_string();
+        add_remote(&holder, &token);
+        holder.execute("INSERT INTO notes VALUES (2, 'holder')", []).unwrap();
+        let tip = commit(&holder, "holder work");
+
+        // The source's checked-out branch moves, since it has nothing uncommitted.
+        let pushed = push(&holder, &source, "main", None).unwrap();
+        assert_eq!(pushed, json!({ "branch": "main", "hash": tip, "created": false, "unchanged": false }));
+        assert_eq!(head(&source, "HEAD"), tip);
+        let rows: i64 = source.query_row("SELECT count(*) FROM notes", [], |row| row.get(0)).unwrap();
+        assert_eq!(rows, 2, "the working set follows the checked-out branch");
+        assert_eq!(push(&holder, &source, "main", None).unwrap()["unchanged"], json!(true));
+
+        // A new branch, under another name.
+        let created = push(&holder, &source, "main", Some("work/one")).unwrap();
+        assert_eq!(created["created"], json!(true));
+        assert_eq!(head(&source, "work/one"), tip);
+
+        // Not allowed by the grant.
+        let error = format!("{:#}", push(&holder, &source, "main", Some("other")).unwrap_err());
+        assert!(error.contains("[ERR_DOLT_REMOTE_FORBIDDEN]"), "{error}");
+
+        // The source moved on: the holder's commit is no longer a fast-forward.
+        source.execute("INSERT INTO notes VALUES (3, 'source')", []).unwrap();
+        let moved = commit(&source, "source work");
+        holder.execute("INSERT INTO notes VALUES (4, 'holder again')", []).unwrap();
+        commit(&holder, "holder again");
+        let error = format!("{:#}", push(&holder, &source, "main", None).unwrap_err());
+        assert!(error.contains("[ERR_DOLT_NON_FAST_FORWARD]"), "{error}");
+        assert_eq!(head(&source, "HEAD"), moved, "a refused push changes nothing");
+
+        // Fetch, merge, push again: now it fast-forwards.
+        fetch(&holder, &source).unwrap();
+        let merged = crate::dolt_cell::run(&holder, "merge", &json!({ "branch": "origin/main", "message": "merge" })).unwrap();
+        assert_eq!(merged["conflicts"], json!([]));
+        let merge_hash = merged["hash"].as_str().unwrap().to_string();
+        let pushed = push(&holder, &source, "main", None).unwrap();
+        assert_eq!(pushed["hash"], json!(merge_hash));
+        assert_eq!(head(&source, "main"), head(&holder, "main"), "one hash on both cells");
+
+        // A checked-out branch with uncommitted changes is not moved under the application.
+        source.execute("INSERT INTO notes VALUES (50, 'uncommitted')", []).unwrap();
+        holder.execute("INSERT INTO notes VALUES (5, 'holder third')", []).unwrap();
+        commit(&holder, "holder third");
+        fetch(&holder, &source).unwrap();
+        let error = format!("{:#}", push(&holder, &source, "main", None).unwrap_err());
+        assert!(error.contains("[ERR_DOLT_TARGET_DIRTY]"), "{error}");
+        let rows: i64 = source.query_row("SELECT count(*) FROM notes WHERE id = 50", [], |row| row.get(0)).unwrap();
+        assert_eq!(rows, 1, "the uncommitted row is untouched");
+    }
+
+    #[test]
+    fn a_pushed_pack_that_lies_about_its_tip_is_refused() {
+        let (_dir, source, holder) = pair();
+        let token = grant(&source, json!({ "push": ["main"] }))["token"].as_str().unwrap().to_string();
+        add_remote(&holder, &token);
+        holder.execute("INSERT INTO notes VALUES (2, 'holder')", []).unwrap();
+        commit(&holder, "holder work");
+        let refs = exchange(&holder, &source, json!({ "name": "origin", "op": "refs" }), &[]);
+        let request = bytes_of(
+            run(&holder, "remoteRequest", &json!({ "name": "origin", "op": "push", "branch": "main" }), &refs).unwrap(),
+        );
+        // A damaged pack installs nothing.
+        // The first chunk of the pack is the pushed commit, which the receiver
+        // must read: one flipped byte makes it not hash to its address.
+        let mut damaged = request.clone();
+        let json_length = u32::from_le_bytes(request[2..6].try_into().unwrap()) as usize;
+        let pack_at = 6 + json_length;
+        let refs_length = u32::from_le_bytes(request[pack_at + 4..pack_at + 8].try_into().unwrap()) as usize;
+        let first_chunk = pack_at + 8 + refs_length + 4 + 24;
+        damaged[first_chunk + 2] ^= 0xff;
+        let (status, _, _) = parse_response(&serve(&source, &damaged, None)).unwrap();
+        assert_eq!(status, 1);
+
+        // Rewrite the claimed tip to the source's own commit.
+        let (op, mut body, pack) = parse_request(&request).unwrap();
+        body["tip"] = json!(head(&source, "main"));
+        let forged = frame_request(op, &body, pack).unwrap();
+        let (status, answer, _) = parse_response(&serve(&source, &forged, None)).unwrap();
+        assert_eq!(status, 1, "{answer}");
+        assert_eq!(answer["code"], json!("ERR_DOLT_REMOTE_BAD_REQUEST"));
+        assert_ne!(head(&source, "main"), head(&holder, "main"));
+    }
+
+    #[test]
+    fn malformed_requests_are_refusals_not_panics() {
+        let (_dir, source, _holder) = pair();
+        for request in [
+            Vec::new(),
+            vec![1],
+            vec![9, 1, 0, 0, 0, 0],
+            vec![1, 1, 255, 255, 255, 255, b'{'],
+            vec![1, 1, 2, 0, 0, 0, b'{', b'}'],
+            vec![1, 7, 2, 0, 0, 0, b'{', b'}'],
+            frame_request(OP_FETCH, &json!({ "token": "x" }), &[]).unwrap(),
+        ] {
+            let (status, answer, _) = parse_response(&serve(&source, &request, None)).unwrap();
+            assert_eq!(status, 1, "{request:?}");
+            assert!(answer["code"].as_str().unwrap().starts_with("ERR_DOLT_REMOTE_"), "{answer}");
+        }
+    }
+
+    #[test]
+    fn names_refs_and_patterns_are_validated() {
+        let (_dir, source, holder) = pair();
+        for name in ["", "1x", "a b", "a/b", "a.b", &"x".repeat(65)] {
+            assert!(run(&holder, "remoteAdd", &json!({ "name": name, "ref": "Graph:1", "token": "t" }), &[]).is_err(), "{name:?}");
+        }
+        for target in ["", "Graph", "Graph:", ":1", "Gra ph:1", "Graph:1 2"] {
+            assert!(run(&holder, "remoteAdd", &json!({ "name": "r", "ref": target, "token": "t" }), &[]).is_err(), "{target:?}");
+        }
+        assert!(run(&holder, "remoteAdd", &json!({ "name": "r", "ref": "Graph:1" }), &[]).is_err());
+        for bad in [json!(["../x"]), json!(["-x"]), json!([""]), json!("main"), json!([1])] {
+            assert!(run(&source, "grant", &json!({ "fetch": true, "branches": bad }), &[]).is_err(), "{bad}");
+        }
+        assert!(run(&source, "grant", &json!({}), &[]).is_err(), "a grant must allow something");
+        add_remote(&holder, "t");
+        assert!(run(&holder, "remoteAdd", &json!({ "name": "origin", "ref": "Graph:1", "token": "t" }), &[]).is_err());
+        run(&holder, "remoteRemove", &json!({ "name": "origin" }), &[]).unwrap();
+        assert!(run(&holder, "remoteRemove", &json!({ "name": "origin" }), &[]).is_err());
+    }
+
+    #[test]
+    fn strip_gives_a_fork_no_authority_and_no_tracking_branch() {
+        let (_dir, source, holder) = pair();
+        let token = grant(&source, json!({ "fetch": true, "push": ["main"] }))["token"].as_str().unwrap().to_string();
+        add_remote(&holder, &token);
+        fetch(&holder, &source).unwrap();
+        // The holder also issued a grant.
+        let own = grant(&holder, json!({ "push": ["main"] }));
+        assert!(own["token"].is_string());
+        strip(&holder).unwrap();
+        assert_eq!(json_of(run(&holder, "remoteList", &json!({}), &[]).unwrap()), json!([]));
+        assert_eq!(json_of(run(&holder, "grants", &json!({}), &[]).unwrap()), json!([]));
+        assert_eq!(json_of(run(&holder, "remoteBranches", &json!({}), &[]).unwrap()), json!([]));
+        // The old token opens nothing on the holder any more.
+        let request = frame_request(OP_REFS, &json!({ "token": own["token"] }), &[]).unwrap();
+        assert_eq!(serve(&holder, &request, None)[0], 1);
+    }
+
+    #[test]
+    fn what_changes_the_store_is_counted_as_a_write() {
+        let fetch_args = json!({ "op": "fetch" });
+        let refs_args = json!({ "op": "refs" });
+        assert!(mutates("remoteAdd", &json!({}), &[]));
+        assert!(mutates("grant", &json!({}), &[]));
+        assert!(mutates("remoteApply", &fetch_args, &[]));
+        assert!(!mutates("remoteApply", &refs_args, &[]));
+        assert!(!mutates("remoteList", &json!({}), &[]));
+        let push = frame_request(OP_PUSH, &json!({}), &[]).unwrap();
+        let refs = frame_request(OP_REFS, &json!({}), &[]).unwrap();
+        assert!(mutates("remoteServe", &json!({}), &push));
+        assert!(!mutates("remoteServe", &json!({}), &refs));
+        assert!(changes_schema("remoteServe", &push));
+        assert!(!changes_schema("remoteServe", &refs));
+    }
 }

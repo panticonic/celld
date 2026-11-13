@@ -983,6 +983,7 @@ pub(super) struct EmbeddedStartup {
     pub props_sc: Vec<u8>,
     pub path: std::path::PathBuf,
     pub restored: bool,
+    pub engine: celld_ltx::Engine,
 }
 
 pub(super) fn adopt_embedded_cell(
@@ -1000,6 +1001,7 @@ pub(super) fn adopt_embedded_cell(
         &startup.path,
         startup.restored,
         compat.sqlite_vec,
+        startup.engine,
     )
     .context("facet storage open failed")?;
     let alarm = finish_cell_adoption(tc, cell, true)?;

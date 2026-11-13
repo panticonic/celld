@@ -6358,6 +6358,7 @@ impl Worker {
         id_sc: Vec<u8>,
         props_sc: Vec<u8>,
         file: (std::path::PathBuf, bool),
+        engine: celld_ltx::Engine,
     ) -> Result<u64> {
         let compat = self.inner.as_ref().expect("live worker isolate").compat;
         let (mut locker, _cells) = self.lock();
@@ -6365,6 +6366,11 @@ impl Worker {
             // The facet is already open, but this call carries a newer sample
             // of the root cell. Take it: the egress of this call must wait for
             // what the root cell had committed when the call left it.
+            anyhow::ensure!(
+                storage::engine_of(cell) == Some(engine),
+                "{}",
+                facet_engine_mismatch(engine)
+            );
             storage::refresh_embedded_root(cell, parent);
             return Ok(opening);
         }
@@ -6385,6 +6391,7 @@ impl Worker {
                 props_sc,
                 path,
                 restored,
+                engine,
             },
             compat,
         )?;
@@ -7013,6 +7020,7 @@ ops! { OP_NAMES, install_op_functions,
         "__facet_rpc" => op_facet_rpc,
         "__facet_abort" => op_facet_abort,
         "__facet_delete" => op_facet_delete,
+        "__facet_fork" => op_facet_fork,
         "__do_call" => op_do_call,
         "__svc_call" => op_svc_call,
         "__svc_call_cancellable" => op_svc_call_cancellable,
@@ -8198,6 +8206,7 @@ fn facet_scope(class_name: &str, parent_scope: &str, owner: &str, name: &str) ->
 async fn open_facet_file(
     parent: &storage::StorageIdentity,
     name: &str,
+    engine: celld_ltx::Engine,
 ) -> Result<(std::path::PathBuf, bool), String> {
     let mut names = parent.facet_path.clone();
     names.push(name.to_string());
@@ -8218,6 +8227,7 @@ async fn open_facet_file(
         root: parent.root_scope.clone(),
         epoch: parent.epoch,
         names,
+        engine,
         reply,
     };
     sender
@@ -8237,6 +8247,27 @@ struct FacetStart {
     id_sc: Vec<u8>,
     props_sc: Vec<u8>,
     parent: storage::StorageIdentity,
+    /// The storage engine the startup options named (`celld.storage`).
+    engine: celld_ltx::Engine,
+}
+
+/// The engine a facet's startup options name: `"dolt"` or, by default,
+/// `"sqlite"`. The harness validated the value.
+fn facet_engine(scope: &mut v8::PinScope, value: v8::Local<v8::Value>) -> celld_ltx::Engine {
+    if value.is_string() && value.to_rust_string_lossy(scope) == "dolt" {
+        celld_ltx::Engine::Dolt
+    } else {
+        celld_ltx::Engine::Sqlite
+    }
+}
+
+/// Why a start of a facet that is open with one engine names the other.
+pub(crate) fn facet_engine_mismatch(asked: celld_ltx::Engine) -> String {
+    format!(
+        "this facet's storage engine is fixed when it is created; it is not a {} facet \
+         (FacetStartupOptions.celld.storage)",
+        asked.as_str()
+    )
 }
 
 /// A facet ready for one call, with what its reply must wait for.
@@ -8570,7 +8601,7 @@ async fn prepare_facet(host: FacetHost, start: FacetStart) -> Result<LoadedFacet
         None
     };
     let slot = host.slot().await?;
-    let file = open_facet_file(&start.parent, &start.name).await?;
+    let file = open_facet_file(&start.parent, &start.name, start.engine).await?;
     let mut names = start.parent.facet_path.clone();
     names.push(start.name.clone());
     let stream = crate::engine_api::facet_cell(&start.parent.root_scope, &names);
@@ -8594,8 +8625,9 @@ async fn prepare_facet(host: FacetHost, start: FacetStart) -> Result<LoadedFacet
                     start.id_sc,
                     start.props_sc,
                     file,
+                    start.engine,
                 )
-                .map_err(|error| format!("{error}"))
+                .map_err(|error| format!("{error:#}"))
         })
         .await
         .map_err(|error| format!("worker loader facet: {error}"))?;
@@ -8628,6 +8660,7 @@ fn op_facet_rpc(
     };
     let method = args.get(7).to_rust_string_lossy(scope);
     let call_args = view_bytes(args.get(8)).unwrap_or_default();
+    let engine = facet_engine(scope, args.get(9));
     let parent = match storage::storage_identity(&parent_scope) {
         Ok(Some(parent)) => parent,
         Ok(None) => {
@@ -8651,6 +8684,7 @@ fn op_facet_rpc(
                 id_sc,
                 props_sc,
                 parent,
+                engine,
             },
         )
         .await?;
@@ -8711,6 +8745,7 @@ fn op_facet_fetch(
     let url = args.get(7).to_rust_string_lossy(scope);
     let method = args.get(8).to_rust_string_lossy(scope);
     let stream_arg = args.get(11);
+    let engine = facet_engine(scope, args.get(12));
     let body = if stream_arg.is_number() {
         RequestBody::Stream(stream_arg.number_value(scope).unwrap_or(0.0) as u64)
     } else {
@@ -8755,6 +8790,7 @@ fn op_facet_fetch(
                 id_sc,
                 props_sc,
                 parent,
+                engine,
             },
         )
         .await?;
@@ -8891,7 +8927,8 @@ fn op_facet_delete(
     names.push(name);
     let async_id = asyncrt::enqueue(async move {
         let Some(sender) = FACET_TX.get() else {
-            let (path, _) = open_facet_file(&parent, names.last().unwrap()).await?;
+            let (path, _) =
+                open_facet_file(&parent, names.last().unwrap(), celld_ltx::Engine::Sqlite).await?;
             for suffix in ["", "-wal", "-shm"] {
                 let mut file = path.clone().into_os_string();
                 file.push(suffix);
@@ -8914,6 +8951,77 @@ fn op_facet_delete(
             .map_err(|_| "the facet delete was dropped".to_string())?
             .map_err(|error| format!("delete facet storage: {error:#}"))?;
         Ok(Vec::new())
+    });
+    rv.set(promise_for(scope, async_id));
+}
+
+/// `__facet_fork(parentScope, source, target, at)` — fork the Dolt facet
+/// `source` of this object into the new Dolt facet `target` (see
+/// `crate::dolt_cell::fork_facet_image`). Neither facet may be running in
+/// this parent; the harness holds the target's name until this settles.
+fn op_facet_fork(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let parent_scope = args.get(0).to_rust_string_lossy(scope);
+    let source = args.get(1).to_rust_string_lossy(scope);
+    let target = args.get(2).to_rust_string_lossy(scope);
+    let at = args.get(3);
+    let at = (at.is_string()).then(|| at.to_rust_string_lossy(scope));
+    let parent = match storage::storage_identity(&parent_scope) {
+        Ok(Some(parent)) => parent,
+        Ok(None) => {
+            return loader_throw(
+                scope,
+                "facets are available only inside a Durable Object event",
+            )
+        }
+        Err(error) => return loader_throw(scope, &error.to_string()),
+    };
+    if source == target {
+        return loader_throw(scope, "a facet cannot be forked onto itself");
+    }
+    let mut source_names = parent.facet_path.clone();
+    source_names.push(source.clone());
+    let mut target_names = parent.facet_path.clone();
+    target_names.push(target.clone());
+    let async_id = asyncrt::enqueue(async move {
+        let Some(sender) = FACET_TX.get() else {
+            // No replicator: the files sit beside the root's database.
+            let (source_path, _) =
+                open_facet_file(&parent, &source, celld_ltx::Engine::Dolt).await?;
+            let (target_path, _) =
+                open_facet_file(&parent, &target, celld_ltx::Engine::Dolt).await?;
+            let at = at.clone();
+            let bytes = asyncrt::blocking(move || -> anyhow::Result<u64> {
+                crate::dolt_cell::ensure_fork_target(&target_path, false)?;
+                let image = crate::dolt_cell::fork_facet_image(&source_path, &target_path, at.as_deref())?;
+                crate::dolt_cell::install_fork_image(&target_path, &image)?;
+                Ok(image.len() as u64)
+            })
+            .await
+            .map_err(|error| format!("fork facet: {error}"))?
+            .map_err(|error| format!("fork facet: {error:#}"))?;
+            return Ok(serde_json::json!({ "bytes": bytes }).to_string());
+        };
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        let request = FacetReq::Fork {
+            root: parent.root_scope,
+            epoch: parent.epoch,
+            source: source_names,
+            target: target_names,
+            at,
+            reply,
+        };
+        sender
+            .send(request)
+            .map_err(|_| "the facet channel closed".to_string())?;
+        let bytes = receive
+            .await
+            .map_err(|_| "the facet fork was dropped".to_string())?
+            .map_err(|error| format!("fork facet: {error:#}"))?;
+        Ok(serde_json::json!({ "bytes": bytes }).to_string())
     });
     rv.set(promise_for(scope, async_id));
 }

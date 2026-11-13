@@ -68,6 +68,7 @@ impl FacetStreams {
         root: &str,
         epoch: u64,
         names: &[String],
+        engine: celld_ltx::Engine,
     ) -> anyhow::Result<(PathBuf, bool)> {
         let facet = crate::engine_api::facet_cell(root, names);
         let path = db_path(&facet, epoch);
@@ -111,7 +112,7 @@ impl FacetStreams {
                 }
                 let (restored_path, restored, _) =
                     replication
-                        .restore(&facet, &spec, false, celld_ltx::Engine::Sqlite)
+                        .restore(&facet, &spec, false, engine)
                         .await?;
                 anyhow::ensure!(
                     restored_path == path,

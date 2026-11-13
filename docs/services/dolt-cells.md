@@ -48,6 +48,7 @@ Every method is synchronous, like `ctx.storage.sql`, and throws on failure.
 | `checkout(name, { create? })` | switches the object to `name` (creating it first with `create`) |
 | `reset({ hard?, to? })` | resets the current branch to `to` (default `HEAD`); returns the new `HEAD` hash |
 | `merge(name, { message? })` | `{ hash, conflicts: [] }`, or `{ hash: null, conflicts: [{ table, conflicts }] }` |
+| `merge(name, { message, author?, date?, resolve, fastForward? })` | merges and resolves conflicts inside the merge's own transaction: see [Merge with a resolver](#merge-with-a-resolver). `{ hash, conflicts: [], fastForward, upToDate, resolved }` |
 | `log({ limit? })` | `[{ hash, committer, email, date, message }]`, newest first |
 | `diff({ from, to?, table? })` | `{ summary, patch }`: the changed tables and the SQL statements that turn `from` into `to` (`to` defaults to the working set) |
 | `hashOf(ref)` | the commit hash of a branch, tag, hash, or `HEAD~n` |
@@ -56,6 +57,74 @@ Every method is synchronous, like `ctx.storage.sql`, and throws on failure.
 | `execute(program, context, { log? })` | runs one deterministic program (Chronolog Spec 10) as its own transaction: `{ outcome: "accepted" }` or `{ outcome: "rejected", code, statementIndex }`. `context` is `{ nowMs, seed, actor?, schemaAdmin?, limits? }`; `'now'`, `random()`, `localtime` and the actor are pinned for the program. With `log: { sql, bindings? }`, that statement runs after the program in the same transaction, as application SQL, and may name `:outcome`, `:rejection_code` and `:failing_statement_index`. An operational failure throws |
 | `query(sql, bindings?, { limits?, maxRows? })` | one read-only statement under the local-read profile and a step budget, `{ columns, rows }` with exact storage classes: INTEGER is a `bigint`, REAL a number, BLOB a `Uint8Array`. A refusal throws an error whose `code` is `SQL_PROFILE_VIOLATION`, `SQL_STEP_LIMIT`, `SQL_RESULT_LIMIT`, ... |
 | `engineDigest()` | the digest of the engine build and execution profile; it changes whenever execution semantics could |
+
+### Merge with a resolver
+
+`merge(name, { resolve })` merges `name` into the checked-out branch and lets
+the application resolve what conflicts, inside one transaction, with no merge
+session left between events:
+
+```js
+const result = ctx.storage.dolt.merge("feature", {
+  message: "Merge feature",
+  author: "Ann <ann@example.com>",   // optional
+  date: 1700000000000,               // optional, pins the commit time
+  resolve(merge) {
+    for (const row of merge.conflicts) {
+      // row.table, row.key ({ id: 1 }), row.base / row.ours / row.theirs
+      // (the row as { column: value }, or null where that side has none),
+      // row.ourChange / row.theirChange ("added" | "modified" | "removed")
+      if (row.table === "notes" && row.theirs !== null) {
+        ctx.storage.sql.exec("UPDATE notes SET body = ? WHERE id = ?",
+          merge3(row.base.body, row.ours.body, row.theirs.body), row.key.id);
+        row.resolve();            // I wrote the row with SQL
+      } else {
+        row.keepOurs();           // or row.takeTheirs()
+      }
+    }
+    for (const violation of merge.violations) {
+      // violation.table, .type ("unique index", "foreign key", ...), .info, .row
+      ctx.storage.sql.exec("UPDATE notes SET slug = slug || '-2' WHERE id = ?", violation.row.id);
+      violation.resolve();
+    }
+  },
+});
+// { hash, conflicts: [], fastForward: false, upToDate: false,
+//   resolved: { conflicts: 2, violations: 1 } }
+```
+
+What happens:
+
+1. `dolt_merge --no-commit` runs inside a transaction. Rows that changed on one
+   side only are merged by the engine (including different columns of one
+   row); a merge Dolt can finish needs no resolver and `resolve` is still
+   called once, with empty lists, so the application can add its own rows.
+   A **fast-forward** or an **up-to-date** merge makes no merge commit and
+   does not call `resolve` (`fastForward: false` forces a merge commit).
+2. `resolve(merge)` is called once, synchronously, with `merge.conflicts` (every
+   conflicting row of every table), `merge.violations` (every constraint
+   violation the merge produced) and the hashes `merge.ours`, `merge.theirs`
+   and `merge.base`. It may write rows with `ctx.storage.sql`, read the
+   conflict tables (`dolt_conflicts_<table>`), and read the other branch
+   with `dolt_at_<table>('branch')` (see [Reading history](#reading-history)).
+   Values keep their storage class (an INTEGER beyond 2^53 is a `bigint`, a BLOB
+   a `Uint8Array`).
+3. It **must answer every row**: `conflict.resolve()` (the row is as it
+   should be), `conflict.keepOurs()` (the same, for ours), `conflict.takeTheirs()`
+   (their row replaces ours, their deletion deletes ours) and
+   `violation.resolve()`. A row left unanswered makes the merge fail.
+4. celld then clears the conflict and violation tables, checks that nothing is
+   outstanding, and makes **one merge commit with both parents**
+   (`message`, `author` and `date` as in `commit`), in the same root record as
+   the resolver's writes (see the previous section).
+
+If `resolve` throws, returns a promise, or leaves a row unanswered, or if
+anything else fails, **everything rolls back**: the resolver's rows, the merge
+state, the conflicts. The branch and its working set are as they were, and the
+merge can be run again. Schema conflicts (the two sides changed one table's
+schema differently) cannot be resolved by a row resolver and fail the merge.
+The resolver sees at most 100 000 conflicting rows and violations; a merge with
+more fails. The call is a transaction of its own and throws inside another.
 
 ### Commit at the end of a transaction
 
@@ -131,10 +200,12 @@ after a SQL `INSERT`. Read methods behave like a SQL `SELECT`.
 To make writes and commit one step, give the transaction
 [`{ commit }`](#commit-at-the-end-of-a-transaction).
 
-**Merge conflicts never commit.** A merge runs in a transaction. When it
+**Merge conflicts never commit.** `merge(name)` runs in a transaction. When it
 conflicts, the transaction rolls back, the branch is unchanged, and the result
 names the conflicting tables. Resolve on a branch (for example, update the
-rows so they agree) and merge again.
+rows so they agree) and merge again, or merge with a
+[resolver](#merge-with-a-resolver), which resolves inside the merge's own
+transaction.
 
 **Checkout persists.** The checked-out branch survives a restart, an eviction,
 a takeover, and a restore. An object starts on `main`.

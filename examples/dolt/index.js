@@ -33,6 +33,10 @@ export class Repo {
         this.sql.exec("UPDATE notes SET body = ? WHERE id = ?", q("body", ""), Number(q("id", "1")));
         return Response.json({ branch: dolt.branch.current(), notes: this.notes() });
       }
+      case "delete": {
+        this.sql.exec("DELETE FROM notes WHERE id = ?", Number(q("id", "1")));
+        return Response.json({ branch: dolt.branch.current(), notes: this.notes() });
+      }
       case "notes":
         return Response.json({ branch: dolt.branch.current(), notes: this.notes() });
       case "commit": {
@@ -188,6 +192,63 @@ export class Repo {
           return Response.json({ error: null });
         } catch (error) {
           return Response.json({ error: String(error.message), log: dolt.log({ limit: 1 }) });
+        }
+      }
+      case "merge-resolve": {
+        // dolt.merge(name, { resolve }): conflicts are resolved inside the
+        // merge's own transaction, then one merge commit.
+        const mode = q("mode", "sql");
+        let seen = null;
+        try {
+          const result = dolt.merge(q("name"), {
+            message: q("message", "merge"),
+            author: q("author", undefined) ?? undefined,
+            date: q("date") == null ? undefined : Number(q("date")),
+            fastForward: q("ff") !== "0",
+            resolve: (merge) => {
+              seen = {
+                branch: merge.branch,
+                conflicts: merge.conflicts.map(({ table, key, base, ours, theirs, ourChange, theirChange }) =>
+                  ({ table, key, base, ours, theirs, ourChange, theirChange })),
+                violations: merge.violations.map(({ table, type, row }) => ({ table, type, row })),
+                // The conflicts are readable through plain SQL, and not writable.
+                sqlConflicts: this.sql.exec("SELECT count(*) AS n FROM dolt_conflicts_notes").one().n,
+              };
+              try {
+                this.sql.exec("DELETE FROM dolt_conflicts_notes");
+                seen.sqlWrite = "allowed";
+              } catch (error) {
+                seen.sqlWrite = "denied";
+              }
+              if (mode === "throw") {
+                this.sql.exec("UPDATE notes SET body = 'half resolved'");
+                throw new Error("declined");
+              }
+              if (mode === "leave") return;
+              if (mode === "async") return Promise.resolve();
+              for (const conflict of merge.conflicts) {
+                if (mode === "theirs") conflict.takeTheirs();
+                else if (mode === "ours") conflict.keepOurs();
+                else {
+                  this.sql.exec(
+                    "UPDATE notes SET body = ? WHERE id = ?",
+                    `${conflict.ours?.body} + ${conflict.theirs?.body}`, conflict.key.id);
+                  conflict.resolve();
+                }
+              }
+              for (const violation of merge.violations) violation.resolve();
+            },
+          });
+          return Response.json({ result, seen, notes: this.notes(), status: dolt.status(), log: dolt.log({ limit: 3 }) });
+        } catch (error) {
+          return Response.json({
+            error: String(error.message),
+            seen,
+            notes: this.notes(),
+            status: dolt.status(),
+            head: dolt.hashOf("HEAD"),
+            openConflicts: this.sql.exec("SELECT * FROM dolt_conflicts").toArray(),
+          });
         }
       }
       case "sql-versioning": {

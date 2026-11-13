@@ -1519,15 +1519,74 @@ class DoltStorage {
   reset(options = {}) {
     return this._op("reset", { hard: !!options.hard, to: options.to == null ? null : String(options.to) });
   }
+  // merge(name, { message? }) merges and, on a conflict, rolls back and
+  // reports the conflicting tables: { hash, conflicts: [{ table, conflicts }] }.
+  //
+  // merge(name, { message, author?, date?, resolve(merge), fastForward? })
+  // resolves inside the merge's own transaction instead. The merge adopts
+  // what changed on one side only; `resolve` is called once, synchronously,
+  // with every conflicting row and constraint violation of the rest, and may
+  // write rows through `ctx.storage.sql`. It must answer every one (row.
+  // resolve(), takeTheirs() or keepOurs() on a conflict, resolve() on a
+  // violation). Then one merge commit with both parents is made and the
+  // result is { hash, conflicts: [], fastForward, upToDate, resolved }. A
+  // throw from `resolve`, an unanswered row, or any other failure rolls the
+  // whole merge back, rows written and merge state included.
   merge(branch, options = {}) {
     if (branch !== null && typeof branch === "object") {
       options = branch;
       branch = options.branch;
     }
+    if (typeof options.resolve === "function") return this._mergeResolving(String(branch), options);
+    if (options.resolve !== undefined)
+      throw new TypeError("dolt.merge: `resolve` must be a function.");
     return this._op("merge", {
       branch: String(branch),
       message: options.message == null ? null : String(options.message),
     });
+  }
+  _mergeResolving(branch, options) {
+    const storage = this._storage;
+    const root = storage._transactionRoot;
+    if (storage._transactionControl || root._activeSyncTransaction !== null ||
+        root._activeTransaction !== null)
+      throw new Error(
+        "ctx.storage.dolt.merge with resolve is a transaction of its own; it cannot run inside another");
+    const commit = __doltCommitArgs({
+      message: options.message ?? "Merge " + branch,
+      author: options.author,
+      date: options.date,
+    });
+    if (commit.message === "") throw new TypeError("dolt.merge needs a non-empty message.");
+    let outcome = null;
+    storage.transactionSync(() => {
+      const begin = storage._doltTransactionOp("mergeBegin", {
+        branch, fastForward: options.fastForward !== false,
+      });
+      if (begin.state !== "merging") {
+        outcome = { fastForward: begin.state === "fastForward", upToDate: begin.state === "upToDate",
+                    resolved: { conflicts: 0, violations: 0 } };
+        return;
+      }
+      if (begin.schemaConflicts.length !== 0)
+        throw new Error(
+          "dolt.merge: schema conflicts in " + begin.schemaConflicts.join(", ") +
+          " cannot be resolved by a row resolver");
+      const session = new DoltMerge(storage, branch, begin);
+      let returned;
+      try {
+        returned = options.resolve(session);
+      } finally {
+        session._closed = true;
+      }
+      if (returned !== undefined && returned !== null && typeof returned.then === "function")
+        throw new TypeError(
+          "dolt.merge: `resolve` must be synchronous; it runs inside the merge's transaction");
+      session._finish();
+      outcome = { fastForward: false, upToDate: false,
+                  resolved: { conflicts: session.conflicts.length, violations: session.violations.length } };
+    }, { commit: () => (outcome !== null && !outcome.fastForward && !outcome.upToDate ? commit : null) });
+    return { hash: this.hashOf("HEAD"), conflicts: [], ...outcome };
   }
   log(options = {}) {
     return this._op("log", { limit: options.limit == null ? 100 : Number(options.limit) });
@@ -1618,6 +1677,101 @@ function __doltCommitArgs(options) {
     allowEmpty: !!options.allowEmpty,
   };
 }
+// The values of a merge's rows keep their storage class: an INTEGER beyond
+// 2^53 is a bigint, a BLOB a Uint8Array.
+function __doltMergeValue(value) {
+  if (value !== null && typeof value === "object") {
+    if ("__celld_int" in value) return BigInt(value.__celld_int);
+    if ("__celld_real" in value) return Number(value.__celld_real);
+    if ("__celld_blob" in value) return __doltBytesFromBase64Url(value.__celld_blob);
+  }
+  return value;
+}
+function __doltMergeRow(row) {
+  if (row === null) return null;
+  const out = {};
+  for (const [column, value] of Object.entries(row)) out[column] = __doltMergeValue(value);
+  return out;
+}
+function __doltBytesFromBase64Url(text) {
+  const binary = atob(text.replace(/-/g, "+").replace(/_/g, "/"));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+// What a merge's resolver sees (`dolt.merge(name, { resolve })`).
+class DoltMergeConflict {
+  constructor(merge, raw) {
+    this._merge = merge;
+    this._id = raw.id;
+    this.table = raw.table;
+    this.key = __doltMergeRow(raw.key);
+    this.base = __doltMergeRow(raw.base);
+    this.ours = __doltMergeRow(raw.ours);
+    this.theirs = __doltMergeRow(raw.theirs);
+    // How each side changed the row: "added", "modified" or "removed".
+    this.ourChange = raw.ourChange;
+    this.theirChange = raw.theirChange;
+    this.resolved = false;
+  }
+  // The row is as it should be: the resolver wrote it, or ours stands.
+  resolve() {
+    this._merge._open();
+    this.resolved = true;
+  }
+  keepOurs() { this.resolve(); }
+  // Take their side: their row replaces ours, or the row is deleted when
+  // they deleted it.
+  takeTheirs() {
+    this._merge._open();
+    this._merge._storage._doltTransactionOp("mergeTake", { table: this.table, id: this._id });
+    this.resolved = true;
+  }
+}
+class DoltMergeViolation {
+  constructor(merge, raw) {
+    this._merge = merge;
+    this.table = raw.table;
+    // "unique index", "foreign key", "check constraint", ...
+    this.type = raw.type;
+    this.info = raw.info;
+    this.row = __doltMergeRow(raw.row);
+    this.resolved = false;
+  }
+  // The violation is fixed (the resolver changed the rows) or accepted.
+  resolve() {
+    this._merge._open();
+    this.resolved = true;
+  }
+}
+class DoltMerge {
+  constructor(storage, branch, begin) {
+    this._storage = storage;
+    this._closed = false;
+    this.branch = branch;
+    // Commit hashes: our head, theirs, and the merge base.
+    this.ours = begin.ours;
+    this.theirs = begin.theirs;
+    this.base = begin.base;
+    this.conflicts = begin.conflicts.map((raw) => new DoltMergeConflict(this, raw));
+    this.violations = begin.violations.map((raw) => new DoltMergeViolation(this, raw));
+  }
+  _open() {
+    if (this._closed) throw new Error("the merge's resolver has returned; its rows can no longer be answered");
+  }
+  _finish() {
+    const open = this.conflicts.filter((c) => !c.resolved).length
+      + this.violations.filter((v) => !v.resolved).length;
+    if (open !== 0)
+      throw new Error(
+        "dolt.merge: the resolver left " + open + " conflicts or violations unanswered; the merge is rolled back");
+    const tables = (rows) => [...new Set(rows.map((row) => row.table))];
+    this._storage._doltTransactionOp("mergeFinish", {
+      conflictTables: tables(this.conflicts),
+      violationTables: tables(this.violations),
+    });
+  }
+}
 function __doltStatement(step, what) {
   if (typeof step === "string") step = { sql: step };
   if (!step || typeof step.sql !== "string")
@@ -1637,12 +1791,7 @@ function __doltUntagValue({ t, v }) {
     case "int": return BigInt(v);
     case "real": return typeof v === "number" ? v : Number(v);
     case "text": return v;
-    case "blob": {
-      const binary = atob(v.replace(/-/g, "+").replace(/_/g, "/"));
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      return bytes;
-    }
+    case "blob": return __doltBytesFromBase64Url(v);
     default: throw new TypeError("dolt.query: unknown value type " + t);
   }
 }

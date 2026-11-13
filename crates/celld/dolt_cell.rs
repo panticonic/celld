@@ -314,13 +314,13 @@ pub(crate) fn changes_schema(op: &str) -> bool {
 /// Whether an operation that runs inside the caller's open transaction
 /// ([`run_in_transaction`]) can change the store.
 pub(crate) fn mutates_in_transaction(op: &str) -> bool {
-    matches!(op, "txCommit")
+    matches!(op, "txCommit" | "mergeBegin" | "mergeTake" | "mergeFinish")
 }
 
 /// Whether an operation that runs inside the caller's open transaction can
 /// change the schema the connection sees.
-pub(crate) fn changes_schema_in_transaction(_op: &str) -> bool {
-    false
+pub(crate) fn changes_schema_in_transaction(op: &str) -> bool {
+    matches!(op, "mergeBegin")
 }
 
 /// Run one operation inside the caller's open storage transaction, with the
@@ -340,8 +340,354 @@ pub(crate) fn run_in_transaction(
 ) -> anyhow::Result<Value> {
     match op {
         "txCommit" => commit(connection, args),
+        "mergeBegin" => merge_begin(connection, args),
+        "mergeTake" => merge_take(connection, args),
+        "mergeFinish" => merge_finish(connection, args),
         other => bail!("dolt operation {other:?} cannot run inside a storage transaction"),
     }
+}
+
+/// A SQLite value as JSON that keeps its storage class exact for the
+/// harness: an INTEGER beyond 2^53, a non-finite REAL and a BLOB cannot be
+/// plain JSON numbers.
+fn exact_json(value: rusqlite::types::Value) -> Value {
+    use base64::Engine as _;
+    match value {
+        rusqlite::types::Value::Null => Value::Null,
+        rusqlite::types::Value::Integer(n) if n.unsigned_abs() <= 1 << 53 => json!(n),
+        rusqlite::types::Value::Integer(n) => json!({ "__celld_int": n.to_string() }),
+        rusqlite::types::Value::Real(f) if f.is_finite() => json!(f),
+        rusqlite::types::Value::Real(f) => json!({ "__celld_real": f.to_string() }),
+        rusqlite::types::Value::Text(text) => Value::String(text),
+        rusqlite::types::Value::Blob(bytes) => json!({
+            "__celld_blob": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
+        }),
+    }
+}
+
+fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// The most rows of conflicts and violations one merge hands a resolver.
+const MAX_MERGE_ITEMS: usize = 100_000;
+
+fn table_names(connection: &Connection, sql: &str) -> anyhow::Result<Vec<String>> {
+    let mut statement = connection.prepare(sql)?;
+    let names = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(names)
+}
+
+fn primary_key(connection: &Connection, table: &str) -> anyhow::Result<Vec<String>> {
+    let mut statement = connection
+        .prepare("SELECT name FROM pragma_table_info(?1) WHERE pk > 0 ORDER BY pk")?;
+    let names = statement
+        .query_map([table], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(names)
+}
+
+/// Which side of a conflict a `dolt_conflicts_<t>` column belongs to
+/// (0 base, 1 ours, 2 theirs) and the table column it holds.
+fn conflict_side(name: &str) -> Option<(usize, &str)> {
+    if name == "our_diff_type" || name == "their_diff_type" {
+        return None;
+    }
+    ["base_", "our_", "their_"]
+        .iter()
+        .enumerate()
+        .find_map(|(side, prefix)| name.strip_prefix(prefix).map(|column| (side, column)))
+}
+
+/// The conflicting rows of `table`, from `dolt_conflicts_<table>`: its
+/// `base_*`, `our_*` and `their_*` columns folded back into one row each.
+fn conflict_rows(connection: &Connection, table: &str, budget: &mut usize) -> anyhow::Result<Vec<Value>> {
+    let key_columns = primary_key(connection, table)?;
+    let mut statement =
+        connection.prepare(&format!("SELECT * FROM {}", quote_ident(&format!("dolt_conflicts_{table}"))))?;
+    let names: Vec<String> = statement.column_names().iter().map(|name| name.to_string()).collect();
+    let index_of = |wanted: &str| names.iter().position(|name| name == wanted);
+    let (our_change, their_change, id) =
+        (index_of("our_diff_type"), index_of("their_diff_type"), index_of("dolt_conflict_id"));
+    let mut out = Vec::new();
+    let mut cursor = statement.query([])?;
+    while let Some(row) = cursor.next()? {
+        anyhow::ensure!(
+            *budget > 0,
+            "merge has more than {MAX_MERGE_ITEMS} conflicting rows and violations; \
+             it cannot be resolved in one transaction"
+        );
+        *budget -= 1;
+        let text = |index: Option<usize>| -> anyhow::Result<Option<String>> {
+            match index {
+                Some(index) => Ok(row.get::<_, Option<String>>(index)?),
+                None => Ok(None),
+            }
+        };
+        let our = text(our_change)?;
+        let their = text(their_change)?;
+        let mut sides: [serde_json::Map<String, Value>; 3] = Default::default();
+        for (index, name) in names.iter().enumerate() {
+            if let Some((side, column)) = conflict_side(name) {
+                sides[side].insert(column.to_string(), exact_json(row.get(index)?));
+            }
+        }
+        let absent = [
+            our.as_deref() == Some("added") && their.as_deref() == Some("added"),
+            our.as_deref() == Some("removed"),
+            their.as_deref() == Some("removed"),
+        ];
+        let [base, ours, theirs] = sides;
+        let present = |map: serde_json::Map<String, Value>, absent: bool| {
+            if absent {
+                Value::Null
+            } else {
+                Value::Object(map)
+            }
+        };
+        let (base, ours, theirs) =
+            (present(base, absent[0]), present(ours, absent[1]), present(theirs, absent[2]));
+        let from = [&ours, &theirs, &base].into_iter().find(|side| !side.is_null());
+        let mut key = serde_json::Map::new();
+        if let Some(Value::Object(from)) = from {
+            for column in &key_columns {
+                if let Some(value) = from.get(column) {
+                    key.insert(column.clone(), value.clone());
+                }
+            }
+        }
+        out.push(json!({
+            "table": table,
+            "id": text(id)?,
+            "key": key,
+            "base": base,
+            "ours": ours,
+            "theirs": theirs,
+            "ourChange": our,
+            "theirChange": their,
+        }));
+    }
+    Ok(out)
+}
+
+/// The constraint violations of `table`, from
+/// `dolt_constraint_violations_<table>`.
+fn violation_rows(connection: &Connection, table: &str, budget: &mut usize) -> anyhow::Result<Vec<Value>> {
+    let mut statement = connection.prepare(&format!(
+        "SELECT * FROM {}",
+        quote_ident(&format!("dolt_constraint_violations_{table}"))
+    ))?;
+    let names: Vec<String> = statement.column_names().iter().map(|name| name.to_string()).collect();
+    let mut out = Vec::new();
+    let mut cursor = statement.query([])?;
+    while let Some(row) = cursor.next()? {
+        anyhow::ensure!(
+            *budget > 0,
+            "merge has more than {MAX_MERGE_ITEMS} conflicting rows and violations; \
+             it cannot be resolved in one transaction"
+        );
+        *budget -= 1;
+        let mut data = serde_json::Map::new();
+        let mut kind = Value::Null;
+        let mut info = Value::Null;
+        for (index, name) in names.iter().enumerate() {
+            let value = exact_json(row.get(index)?);
+            match name.as_str() {
+                "violation_type" => kind = value,
+                "violation_info" => {
+                    // Dolt writes the details as a JSON document.
+                    info = match &value {
+                        Value::String(text) => serde_json::from_str(text).unwrap_or(value.clone()),
+                        _ => value,
+                    }
+                }
+                _ => {
+                    data.insert(name.clone(), value);
+                }
+            }
+        }
+        out.push(json!({ "table": table, "type": kind, "info": info, "row": data }));
+    }
+    Ok(out)
+}
+
+/// `dolt.merge(branch, { resolve })`, step one, inside the merge's own
+/// transaction: `dolt_merge --no-commit`. A merge that cannot be finished
+/// without the resolver (conflicts, constraint violations) is not an error
+/// here: its state stays in the open transaction, where DoltLite keeps it
+/// (`dolt_conflicts_<t>`, `dolt_constraint_violations_<t>`), and is
+/// reported. Answers
+///
+/// ```json
+/// { "state": "upToDate" | "fastForward" | "merging",
+///   "hash": "<HEAD, for the first two>", "ours": "<hash>", "theirs": "<hash>",
+///   "base": "<merge base or null>",
+///   "conflicts": [{ "table", "id", "key", "base", "ours", "theirs", "ourChange", "theirChange" }],
+///   "violations": [{ "table", "type", "info", "row" }],
+///   "schemaConflicts": ["<table>"] }
+/// ```
+fn merge_begin(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
+    let branch = revision(&args["branch"], "branch")?;
+    let ours = hash_of(connection, "HEAD")?;
+    let theirs = hash_of(connection, &branch)?;
+    let mut call_args = vec![branch.clone(), "--no-commit".to_string()];
+    if args.get("fastForward").and_then(Value::as_bool) == Some(false) {
+        call_args.push("--no-ff".to_string());
+    }
+    let merged = call(connection, "dolt_merge", &call_args);
+    let mut conflict_tables = Vec::new();
+    let mut violation_tables = Vec::new();
+    let mut schema_conflicts = Vec::new();
+    let state = match merged {
+        Ok(Value::String(text)) if text == "Already up to date" => "upToDate",
+        Ok(Value::String(hash)) if hash.len() == 40 => "fastForward",
+        Ok(_) => "merging",
+        Err(error) => {
+            let message = format!("{error:#}");
+            if !(message.contains("conflict") || message.contains("constraint violations")) {
+                return Err(error);
+            }
+            "merging"
+        }
+    };
+    if state == "merging" {
+        conflict_tables = table_names(connection, "SELECT \"table\" FROM dolt_conflicts ORDER BY 1")?;
+        violation_tables =
+            table_names(connection, "SELECT \"table\" FROM dolt_constraint_violations ORDER BY 1")?;
+        schema_conflicts = table_names(connection, "SELECT \"table\" FROM dolt_schema_conflicts ORDER BY 1")
+            .unwrap_or_default();
+    }
+    let mut budget = MAX_MERGE_ITEMS;
+    let mut conflicts = Vec::new();
+    for table in &conflict_tables {
+        conflicts.extend(conflict_rows(connection, table, &mut budget)?);
+    }
+    let mut violations = Vec::new();
+    for table in &violation_tables {
+        violations.extend(violation_rows(connection, table, &mut budget)?);
+    }
+    let base = match call(connection, "dolt_merge_base", &["HEAD".to_string(), theirs.clone()]) {
+        Ok(Value::String(hash)) if !hash.is_empty() => Value::String(hash),
+        _ => Value::Null,
+    };
+    Ok(json!({
+        "state": state,
+        "hash": if state == "merging" { Value::Null } else { Value::String(hash_of(connection, "HEAD")?) },
+        "ours": ours,
+        "theirs": theirs,
+        "base": base,
+        "conflicts": conflicts,
+        "violations": violations,
+        "schemaConflicts": schema_conflicts,
+    }))
+}
+
+/// `conflict.takeTheirs()`: write their side of one conflicting row into
+/// the table (their row, or the deletion of ours when they deleted it),
+/// through SQL so every value keeps its storage class. The conflict itself
+/// is cleared with the others by `mergeFinish`.
+fn merge_take(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
+    let table = args["table"].as_str().ok_or_else(|| anyhow!("table must be a string"))?;
+    let id = args["id"].as_str().ok_or_else(|| anyhow!("id must be a string"))?;
+    let conflicts = quote_ident(&format!("dolt_conflicts_{table}"));
+    let their_change: Option<String> = connection
+        .query_row(
+            &format!("SELECT their_diff_type FROM {conflicts} WHERE dolt_conflict_id = ?1"),
+            [id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| anyhow!("{table} has no conflict {id:?}"))?;
+    let columns = table_names(
+        connection,
+        &format!("SELECT name FROM pragma_table_info({}) ORDER BY cid", sql_string(table)),
+    )?;
+    let key = primary_key(connection, table)?;
+    anyhow::ensure!(!columns.is_empty(), "{table} has no columns");
+    let target = quote_ident(table);
+    if their_change.as_deref() == Some("removed") {
+        anyhow::ensure!(
+            !key.is_empty(),
+            "{table} has no primary key: delete the row with SQL and mark the conflict resolved"
+        );
+        // Their side deleted it: delete the row the working set holds, which
+        // is ours (or what is left of it).
+        let matches = key
+            .iter()
+            .map(|column| {
+                let (ours, base) =
+                    (quote_ident(&format!("our_{column}")), quote_ident(&format!("base_{column}")));
+                format!(
+                    "{target}.{column} IS (SELECT coalesce({ours}, {base}) FROM {conflicts} \
+                     WHERE dolt_conflict_id = ?1)",
+                    column = quote_ident(column),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        connection.execute(&format!("DELETE FROM {target} WHERE {matches}"), [id])?;
+    } else {
+        let names = columns.iter().map(|column| quote_ident(column)).collect::<Vec<_>>().join(", ");
+        let theirs = columns
+            .iter()
+            .map(|column| quote_ident(&format!("their_{column}")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        connection.execute(
+            &format!(
+                "INSERT OR REPLACE INTO {target}({names}) \
+                 SELECT {theirs} FROM {conflicts} WHERE dolt_conflict_id = ?1"
+            ),
+            [id],
+        )?;
+    }
+    Ok(Value::Null)
+}
+
+fn sql_string(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
+}
+
+/// Step two: the resolver is done. Every conflict and violation row it was
+/// handed was answered (the harness checks that, row by row), so the
+/// conflict and violation tables are cleared here, with whatever rows the
+/// resolver wrote left in place, and what remains must be empty before the
+/// merge commits: a merge cannot commit with either one outstanding.
+fn merge_finish(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
+    let names = |key: &str| -> anyhow::Result<Vec<String>> {
+        args[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|name| {
+                name.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| anyhow!("{key} must be table names"))
+            })
+            .collect()
+    };
+    for table in names("conflictTables")? {
+        connection.execute_batch(&format!(
+            "DELETE FROM {}",
+            quote_ident(&format!("dolt_conflicts_{table}"))
+        ))?;
+    }
+    for table in names("violationTables")? {
+        connection.execute_batch(&format!(
+            "DELETE FROM {}",
+            quote_ident(&format!("dolt_constraint_violations_{table}"))
+        ))?;
+    }
+    let left: i64 = connection.query_row(
+        "SELECT (SELECT coalesce(sum(num_conflicts), 0) FROM dolt_conflicts) \
+         + (SELECT coalesce(sum(num_violations), 0) FROM dolt_constraint_violations)",
+        [],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(left == 0, "the merge still has {left} unresolved conflicts or violations");
+    Ok(Value::Null)
 }
 
 /// Run one `ctx.storage.dolt` operation. The caller holds the cell's
@@ -984,6 +1330,270 @@ mod tests {
         let error = run_in_transaction(&c, "txCommit", &json!({"message": "empty"})).unwrap_err();
         assert!(format!("{error:#}").contains("nothing to commit"), "{error:#}");
         c.execute_batch("ROLLBACK").unwrap();
+    }
+
+    /// A cell with `t(a PRIMARY KEY, b, c UNIQUE)` whose `main` and `other`
+    /// both changed row 1 (a conflict), added a row with the same `c` (a
+    /// unique violation), and where `other` deleted row 2 that `main` edited
+    /// (a modify/delete conflict).
+    fn diverged(dir: &std::path::Path) -> (String, Connection) {
+        let (path, c) = cell(dir);
+        c.execute_batch(
+            "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c TEXT UNIQUE); \
+             INSERT INTO t VALUES (1,'x','u1'),(2,'y','u2'),(5,'z','u5');",
+        )
+        .unwrap();
+        run(&c, "commit", &json!({"message": "base"})).unwrap();
+        run(&c, "branchCreate", &json!({"name": "other"})).unwrap();
+        c.execute_batch(
+            "UPDATE t SET b='main' WHERE a=1; UPDATE t SET b='main2' WHERE a=2; \
+             INSERT INTO t VALUES (3,'m3','dup'); UPDATE t SET b='only-main' WHERE a=5;",
+        )
+        .unwrap();
+        run(&c, "commit", &json!({"message": "main side", "date": 1_700_000_000_000_i64})).unwrap();
+        run(&c, "checkout", &json!({"branch": "other"})).unwrap();
+        c.execute_batch(
+            "UPDATE t SET b='other' WHERE a=1; DELETE FROM t WHERE a=2; \
+             INSERT INTO t VALUES (4,'o4','dup');",
+        )
+        .unwrap();
+        run(&c, "commit", &json!({"message": "other side", "date": 1_700_000_001_000_i64})).unwrap();
+        run(&c, "checkout", &json!({"branch": "main"})).unwrap();
+        (path, c)
+    }
+
+    /// F1: the steps `dolt.merge(branch, { resolve })` is made of.
+    #[test]
+    fn merge_with_a_resolver_commits_one_two_parent_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, c) = diverged(dir.path());
+        let main_head = run(&c, "hashOf", &json!({"ref": "HEAD"})).unwrap();
+        let other_head = run(&c, "hashOf", &json!({"ref": "other"})).unwrap();
+
+        c.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let begin = run_in_transaction(&c, "mergeBegin", &json!({"branch": "other"})).unwrap();
+        assert_eq!(begin["state"], "merging", "{begin}");
+        assert_eq!(begin["ours"], main_head);
+        assert_eq!(begin["theirs"], other_head);
+        assert!(begin["base"].is_string());
+        let conflicts = begin["conflicts"].as_array().unwrap();
+        let by_key = |key: i64| {
+            conflicts.iter().find(|c| c["key"] == json!({ "a": key })).unwrap_or_else(|| panic!("{begin}"))
+        };
+        let both_edited = by_key(1);
+        assert_eq!(both_edited["table"], "t");
+        assert_eq!(both_edited["base"]["b"], "x");
+        assert_eq!(both_edited["ours"]["b"], "main");
+        assert_eq!(both_edited["theirs"]["b"], "other");
+        assert_eq!(both_edited["ourChange"], "modified");
+        // Their side deleted the row our side edited.
+        let deleted = by_key(2);
+        assert_eq!(deleted["ours"]["b"], "main2");
+        assert!(deleted["theirs"].is_null(), "{deleted}");
+        assert_eq!(deleted["theirChange"], "removed");
+        // Row 5 changed on one side only: merged without a conflict.
+        assert_eq!(conflicts.len(), 2, "{begin}");
+        let violations = begin["violations"].as_array().unwrap();
+        assert_eq!(violations.len(), 2, "{begin}");
+        assert_eq!(violations[0]["table"], "t");
+        assert_eq!(violations[0]["type"], "unique index");
+        assert_eq!(violations[0]["info"]["Columns"], json!(["c"]));
+        assert!(violations.iter().any(|v| v["row"]["a"] == 3 && v["row"]["b"] == "m3"));
+        assert!(violations.iter().any(|v| v["row"]["a"] == 4 && v["row"]["b"] == "o4"));
+        assert_eq!(begin["schemaConflicts"], json!([]));
+
+        // The resolver reads the system tables under the application authorizer
+        // in the cell; here it writes rows, as the callback would.
+        let finish = run_in_transaction(
+            &c,
+            "mergeFinish",
+            &json!({"conflictTables": ["t"], "violationTables": []}),
+        );
+        assert!(
+            format!("{:#}", finish.unwrap_err()).contains("unresolved"),
+            "violations left must stop the merge"
+        );
+        c.execute_batch(
+            "UPDATE t SET b='resolved' WHERE a=1; DELETE FROM t WHERE a=2; UPDATE t SET c='fixed' WHERE a=4;",
+        )
+        .unwrap();
+        run_in_transaction(
+            &c,
+            "mergeFinish",
+            &json!({"conflictTables": ["t"], "violationTables": ["t"]}),
+        )
+        .unwrap();
+        let before = cut_of(&path);
+        let hash = run_in_transaction(
+            &c,
+            "txCommit",
+            &json!({"message": "Merge other", "author": "Ann <ann@example.com>", "date": 1_700_000_002_000_i64}),
+        )
+        .unwrap();
+        c.execute_batch("COMMIT").unwrap();
+        assert_eq!(roots_after(&path, before), 1, "the resolver's writes and the merge commit are one root");
+
+        // One merge commit with both parents, the resolver's rows in it, and
+        // nothing of the merge left open.
+        let parents = rows(
+            &c,
+            "SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash=dolt_hashof('HEAD') ORDER BY parent_index",
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            parents.iter().map(|p| p["parent_hash"].clone()).collect::<Vec<_>>(),
+            vec![main_head, other_head]
+        );
+        assert_eq!(hash, run(&c, "hashOf", &json!({"ref": "HEAD"})).unwrap());
+        let got = rows(&c, "SELECT a, b, c FROM t ORDER BY a", &[]).unwrap();
+        let got: Vec<(i64, &str, &str)> = got
+            .iter()
+            .map(|r| (r["a"].as_i64().unwrap(), r["b"].as_str().unwrap(), r["c"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![(1, "resolved", "u1"), (3, "m3", "dup"), (4, "o4", "fixed"), (5, "only-main", "u5")]
+        );
+        assert_eq!(run(&c, "status", &json!({})).unwrap(), json!([]));
+        assert_eq!(rows(&c, "SELECT * FROM dolt_conflicts", &[]).unwrap().len(), 0);
+        assert_eq!(rows(&c, "SELECT * FROM dolt_constraint_violations", &[]).unwrap().len(), 0);
+    }
+
+    /// F1: a merge that is abandoned (the resolver threw, or left conflicts)
+    /// leaves no merge state: the branch, its rows and its status are as they
+    /// were, and the same merge can be run again.
+    #[test]
+    fn an_abandoned_merge_leaves_no_merge_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, c) = diverged(dir.path());
+        let head = run(&c, "hashOf", &json!({"ref": "HEAD"})).unwrap();
+        let before = cut_of(&path);
+        let rows_before = rows(&c, "SELECT * FROM t ORDER BY a", &[]).unwrap();
+        for _ in 0..2 {
+            c.execute_batch("BEGIN IMMEDIATE").unwrap();
+            let begin = run_in_transaction(&c, "mergeBegin", &json!({"branch": "other"})).unwrap();
+            assert_eq!(begin["state"], "merging");
+            c.execute("UPDATE t SET b='half resolved' WHERE a=1", []).unwrap();
+            c.execute_batch("ROLLBACK").unwrap();
+            assert_eq!(run(&c, "hashOf", &json!({"ref": "HEAD"})).unwrap(), head);
+            assert_eq!(rows(&c, "SELECT * FROM t ORDER BY a", &[]).unwrap(), rows_before);
+            assert_eq!(rows(&c, "SELECT * FROM dolt_conflicts", &[]).unwrap().len(), 0);
+            assert_eq!(rows(&c, "SELECT * FROM dolt_constraint_violations", &[]).unwrap().len(), 0);
+            assert_eq!(run(&c, "status", &json!({})).unwrap(), json!([]));
+        }
+        assert_eq!(roots_after(&path, before), 0, "an abandoned merge writes nothing");
+        // And the ordinary merge still sees the conflicts.
+        let merged = run(&c, "merge", &json!({"branch": "other"})).unwrap();
+        assert!(merged["hash"].is_null());
+    }
+
+    /// F1: a merge with nothing to resolve still goes through the same steps:
+    /// fast-forward and up-to-date merges commit nothing; a non-conflicting
+    /// divergence merges its rows, commits once, and `--no-ff` forces the
+    /// merge commit.
+    #[test]
+    fn merge_with_a_resolver_handles_the_clean_cases() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_path, c) = cell(dir.path());
+        c.execute_batch("CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT); INSERT INTO t VALUES (1,'x');").unwrap();
+        run(&c, "commit", &json!({"message": "base"})).unwrap();
+        run(&c, "branchCreate", &json!({"name": "ahead"})).unwrap();
+        run(&c, "checkout", &json!({"branch": "ahead"})).unwrap();
+        c.execute("INSERT INTO t VALUES (2,'ahead')", []).unwrap();
+        run(&c, "commit", &json!({"message": "ahead"})).unwrap();
+        let ahead = run(&c, "hashOf", &json!({"ref": "HEAD"})).unwrap();
+        run(&c, "checkout", &json!({"branch": "main"})).unwrap();
+
+        c.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let begin = run_in_transaction(&c, "mergeBegin", &json!({"branch": "ahead"})).unwrap();
+        assert_eq!(begin["state"], "fastForward");
+        assert_eq!(begin["hash"], ahead);
+        c.execute_batch("COMMIT").unwrap();
+        assert_eq!(run(&c, "hashOf", &json!({"ref": "HEAD"})).unwrap(), ahead);
+
+        c.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let begin = run_in_transaction(&c, "mergeBegin", &json!({"branch": "ahead"})).unwrap();
+        assert_eq!(begin["state"], "upToDate");
+        c.execute_batch("COMMIT").unwrap();
+
+        // Diverge without a conflict.
+        c.execute("INSERT INTO t VALUES (3,'main')", []).unwrap();
+        let main = run(&c, "commit", &json!({"message": "main"})).unwrap();
+        run(&c, "checkout", &json!({"branch": "ahead"})).unwrap();
+        c.execute("INSERT INTO t VALUES (4,'ahead2')", []).unwrap();
+        run(&c, "commit", &json!({"message": "ahead2"})).unwrap();
+        run(&c, "checkout", &json!({"branch": "main"})).unwrap();
+        c.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let begin = run_in_transaction(&c, "mergeBegin", &json!({"branch": "ahead"})).unwrap();
+        assert_eq!(begin["state"], "merging");
+        assert_eq!(begin["conflicts"], json!([]));
+        assert_eq!(begin["violations"], json!([]));
+        run_in_transaction(&c, "mergeFinish", &json!({})).unwrap();
+        run_in_transaction(&c, "txCommit", &json!({"message": "merged"})).unwrap();
+        c.execute_batch("COMMIT").unwrap();
+        let n: i64 = c.query_row("SELECT count(*) FROM t", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 4);
+        let first_parent = rows(
+            &c,
+            "SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash=dolt_hashof('HEAD') AND parent_index=0",
+            &[],
+        )
+        .unwrap();
+        assert_eq!(first_parent[0]["parent_hash"], main);
+
+        // --no-ff on a branch that is ahead makes the merge commit.
+        run(&c, "checkout", &json!({"branch": "ahead"})).unwrap();
+        run(&c, "branchCreate", &json!({"name": "behind", "from": "HEAD~1"})).unwrap();
+        run(&c, "checkout", &json!({"branch": "behind"})).unwrap();
+        c.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let begin =
+            run_in_transaction(&c, "mergeBegin", &json!({"branch": "ahead", "fastForward": false})).unwrap();
+        assert_eq!(begin["state"], "merging", "{begin}");
+        run_in_transaction(&c, "mergeFinish", &json!({})).unwrap();
+        run_in_transaction(&c, "txCommit", &json!({"message": "no-ff"})).unwrap();
+        c.execute_batch("COMMIT").unwrap();
+        let parents: i64 = c
+            .query_row(
+                "SELECT count(*) FROM dolt_commit_ancestors WHERE commit_hash=dolt_hashof('HEAD')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(parents, 2);
+    }
+
+    /// `conflict.takeTheirs()`: their row replaces ours, and their deletion
+    /// deletes ours, with the values written through SQL.
+    #[test]
+    fn taking_their_side_of_a_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_path, c) = diverged(dir.path());
+        c.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let begin = run_in_transaction(&c, "mergeBegin", &json!({"branch": "other"})).unwrap();
+        for conflict in begin["conflicts"].as_array().unwrap() {
+            run_in_transaction(
+                &c,
+                "mergeTake",
+                &json!({"table": conflict["table"], "id": conflict["id"]}),
+            )
+            .unwrap();
+        }
+        c.execute("UPDATE t SET c='fixed' WHERE a=4", []).unwrap();
+        run_in_transaction(&c, "mergeFinish", &json!({"conflictTables": ["t"], "violationTables": ["t"]}))
+            .unwrap();
+        run_in_transaction(&c, "txCommit", &json!({"message": "theirs"})).unwrap();
+        c.execute_batch("COMMIT").unwrap();
+        let got = rows(&c, "SELECT a, b FROM t ORDER BY a", &[]).unwrap();
+        let got: Vec<(i64, &str)> =
+            got.iter().map(|r| (r["a"].as_i64().unwrap(), r["b"].as_str().unwrap())).collect();
+        // Row 1: theirs. Row 2: they deleted it. Rows 3-5 merged by the engine.
+        assert_eq!(got, vec![(1, "other"), (3, "m3"), (4, "o4"), (5, "only-main")]);
+        // A conflict that is not there cannot be taken.
+        c.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let error = run_in_transaction(&c, "mergeTake", &json!({"table": "t", "id": "nope"}));
+        c.execute_batch("ROLLBACK").unwrap();
+        assert!(error.is_err());
     }
 
     #[test]

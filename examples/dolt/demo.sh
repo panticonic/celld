@@ -123,6 +123,54 @@ check "nested commit refused"  "$(get "/tx-nested?$T")"                 '(.error
 check "tx commit with a bad author fails whole" "$(get "/tx?$T&body=bad&author=nobody")" \
   '(.error | test("author")) and (.notes | length) == 4 and .status == []'
 
+echo "-- F1: merge with an in-transaction resolver"
+diverge() { # main and other disagree on row 1 (both edit) and row 2 (main edits, other deletes)
+  D="repo=$1"
+  get "/add?$D&body=one" >/dev/null; get "/add?$D&body=two" >/dev/null
+  get "/commit?$D&message=base&date=1700000000000" >/dev/null
+  get "/branch?$D&name=other" >/dev/null
+  get "/edit?$D&id=1&body=main-one" >/dev/null; get "/edit?$D&id=2&body=main-two" >/dev/null
+  get "/commit?$D&message=main&date=1700000001000" >/dev/null
+  get "/checkout?$D&name=other" >/dev/null
+  get "/edit?$D&id=1&body=other-one" >/dev/null; get "/delete?$D&id=2" >/dev/null
+  get "/commit?$D&message=other&date=1700000002000" >/dev/null
+  get "/checkout?$D&name=main" >/dev/null
+}
+diverge mg1
+MG="repo=mg1"
+MGHEAD=$(get "/hash?$MG" | jq -r .hash)
+check "plain merge still reports"   "$(get "/merge?$MG&name=other")"     '.hash == null and (.conflicts | length) >= 1'
+check "resolver sees every row"     "$(get "/merge-resolve?$MG&name=other&mode=throw")" \
+  '.error == "declined" and (.seen.conflicts | length) == 2 and .seen.violations == []
+   and (.seen.conflicts | map(select(.key.id == 1))[0] | .base.body == "one" and .ours.body == "main-one" and .theirs.body == "other-one")
+   and (.seen.conflicts | map(select(.key.id == 2))[0] | .ours.body == "main-two" and .theirs == null and .theirChange == "removed")
+   and .seen.sqlConflicts == 2 and .seen.sqlWrite == "denied"'
+check "throw leaves no merge state" "$(get "/notes?$MG")"                '(.notes | map(.body)) == ["main-one","main-two"]'
+check "throw leaves the head"       "$(get "/merge-resolve?$MG&name=other&mode=throw")" \
+  '.head == "'"$MGHEAD"'" and .status == [] and .openConflicts == []'
+check "unanswered rows roll back"   "$(get "/merge-resolve?$MG&name=other&mode=leave")" \
+  '(.error | test("unanswered")) and .head == "'"$MGHEAD"'" and .openConflicts == [] and (.notes | map(.body)) == ["main-one","main-two"]'
+check "resolver must be synchronous" "$(get "/merge-resolve?$MG&name=other&mode=async")" \
+  '(.error | test("synchronous")) and .head == "'"$MGHEAD"'"'
+MERGED=$(get "/merge-resolve?$MG&name=other&mode=sql&message=semantic%20merge&author=Ann%20%3Cann%40example.com%3E&date=1700000003000")
+check "resolver writes, one merge commit" "$MERGED" \
+  '.result.hash | length == 40'
+check "merged rows"                 "$MERGED"                            '(.notes | map(.body)) == ["main-one + other-one","main-two + undefined"] and .status == []'
+check "merge commit message"        "$MERGED"                            '.log[0].message == "semantic merge" and .log[0].committer == "Ann"'
+check "merge commit has two parents" "$(get "/query?$MG&sql=SELECT%20count(*)%20AS%20n%20FROM%20dolt_commit_ancestors%20WHERE%20commit_hash%20%3D%20(SELECT%20commit_hash%20FROM%20dolt_log%20LIMIT%201)")" \
+  '.rows[0][0].int == "2"'
+diverge mg2
+MERGED2=$(get "/merge-resolve?repo=mg2&name=other&mode=sql&message=semantic%20merge&author=Ann%20%3Cann%40example.com%3E&date=1700000003000")
+check "same merge, same hash"       "{\"a\":$MERGED,\"b\":$MERGED2}"     '.a.result.hash == .b.result.hash'
+diverge mg3
+check "takeTheirs"                  "$(get "/merge-resolve?repo=mg3&name=other&mode=theirs")" \
+  '(.notes | map(.body)) == ["other-one"] and .status == []'
+diverge mg4
+check "keepOurs"                    "$(get "/merge-resolve?repo=mg4&name=other&mode=ours")" \
+  '(.notes | map(.body)) == ["main-one","main-two"] and .status == []'
+check "merge up to date"            "$(get "/merge-resolve?repo=mg4&name=other&mode=ours")" \
+  '.result.upToDate == true and .seen == null'
+
 echo "-- restart (local resume)"
 stop
 start
@@ -144,6 +192,8 @@ check "restored main"        "$(get "/hash?$R&ref=main")"                 ".hash
 check "restored fork"        "$(get "/byid/$FORK_ID/notes")"              '(.notes | length) == 1'
 check "restored tx commit"   "$(get "/log?repo=tx&limit=10")"             'map(.message) | (index("one step") != null and index("3 notes") != null)'
 check "restored tx rows"     "$(get "/notes?repo=tx")"                    '(.notes | length) == 4'
+check "restored merge commit" "$(get "/log?repo=mg1&limit=10")"            'map(.message) | (index("semantic merge") != null and index("other") != null)'
+check "restored merged rows" "$(get "/notes?repo=mg1")"                   '(.notes | map(.body)) == ["main-one + other-one","main-two + undefined"]'
 get "/add?$R&body=after-restore" >/dev/null
 check "commit after restore" "$(get "/commit?$R&message=after")"          '.hash | length == 40'
 check "gc"                   "$(get "/gc?$R")"                            '.gc != null'

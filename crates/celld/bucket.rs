@@ -89,6 +89,9 @@ pub enum StorageBackend {
     Gcs,
     Azure,
     Local,
+    /// `vibestore://`: the local store over Vibestudio's blobstore. Its
+    /// tokens are ETags, like S3's.
+    Vibestore,
 }
 
 impl StorageBackend {
@@ -98,6 +101,7 @@ impl StorageBackend {
             StorageBackend::Gcs => "gs",
             StorageBackend::Azure => "az",
             StorageBackend::Local => "dev",
+            StorageBackend::Vibestore => "vibestore",
         }
     }
 
@@ -108,7 +112,10 @@ impl StorageBackend {
     #[doc(hidden)]
     pub fn token(self, e_tag: Option<String>, version: Option<String>) -> anyhow::Result<String> {
         let (token, header) = match self {
-            StorageBackend::S3 | StorageBackend::Azure | StorageBackend::Local => (e_tag, "ETag"),
+            StorageBackend::S3
+            | StorageBackend::Azure
+            | StorageBackend::Local
+            | StorageBackend::Vibestore => (e_tag, "ETag"),
             StorageBackend::Gcs => (version, "x-goog-generation"),
         };
         match token {
@@ -123,7 +130,10 @@ impl StorageBackend {
     #[doc(hidden)]
     pub fn update(self, token: &str) -> UpdateVersion {
         match self {
-            StorageBackend::S3 | StorageBackend::Azure | StorageBackend::Local => UpdateVersion {
+            StorageBackend::S3
+            | StorageBackend::Azure
+            | StorageBackend::Local
+            | StorageBackend::Vibestore => UpdateVersion {
                 e_tag: Some(token.to_string()),
                 version: None,
             },
@@ -140,9 +150,10 @@ impl StorageBackend {
     /// wrong place.
     fn precondition(self) -> &'static str {
         match self {
-            StorageBackend::S3 | StorageBackend::Azure | StorageBackend::Local => {
-                "If-Match / If-None-Match"
-            }
+            StorageBackend::S3
+            | StorageBackend::Azure
+            | StorageBackend::Local
+            | StorageBackend::Vibestore => "If-Match / If-None-Match",
             StorageBackend::Gcs => "x-goog-if-generation-match",
         }
     }
@@ -165,7 +176,10 @@ impl StorageBackend {
     fn metadata_name(self, name: &str) -> Cow<'_, str> {
         match self {
             StorageBackend::Azure => Cow::Owned(name.replace('-', "_")),
-            StorageBackend::S3 | StorageBackend::Gcs | StorageBackend::Local => Cow::Borrowed(name),
+            StorageBackend::S3
+            | StorageBackend::Gcs
+            | StorageBackend::Local
+            | StorageBackend::Vibestore => Cow::Borrowed(name),
         }
     }
 }
@@ -654,6 +668,33 @@ impl Bucket {
         })
     }
 
+    /// A `vibestore://` bucket: Vibestudio's blob root plus a SQLite key
+    /// index, no network. It takes no S3 endpoint, credentials or prefix.
+    fn open_vibestore(
+        spec: &str,
+        endpoint: Option<&str>,
+        has_credentials: bool,
+    ) -> anyhow::Result<Bucket> {
+        if endpoint.is_some() {
+            anyhow::bail!(
+                "a vibestore:// bucket takes no S3 endpoint; unset --endpoint / S3_ENDPOINT"
+            );
+        }
+        if has_credentials {
+            anyhow::bail!("a vibestore:// bucket takes no storage credentials");
+        }
+        let (store, spec) = crate::vibestore::open(spec)?;
+        Ok(Bucket {
+            store: store.clone(),
+            paginated: store.clone(),
+            cas_store: store,
+            backend: StorageBackend::Vibestore,
+            // `{scheme}://{name}` in messages reads back as the spec.
+            name: spec.name(),
+            prefix: String::new(),
+        })
+    }
+
     /// The body of [`Self::open`], taking the cloud configuration instead
     /// of deriving it from the `GOOGLE_*` and `AZURE_*` environments. A
     /// caller that passes explicit sources is independent of that
@@ -667,6 +708,9 @@ impl Bucket {
         app: Option<&str>,
         sources: CloudSources,
     ) -> anyhow::Result<Bucket> {
+        if celld_vibestore::is_spec(bucket) {
+            return Self::open_vibestore(bucket, endpoint, credentials.is_some());
+        }
         let CloudSources {
             gcs: gcs_builder,
             azure: azure_env,
@@ -822,8 +866,8 @@ impl Bucket {
                     Arc::new(cas_builder.build().context("build azure cas client")?),
                 )
             }
-            StorageBackend::Local => {
-                unreachable!("the local development store has its own constructor")
+            StorageBackend::Local | StorageBackend::Vibestore => {
+                unreachable!("the local stores have their own constructors")
             }
         };
         Ok(Bucket {

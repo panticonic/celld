@@ -336,6 +336,8 @@ USAGE:
 
 Production install: celld --bucket s3://NAME [OPTIONS]
                     celld --bucket gs://NAME [OPTIONS]
+Single-node workspace: celld --bucket vibestore:///PATH/TO/BLOBROOT[?index=FILE]
+                       (no cloud bucket; see docs/fork/vibestore.md)
 
 OPTIONS:
   --bucket [s3://|gs://|az://]NAME[/PREFIX]

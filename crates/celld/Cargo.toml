@@ -34,6 +34,7 @@ bytes.workspace = true
 celld-dolt-exec.workspace = true
 celld-logic.workspace = true
 celld-ltx = { workspace = true, features = ["s3"] }
+celld-vibestore = { path = "../vibestore" }
 encoding_rs.workspace = true
 ed25519-dalek.workspace = true
 fastwebsockets.workspace = true

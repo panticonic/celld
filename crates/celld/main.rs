@@ -3774,6 +3774,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                     celld::bucket::StorageBackend::Azure => "az",
                     celld::bucket::StorageBackend::S3 => "s3",
                     celld::bucket::StorageBackend::Local => "dev",
+                    celld::bucket::StorageBackend::Vibestore => "vibestore",
                 }
             );
             // The control plane issues one bucket per fleet and its enrollment

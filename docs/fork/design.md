@@ -260,7 +260,7 @@ Corrections are marked ✱.
 | Egress with caller identity, plus a "no network" mode, covering fetch, `connect()` and outbound WebSocket (used by model transport and the CDP client) | One `EgressHook` in front of `op_fetch`, `op_tcp_connect` and `op_ws_connect` (`js.rs:8990`, `js/tcp.rs:136`, `js/websocket.rs:475`), with the policy carried per isolate (`EgressPolicy`, `js.rs:2430`) |
 | Residency hold, available to any cell that declares it (eval kernels are ordinary per-owner Dolt cells, §8) | `Cell.held` folded into `is_active` (`logic/lib.rs:1748`), with a node-wide budget like `may_pin_outbound` |
 | No hidden deadlines | Make explicit, or remove: the JS-side 30 s `blockConcurrencyWhile` timer (`harness.js:2736`), `CELLD_OPERATION_DEADLINE_MS` (15 s, `actor.rs:41`), the 60 s stream idle expiry (`http_streams.rs:34`) and the 10 s durability timeout |
-| Local store on the Vibestudio blobstore | `ObjectStore` implementation over the CAS, with conditional writes for ownership records |
+| Local store on the Vibestudio blobstore | `ObjectStore` implementation over the CAS, with conditional writes for ownership records. Built: [vibestore.md](vibestore.md) |
 | Fork, backup, restore without private files | Dolt cells (§3.2) for DOs that want versioning. Snapshot-and-segment fork for SQLite cells. Deletes `cloneDO` and `computeWorkerdObjectIdHash` |
 | ✱ SES `lockdown()` for internal DOs | Verify in phase 0 |
 | V8 inspector | New module, bridged like `workerdInspectorBridge.ts` |

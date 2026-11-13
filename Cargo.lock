@@ -387,6 +387,7 @@ dependencies = [
  "celld-dolt-exec",
  "celld-logic",
  "celld-ltx",
+ "celld-vibestore",
  "chrono",
  "crc",
  "ctr",
@@ -492,6 +493,26 @@ dependencies = [
  "tokio",
  "tracing",
  "ureq",
+]
+
+[[package]]
+name = "celld-vibestore"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-util",
+ "hex",
+ "object_store",
+ "percent-encoding",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

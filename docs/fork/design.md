@@ -26,12 +26,36 @@ has not been run yet.
 | Fixes for the upstream defects the harness found (S1–S4, E1, E3) | merged | `docs/fork/upstream-findings.md` |
 | V8 inspector (CDP: discovery, evaluate, CPU profiles, heap snapshots, breakpoints) | merged | `docs/services/inspector.md` |
 | Chronolog `transport-iroh` | done (Chronolog branch `feature/transport-iroh`) | |
-| Chronolog node on the fork | in progress (Chronolog branch `feature/celld-host`) | |
+| Chronolog node on the fork | two-node end-to-end test passes (Chronolog branch `feature/celld-host`, `HANDOFF-celld-host.md`); fork APIs on `fix/dolt-exec-log-query` awaiting review | |
 | Windows port (compile and cross-link; CI workflow for a real Windows run) | merged | `docs/fork/windows.md` |
 | Vibestudio compatibility audit | done (Vibestudio branch `audit/celld-compat`, `docs/celld-compat-audit.md`) | fork bugs A1 and A2 fixed |
 | Dolt facets: Vibestudio's userland DOs are facets (audit V9) | in progress | |
-| Vibestudio runtime cutover | in progress (Vibestudio branch `feat/celld-runtime`) | |
-| Vibestudio Dolt redesign: GAD, agents, eval, durable base, Chronolog | in progress (Vibestudio branch `design/dolt-redesign`) | |
+| Vibestudio runtime cutover | partial, paused (Vibestudio branch `feat/celld-runtime`, `HANDOFF-celld-runtime.md`) | |
+| Vibestudio Dolt redesign | design done, P0 not started (Vibestudio branch `design/dolt-redesign`, `docs/dolt-redesign.md`); questions Q1–Q5 open | |
+
+### Single-track backlog (from 2026-11-13, in order)
+
+1. Dolt facets (`feature/dolt-facets`, running): review, then merge.
+2. Review the fork APIs Chronolog needed (`fix/dolt-exec-log-query`): `execute(…, { log })`, `dolt.query`, `beginTransactionSync()`. Add unit tests, then merge.
+3. Fork gaps blocking the Vibestudio cutover:
+   - G1: `env.NS.fork` and `restore` for SQLite objects, including their facets;
+   - G2: `celld cell import` from a plain SQLite file;
+   - G3: per-class secrets.
+4. Fork gaps from Chronolog:
+   - P2P streams owned by the cell, not by the event that opened them;
+   - `closed` does not resolve on a clean end of stream;
+   - Ed25519 PKCS#8 v1 versus v2;
+   - configurable dev lease.
+5. Fork requests from the Dolt redesign, F1–F6:
+   - F1: merge with an in-transaction resolver;
+   - F2: commit at the end of a transaction;
+   - F3: forks that carry facets;
+   - F4: local tables;
+   - F5: cheap checkout;
+   - F6: read access to history and diff tables.
+6. Finish the Vibestudio runtime cutover (`feat/celld-runtime`, per its handoff).
+7. Vibestudio Dolt redesign, P0 onward, after Q1–Q5 are answered.
+8. Chronolog cleanup: port the conformance/replay fixture, then delete `chronologd`, `materializer-doltlite`, the DoltLite addon and the SSB network layer.
 
 ## 1. Goal
 

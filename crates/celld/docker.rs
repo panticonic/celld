@@ -17,7 +17,17 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncRead, AsyncWrite};
+#[cfg(unix)]
 use tokio::net::UnixStream;
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
+
+/// The engine's local transport: a unix socket, or on Windows the named
+/// pipe Docker Desktop and Podman serve the same API on.
+#[cfg(unix)]
+type Transport = UnixStream;
+#[cfg(windows)]
+type Transport = NamedPipeClient;
 
 /// Unversioned paths: the daemon answers with its newest API, and every
 /// call here uses fields that have been stable since API 1.24. A pinned
@@ -60,9 +70,11 @@ impl Docker {
         }
     }
 
-    /// The daemon socket: `DOCKER_HOST` when it names a unix socket, else
-    /// the first of the well-known paths that exists. Docker Desktop and
+    /// The daemon socket: `DOCKER_HOST` when it names a unix socket (on
+    /// Windows, a named pipe: `npipe:////./pipe/docker_engine`), else the
+    /// first of the well-known paths that exists. Docker Desktop and
     /// OrbStack put theirs under the home directory; Linux under `/var/run`.
+    #[cfg(unix)]
     pub fn discover() -> Option<Self> {
         if let Ok(host) = std::env::var("DOCKER_HOST") {
             let path = host.strip_prefix("unix://")?;
@@ -87,17 +99,68 @@ impl Docker {
             .map(Self::new)
     }
 
+    #[cfg(windows)]
+    pub fn discover() -> Option<Self> {
+        if let Ok(host) = std::env::var("DOCKER_HOST") {
+            // `npipe:////./pipe/docker_engine` names `\\.\pipe\docker_engine`.
+            let path = host.strip_prefix("npipe://")?;
+            return Some(Self::new(path.replace('/', "\\")));
+        }
+        // Docker Desktop, then Podman's default machine. Opening the pipe is
+        // the connect check, as on Unix: a name without a server fails.
+        [r"\\.\pipe\docker_engine", r"\\.\pipe\podman-machine-default"]
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|path| {
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(path)
+                    .is_ok()
+            })
+            .map(Self::new)
+    }
+
     pub fn socket(&self) -> &Path {
         &self.socket
     }
 
-    async fn connect(&self) -> anyhow::Result<UnixStream> {
+    #[cfg(unix)]
+    async fn connect(&self) -> anyhow::Result<Transport> {
         UnixStream::connect(&self.socket).await.with_context(|| {
             format!(
                 "connect to the container engine at {}",
                 self.socket.display()
             )
         })
+    }
+
+    /// A named pipe serves one client per instance; the daemon keeps
+    /// creating instances, and a connect that lands between two of them gets
+    /// `ERROR_PIPE_BUSY`, which the documented client protocol answers by
+    /// retrying shortly.
+    #[cfg(windows)]
+    #[allow(clippy::disallowed_methods)] // the engine pipe is outside the execution boundary
+    async fn connect(&self) -> anyhow::Result<Transport> {
+        const ERROR_PIPE_BUSY: i32 = 231;
+        let mut attempts = 0;
+        loop {
+            match ClientOptions::new().open(&self.socket) {
+                Ok(client) => return Ok(client),
+                Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY) && attempts < 50 => {
+                    attempts += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "connect to the container engine at {}",
+                            self.socket.display()
+                        )
+                    })
+                }
+            }
+        }
     }
 
     fn request(
@@ -252,7 +315,7 @@ impl Docker {
 /// answers, which is why the ambient runtime drives it, as `ws_client`
 /// drives its handshakes.
 #[allow(clippy::disallowed_methods)]
-fn drive(connection: hyper::client::conn::http1::Connection<TokioIo<UnixStream>, Full<Bytes>>) {
+fn drive(connection: hyper::client::conn::http1::Connection<TokioIo<Transport>, Full<Bytes>>) {
     tokio::spawn(async move {
         let _ = connection.with_upgrades().await;
     });

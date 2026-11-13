@@ -49,3 +49,8 @@ ureq = "3.4.0"
 http = "1"
 percent-encoding = "2"
 tempfile.workspace = true
+
+# Directory and file flushing, and write-through renames, on Windows.
+# See docs/fork/windows.md.
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

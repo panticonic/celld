@@ -293,40 +293,16 @@ mod dev_contract {
     include!(env!("CELLD_INTERNAL_DEV_TESTS"));
 }
 
-struct ShutdownSignals {
-    #[cfg(unix)]
-    interrupt: tokio::signal::unix::Signal,
-    #[cfg(unix)]
-    terminate: tokio::signal::unix::Signal,
-}
+/// SIGINT/SIGTERM on Unix, the console control events on Windows.
+struct ShutdownSignals(crate::startup::TerminationSignals);
 
 impl ShutdownSignals {
     fn install() -> anyhow::Result<Self> {
-        #[cfg(unix)]
-        {
-            Ok(Self {
-                interrupt: tokio::signal::unix::signal(
-                    tokio::signal::unix::SignalKind::interrupt(),
-                )?,
-                terminate: tokio::signal::unix::signal(
-                    tokio::signal::unix::SignalKind::terminate(),
-                )?,
-            })
-        }
-        #[cfg(not(unix))]
-        {
-            Ok(Self {})
-        }
+        Ok(Self(crate::startup::TerminationSignals::install()?))
     }
 
     async fn received(&mut self) {
-        #[cfg(unix)]
-        crate::asyncrt::select! {
-            _ = self.interrupt.recv() => {}
-            _ = self.terminate.recv() => {}
-        }
-        #[cfg(not(unix))]
-        let _ = tokio::signal::ctrl_c().await;
+        self.0.recv().await;
     }
 }
 
@@ -767,7 +743,26 @@ async fn start_node(
             });
         }
     }
+    #[cfg(windows)]
+    {
+        // The Windows counterpart of the process group above: a new group
+        // makes the node ignore the console's Ctrl-C, so only this
+        // supervisor picks the shutdown mode, and gives the node a group id
+        // (its pid) that `send_ctrl_break` can target.
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    }
     let mut child = command.spawn().context("start the local celld node")?;
+    #[cfg(windows)]
+    {
+        // The counterpart of PR_SET_PDEATHSIG: the node dies with this
+        // supervisor even when the supervisor is killed.
+        if let Some(handle) = child.raw_handle() {
+            if let Err(error) = crate::winos::kill_on_parent_exit(handle) {
+                tracing::warn!(%error, "the local node is not tied to this supervisor's lifetime");
+            }
+        }
+    }
 
     let stdout = child
         .stdout
@@ -911,6 +906,15 @@ async fn stop_child(child: &mut Child, internal: Option<&str>) {
             unsafe {
                 libc::kill(id as libc::pid_t, libc::SIGTERM);
             }
+        }
+    }
+    #[cfg(windows)]
+    if !requested {
+        if let Some(id) = child.id() {
+            // CTRL_BREAK to the node's process group is its graceful stop
+            // (see `startup::TerminationSignals`); Child::kill is
+            // TerminateProcess and skips the durability handoff.
+            let _ = crate::winos::send_ctrl_break(id);
         }
     }
     let waited = tokio::time::timeout(Duration::from_secs(35), child.wait()).await;

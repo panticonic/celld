@@ -1487,7 +1487,12 @@ fn platform_thread_cpu_nanos() -> Option<u64> {
     clock_nanos(libc::CLOCK_THREAD_CPUTIME_ID)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn platform_thread_cpu_nanos() -> Option<u64> {
+    crate::winos::current_thread_cpu_nanos()
+}
+
+#[cfg(not(any(unix, windows)))]
 fn platform_thread_cpu_nanos() -> Option<u64> {
     None
 }
@@ -1574,11 +1579,28 @@ impl TargetThreadCpuClock {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// The thread id; `GetThreadTimes` on a handle opened from it reads the
+/// thread's CPU time from the watchdog thread.
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+struct TargetThreadCpuClock(u32);
+
+#[cfg(windows)]
+impl TargetThreadCpuClock {
+    fn current() -> Option<Self> {
+        Some(Self(crate::winos::current_thread_id()))
+    }
+
+    fn nanos(self) -> Option<u64> {
+        crate::winos::thread_cpu_nanos(self.0)
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 #[derive(Clone, Copy)]
 struct TargetThreadCpuClock;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 impl TargetThreadCpuClock {
     fn current() -> Option<Self> {
         None

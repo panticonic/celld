@@ -1,6 +1,10 @@
 use std::env;
 use std::path::Path;
 
+#[cfg(any(feature = "bundled", feature = "bundled-windows"))]
+#[path = "build_doltlite.rs"]
+mod doltlite_src;
+
 /// Tells whether we're building for Windows. This is more suitable than a plain
 /// `cfg!(windows)`, since the latter does not properly handle cross-compilation
 ///
@@ -127,61 +131,12 @@ mod build_bundled {
         {
             super::copy_bindings(lib_name, "bindgen_bundled_version", out_path);
         }
-        // DoltLite spike: compile the DoltLite release amalgamation in place of
-        // the stock SQLite amalgamation. The amalgamation is fetched (pinned
-        // sha256) into doltlite/src, copied into OUT_DIR, and patched there.
+        // DoltLite: compile the DoltLite release amalgamation in place of the
+        // stock SQLite amalgamation. Fetching (pinned sha256), unpacking and
+        // patching happen in Rust (build_doltlite.rs), so no sh, patch or
+        // sha256sum is needed, which is what makes a Windows build possible.
         let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-        println!("cargo:rerun-if-env-changed=DOLTLITE_SRC_DIR");
-        println!("cargo:rerun-if-changed=doltlite/patches");
-        println!("cargo:rerun-if-changed=doltlite/fetch.sh");
-        let src = match env::var_os("DOLTLITE_SRC_DIR") {
-            Some(dir) => PathBuf::from(dir),
-            None => {
-                let dir = manifest.join("doltlite/src");
-                let status = std::process::Command::new("sh")
-                    .arg(manifest.join("doltlite/fetch.sh"))
-                    .arg(&dir)
-                    .status()
-                    .expect("could not run doltlite/fetch.sh");
-                assert!(status.success(), "doltlite/fetch.sh failed");
-                dir
-            }
-        };
-        assert!(
-            src.join("sqlite3.c").exists(),
-            "DoltLite amalgamation not found at {}",
-            src.display()
-        );
-        println!("cargo:rerun-if-changed={}", src.join("sqlite3.c").display());
-
-        let work = Path::new(out_dir).join("doltlite-src");
-        let _ = std::fs::remove_dir_all(&work);
-        std::fs::create_dir_all(work.join("ext/blake3")).unwrap();
-        for f in ["sqlite3.c", "sqlite3.h", "sqlite3ext.h"] {
-            std::fs::copy(src.join(f), work.join(f)).unwrap();
-        }
-        for entry in std::fs::read_dir(src.join("ext/blake3")).unwrap() {
-            let entry = entry.unwrap();
-            if entry.path().is_file() {
-                std::fs::copy(entry.path(), work.join("ext/blake3").join(entry.file_name())).unwrap();
-            }
-        }
-        // The patch set is applied to the copy, never to the pinned source.
-        let mut patches: Vec<_> = std::fs::read_dir(manifest.join("doltlite/patches"))
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .filter(|p| p.extension().map_or(false, |e| e == "patch"))
-            .collect();
-        patches.sort();
-        for patch in &patches {
-            let status = std::process::Command::new("patch")
-                .args(["-p1", "--forward", "--batch", "-i"])
-                .arg(patch)
-                .current_dir(&work)
-                .status()
-                .expect("could not run patch(1)");
-            assert!(status.success(), "failed to apply {}", patch.display());
-        }
+        let work = super::doltlite_src::prepare(&manifest, Path::new(out_dir));
         super::copy_bindings(lib_name, "bindgen_bundled_version", out_path);
         println!("cargo:include={}", work.display());
         // Build identity for celld's engine digest (crates/dolt-exec): where
@@ -269,6 +224,14 @@ mod build_bundled {
             if vs_has_nan {
                 cfg.flag("-DHAVE_ISNAN");
             }
+            // The amalgamation embeds ed25519's `fixedint.h`, whose own
+            // stdint probe (`__STDC__`, `__GNUC__`, Watcom) fails under
+            // MSVC/clang-cl and then typedefs `uint32_t` as `unsigned long`
+            // against the CRT's `unsigned int`. Pre-define its include guard
+            // and force-include the real <stdint.h>. This is a compile flag,
+            // not a source patch, so the patch set (and with it the engine
+            // digest) is the same on every platform.
+            cfg.flag("-DFIXEDINT_H_INCLUDED").flag("-FIstdint.h");
         } else {
             cfg.flag("-DHAVE_ISNAN");
         }

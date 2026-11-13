@@ -150,7 +150,12 @@ fn total_memory_bytes() -> Option<u64> {
     (ok == 0 && size > 0).then_some(size)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(windows)]
+fn total_memory_bytes() -> Option<u64> {
+    crate::winos::total_physical_memory_bytes()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn total_memory_bytes() -> Option<u64> {
     None
 }

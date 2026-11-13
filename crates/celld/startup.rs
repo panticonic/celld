@@ -12,6 +12,7 @@ use anyhow::{anyhow, Context};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::net::{TcpListener, TcpSocket};
+#[cfg_attr(not(unix), allow(unused_imports))]
 use tracing::warn;
 
 const AUTO_LISTEN_START: u16 = 8080;
@@ -111,10 +112,12 @@ pub struct BoundInternalListener {
 /// Descriptors one resident cell holds: its SQLite database, WAL, and shared-
 /// memory file, plus what replication keeps open for them. Measured at ~7 on
 /// Linux; budgeted at 8.
+#[cfg_attr(not(unix), allow(dead_code))]
 const FDS_PER_CELL: u64 = 8;
 
 /// Below this the node cannot reach the density the runtime is designed for,
 /// so say so at startup rather than at the failing activation.
+#[cfg_attr(not(unix), allow(dead_code))]
 const MIN_RESIDENT_CELLS: u64 = 1_000;
 
 /// Raise the descriptor limit to its hard ceiling, and warn when even that
@@ -156,6 +159,73 @@ pub fn raise_file_limit() {
 
 #[cfg(not(unix))]
 pub fn raise_file_limit() {}
+
+/// The requests that ask the process to stop gracefully.
+///
+/// Unix: SIGTERM (systemd stop, `docker stop`, a pod delete) and SIGINT.
+/// Windows has no signals; the console control events stand in. `CTRL_C` and
+/// `CTRL_BREAK` are the interactive stop and the supervisor's stop (`celld
+/// dev` sends `CTRL_BREAK` to the node's process group, where Unix sends
+/// SIGTERM). `CTRL_CLOSE`, `CTRL_LOGOFF` and `CTRL_SHUTDOWN` are the console
+/// window closing and the session ending; Windows kills the process a few
+/// seconds after delivering those, so a long handoff may be cut short.
+pub struct TerminationSignals {
+    #[cfg(unix)]
+    terminate: tokio::signal::unix::Signal,
+    #[cfg(unix)]
+    interrupt: tokio::signal::unix::Signal,
+    #[cfg(windows)]
+    ctrl_c: tokio::signal::windows::CtrlC,
+    #[cfg(windows)]
+    ctrl_break: tokio::signal::windows::CtrlBreak,
+    #[cfg(windows)]
+    ctrl_close: tokio::signal::windows::CtrlClose,
+    #[cfg(windows)]
+    ctrl_logoff: tokio::signal::windows::CtrlLogoff,
+    #[cfg(windows)]
+    ctrl_shutdown: tokio::signal::windows::CtrlShutdown,
+}
+
+impl TerminationSignals {
+    pub fn install() -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            Ok(Self {
+                terminate: signal(SignalKind::terminate())?,
+                interrupt: signal(SignalKind::interrupt())?,
+            })
+        }
+        #[cfg(windows)]
+        {
+            use tokio::signal::windows as console;
+            Ok(Self {
+                ctrl_c: console::ctrl_c()?,
+                ctrl_break: console::ctrl_break()?,
+                ctrl_close: console::ctrl_close()?,
+                ctrl_logoff: console::ctrl_logoff()?,
+                ctrl_shutdown: console::ctrl_shutdown()?,
+            })
+        }
+    }
+
+    /// Resolves when any stop request arrives.
+    pub async fn recv(&mut self) {
+        #[cfg(unix)]
+        crate::asyncrt::select! {
+            _ = self.terminate.recv() => {}
+            _ = self.interrupt.recv() => {}
+        }
+        #[cfg(windows)]
+        crate::asyncrt::select! {
+            _ = self.ctrl_c.recv() => {}
+            _ = self.ctrl_break.recv() => {}
+            _ = self.ctrl_close.recv() => {}
+            _ = self.ctrl_logoff.recv() => {}
+            _ = self.ctrl_shutdown.recv() => {}
+        }
+    }
+}
 
 fn bind_tcp_listener(address: SocketAddr) -> std::io::Result<TcpListener> {
     let socket = match address {

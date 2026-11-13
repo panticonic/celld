@@ -518,6 +518,8 @@ fn runtime_directory() -> anyhow::Result<PathBuf> {
     }
     let cache = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
+        // Windows: the per-user, non-roaming cache location.
+        .or_else(|| std::env::var_os("LOCALAPPDATA").filter(|_| cfg!(windows)).map(PathBuf::from))
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
         .ok_or_else(|| anyhow!("set CELLD_PYTHON_RUNTIME_DIR to cache the Python runtime"))?;
     Ok(cache

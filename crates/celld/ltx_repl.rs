@@ -2197,7 +2197,7 @@ impl LtxRepl {
 
     fn db_path(&self, cell: &str, epoch: u64) -> PathBuf {
         self.watch
-            .join(cell)
+            .join(&*crate::fsname::cell_path(cell))
             .join("ltx")
             .join(format!("e{epoch}"))
             .join("db.sqlite")
@@ -3513,7 +3513,7 @@ impl LtxRepl {
         while let Some(result) = deleted.next().await {
             result?;
         }
-        let local = self.watch.join(cell);
+        let local = self.watch.join(&*crate::fsname::cell_path(cell));
         if self.ltx_host.filesystem().metadata(&local).is_ok() {
             self.ltx_host.remove_dir_all(&local)?;
         }
@@ -3870,7 +3870,9 @@ impl LtxRepl {
         {
             return Ok(None);
         }
-        let directory = self.watch.join(format!(".inspect-{cell}-e{epoch}"));
+        let directory = self
+            .watch
+            .join(format!(".inspect-{}-e{epoch}", crate::fsname::cell_path(cell)));
         let _ = self.ltx_host.remove_dir_all(&directory);
         self.ltx_host.create_dir_all(&directory)?;
         let path = directory.join("db.sqlite");
@@ -3924,7 +3926,9 @@ impl LtxRepl {
                 continue;
             }
             let epoch = chain.spans().last().map_or(0, |(e, _)| *e);
-            let directory = self.watch.join(format!(".restore-{cell}"));
+            let directory = self
+                .watch
+                .join(format!(".restore-{}", crate::fsname::cell_path(cell)));
             let _ = self.ltx_host.remove_dir_all(&directory);
             self.ltx_host.create_dir_all(&directory)?;
             let path = directory.join("db.sqlite");
@@ -4010,7 +4014,11 @@ impl LtxRepl {
             if !cell_dir.is_dir {
                 continue;
             }
-            let Some(cell) = cell_dir.file_name.to_str().map(str::to_owned) else {
+            let Some(cell) = cell_dir
+                .file_name
+                .to_str()
+                .map(|name| crate::fsname::cell_from_dir_name(name).into_owned())
+            else {
                 continue;
             };
             let Ok(epochs) = filesystem.read_dir(&cell_dir.path.join("ltx")) else {

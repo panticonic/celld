@@ -5974,6 +5974,20 @@ impl State {
         if self.eviction_permits.len() >= self.eviction_ceiling() {
             return Err(EvictRefusal::ConcurrencyLimit);
         }
+        // A draining node bounds everything leaving it by `max_releases`
+        // (`pump_release`), and a nomination spends that bound by marking the
+        // cell quiescing before it gets here. Any other caller -- demand or
+        // pressure shedding, idle eviction, an explicit eviction -- holds no
+        // reservation, so it must find room itself. Without this, a cell
+        // activated while draining (admitted behind a waiter as capacity
+        // freed) was shed on top of a full batch of releases and adoptions.
+        // The cell is not lost: `pump_release` nominates it when a slot frees.
+        if self.draining
+            && !cell.quiescing
+            && self.handoffs_in_flight() >= self.config.max_releases
+        {
+            return Err(EvictRefusal::ConcurrencyLimit);
+        }
         let op = self.cell_op(id);
         let cell = self.cells.get_mut(id).expect("resident cell checked above");
         cell.evict_rebalance = rebalance;

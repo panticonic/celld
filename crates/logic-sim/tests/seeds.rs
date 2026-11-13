@@ -131,7 +131,7 @@ fn mutation_lease_always_expired_is_caught() {
 
 /// Seeds that once reproduced a defect in the core (see
 /// `docs/fork/upstream-findings.md`), replayed with every finding fatal.
-const FIXED_FINDINGS: &[(&str, &[u64])] = &[("S1", &[52]), ("S2", &[97, 4])];
+const FIXED_FINDINGS: &[(&str, &[u64])] = &[("S1", &[52]), ("S2", &[97, 4]), ("S4", &[1442, 2395, 3393, 1358])];
 
 #[test]
 fn fixed_findings_stay_fixed() {

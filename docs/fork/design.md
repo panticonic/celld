@@ -53,8 +53,15 @@ has not been run yet.
    - F4: local tables;
    - F5: cheap checkout;
    - F6: read access to history and diff tables.
+   - F7: Dolt remotes between cells. Locally this is chunk transfer through
+     DoltLite's `DoltliteRemote` vtable, behind a capability; across nodes,
+     the same transfer over the P2P binding. It is required for
+     **decentralized GAD** (user decision, 2026-11-13): every participant
+     holds its own Dolt replica of the workspace and syncs it by
+     fetch, push and merge, with no central GAD object.
 6. Finish the Vibestudio runtime cutover (`feat/celld-runtime`, per its handoff).
-7. Vibestudio Dolt redesign, P0 onward, after Q1–Q5 are answered.
+7. Vibestudio Dolt redesign, P0 onward. Q1–Q5 are answered; the GAD
+   section (§5) is to be rewritten as decentralized before P5.
 8. Chronolog cleanup: port the conformance/replay fixture, then delete `chronologd`, `materializer-doltlite`, the DoltLite addon and the SSB network layer.
 
 ## 1. Goal

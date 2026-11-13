@@ -165,9 +165,19 @@ pub(crate) fn action_from_process() -> anyhow::Result<Action> {
         },
         p2p: celld::p2p::Settings::from_environment()?,
     };
+    let mut inspector_addr = env("CELLD_INSPECTOR_ADDR");
+    let mut inspector_allow_non_loopback =
+        celld::env_vars::flag("CELLD_INSPECTOR_ALLOW_NON_LOOPBACK", false)?;
     let mut args = arguments.into_iter();
     while let Some(argument) = args.next() {
         match argument.as_str() {
+            "--inspector-addr" => {
+                inspector_addr = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--inspector-addr requires a value"))?,
+                );
+            }
+            "--inspector-allow-non-loopback" => inspector_allow_non_loopback = true,
             "--control-plane" => settings.control_plane = true,
             "--bucket" => {
                 let bucket = args
@@ -270,6 +280,12 @@ pub(crate) fn action_from_process() -> anyhow::Result<Action> {
                 anyhow::bail!("unknown command or option: {other}; run `celld --help` for usage")
             }
         }
+    }
+    if let Some(address) = inspector_addr.filter(|_| !diagnose) {
+        celld::inspector::configure(celld::inspector::Config::parse(
+            &address,
+            inspector_allow_non_loopback,
+        )?);
     }
     if !listen_configured {
         settings.listen = if settings.control_plane {
@@ -384,6 +400,16 @@ OPTIONS:
                          result, an explicit cancellation, an eviction or
                          shutdown. Deadlines an application sets (timeouts,
                          step timeouts, queue visibility) are unchanged
+  --inspector-addr HOST:PORT
+                         Serve the V8 inspector (Chrome DevTools Protocol) on
+                         this address, one target per live isolate (or
+                         CELLD_INSPECTOR_ADDR). Off by default. A connection
+                         runs arbitrary code in every cell of the isolate and
+                         there is no authentication, so only a loopback address
+                         is accepted. See docs/services/inspector.md
+  --inspector-allow-non-loopback
+                         Accept a non-loopback --inspector-addr (or
+                         CELLD_INSPECTOR_ALLOW_NON_LOOPBACK=1)
   --egress-proxy URL     Send every outbound request of every isolate (fetch,
                          outbound WebSocket, connect()) to this http:// or
                          https:// proxy, which admits it by the caller identity

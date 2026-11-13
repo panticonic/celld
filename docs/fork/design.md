@@ -24,7 +24,7 @@ has not been run yet.
 | Iroh P2P binding | merged | `docs/services/p2p.md` |
 | Vibestore local bucket | merged | `docs/fork/vibestore.md` |
 | Fixes for the upstream defects the harness found | in progress | `docs/fork/upstream-findings.md` |
-| V8 inspector | in progress | |
+| V8 inspector (CDP: discovery, evaluate, CPU profiles, heap snapshots, breakpoints) | merged | `docs/services/inspector.md` |
 | Chronolog `transport-iroh` | done (Chronolog branch `feature/transport-iroh`) | |
 | Chronolog node on the fork | in progress (Chronolog branch `feature/celld-host`) | |
 | Windows port (compile and cross-link; CI workflow for a real Windows run) | merged | `docs/fork/windows.md` |

@@ -70,7 +70,10 @@ is rolled back.
 
 `env.REPO.fork(sourceId, { at? })` returns a new id whose object starts with a
 copy of the source: every branch and its history, with the checked-out branch
-reset to `at` when it is given.
+reset to `at` when it is given, and every facet of the source.
+`env.REPO.restore(targetId, fromId)` replaces an object with such a copy. Both
+work for any SQLite-backed class too: see
+[Object fork, restore and import](object-fork.md).
 
 Application SQL reads and writes the checked-out branch's working set. It can
 read the Dolt system tables (`dolt_log`, `dolt_status`, `dolt_diff_<table>`,
@@ -136,11 +139,13 @@ Dolt cell grows with its compacted size.
 
 `fork()` asks the source object to publish an image of itself. The source
 reads its file at the newest commit in its own turn, removes the state that
-belongs to its identity (its alarm and its id name), resets the checked-out
-branch to `at`, and uploads the image as the new object's first epoch. The
+belongs to its identity (its alarm and its id name), moves its key-value data
+to the new id, resets the checked-out branch to `at`, and uploads the image
+as the new object's first epoch, with an image of each of its facets. The
 upload waits behind the source's output gate, so a fork never starts from
 state the source could still lose, and the new id is claimed with a
 conditional create, so a fork never overwrites an object.
+[Object fork, restore and import](object-fork.md) has the whole contract.
 
 The cost is one copy of the source's file on the source's node and one whole
 upload; a fork shares no storage with its source. Copy-on-write forks over
@@ -164,5 +169,3 @@ copies one into a new facet. See
   memory, and DoltLite's own GC buffer limits live data to about 2 GiB.
 - A Dolt cell never restores paged; its chain downloads whole.
 - Managed (control-plane) deployments do not accept Dolt classes yet.
-- `env.NS.fork()` copies the root object's file only: the fork starts with
-  no facets.

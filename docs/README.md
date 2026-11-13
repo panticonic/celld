@@ -130,6 +130,7 @@ the Cloudflare service.
 - [Workers](services/workers.md)
 - [Durable Objects / Cells](services/durable-objects.md)
 - [Durable Object Facets](services/durable-object-facets.md)
+- [Object fork, restore and import](services/object-fork.md): copy or replace a whole object with its facets, or create one from database files
 - [Residency holds](services/residency.md): keep an object resident until it releases
 - [KV](services/kv.md)
 - [Queues](services/queues.md)
@@ -616,6 +617,18 @@ positive `CELLD_LTX_RETENTION_SECS` deletes, with that grace instead of
 activation has a write and, if paged, after its local file is complete.
 With `CELLD_LTX_COMPACTION=0`, a cell on a fleet node waits for a handoff
 snapshot. One pass deletes at most 64 epochs of a cell.
+
+## Import Durable Objects
+
+`celld cell import SCRIPT CLASS NAME --file ROOT [--facet NAME=FILE[:ENGINE]]...`
+creates the object `idFromName(NAME)` of SCRIPT's CLASS from database files:
+SQLite files written by any SQLite (workerd's included) and DoltLite stores.
+It refuses an object that exists and a file whose engine is not the class's
+or the facet's. See [Object fork, restore and import](services/object-fork.md#import).
+
+```sh
+celld cell import my-app Room lobby --file lobby.sqlite --bucket "$CELLD_BUCKET"
+```
 
 ## Hot-cell overload
 

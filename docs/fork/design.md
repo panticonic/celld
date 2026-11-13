@@ -19,6 +19,7 @@ has not been run yet.
 | Dolt cells: storage, replication, `ctx.storage.dolt`, fork | merged | `docs/services/dolt-cells.md` |
 | Deterministic execution: per-connection context patch, executor, `dolt.execute`, engine digest | merged | `crates/dolt-exec`, patch 0002 |
 | Dolt facets, `ctx.facets.fork`, chunk files past 1 GiB | merged | §3b.7-8, `docs/services/durable-object-facets.md` |
+| Whole-object fork, restore and import (G1, G2, F3) | done (branch `feature/object-fork-restore`) | §3b.9, `docs/services/object-fork.md` |
 | Codegen confinement, `--no-implicit-deadlines` | merged | `docs/fork/codegen.md`, `docs/fork/deadlines.md` |
 | Residency hold | merged | `docs/services/residency.md` |
 | Egress hook | merged | `docs/services/egress.md` |
@@ -35,11 +36,18 @@ has not been run yet.
 
 ### Single-track backlog (from 2026-11-13, in order)
 
-1. ~~Dolt facets~~ merged (`ctx.facets.get(name, () => ({ class, celld: { storage: "dolt" } }))`). Still open: forking a root together with its facets, which belongs with F3.
+1. ~~Dolt facets~~ merged (`ctx.facets.get(name, () => ({ class, celld: { storage: "dolt" } }))`). Forking a root together with its facets is done with item 3 (§3b.9).
 2. ~~Review the fork APIs Chronolog needed~~ merged with tests: `execute(…, { log })`, `dolt.query` and `beginTransactionSync()`.
 3. Fork gaps blocking the Vibestudio cutover:
-   - G1: `env.NS.fork` and `restore` for SQLite objects, including their facets;
-   - G2: `celld cell import` from a plain SQLite file;
+   - ~~G1: `env.NS.fork` and `restore` for SQLite objects, including their facets~~
+     done (§3b.9, `docs/services/object-fork.md`): `env.NS.fork(sourceId,
+     { to?, name?, at?, facets? })` and `env.NS.restore(targetId, fromId,
+     { stop?, at?, facets? })` for any SQLite-backed class, root and facets,
+     each with its engine;
+   - ~~G2: `celld cell import` from a plain SQLite file~~ done:
+     `celld cell import SCRIPT CLASS NAME --file ROOT [--facet NAME=FILE[:ENGINE]]...
+     (--bucket B | --dev PROJECT)`, the library call `celld::object_image::import`
+     for a control plane;
    - G3: per-class secrets.
 4. Fork gaps from Chronolog:
    - P2P streams owned by the cell, not by the event that opened them;
@@ -49,7 +57,7 @@ has not been run yet.
 5. Fork requests from the Dolt redesign, F1–F6:
    - F1: merge with an in-transaction resolver;
    - F2: commit at the end of a transaction;
-   - F3: forks that carry facets;
+   - ~~F3: forks that carry facets~~ done with G1 (`facets: { [name]: { at } }`);
    - F4: local tables;
    - F5: cheap checkout;
    - F6: read access to history and diff tables.
@@ -296,12 +304,7 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
      so any read is a committed prefix cut at the newest sealed root),
      `fork_image`, prove the source stream, write the image, prove the
      target stream (which captures it whole as a new generation). A fork
-     of the root with its facets is not built: the root does not know its
-     facets' names or engines (streams are named by a name hash, and a
-     non-resident facet's engine is known only by restoring it), so it
-     needs a bucket listing below `cells/<root>/facets/` plus an
-     engine-agnostic copy of each chain into the target's prefix at `e1`.
-     That is the next step if Vibestudio forks whole workspaces.
+     of the root with its facets: §3b.9.
 8. **The 1 GiB cap is lifted.** A chunk file's page `n` is LTX page `n`
    below SQLite's lock page and `n + 1` from it on (`dolt::ltx_pgno`), so
    no LTX file ever carries the lock page. Every reader zero-fills it, so an
@@ -311,6 +314,90 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
    resumed file is the live file and has no hole. Remaining limits: whole
    captures and restores hold the file in memory, and DoltLite's GC buffer
    (§4.7, about 2 GiB).
+
+9. **Whole-object fork, restore and import (G1, G2, F3; 2026-11-13).**
+   User-facing contract: `docs/services/object-fork.md`. One mechanism:
+   an object is a tree of components (root, facets), each a whole-file
+   image with its engine (`crates/celld/object_image.rs`). Three
+   producers (the source's export, plain files, a staging object read back
+   from the bucket) and two consumers (publish as a new cell, install into
+   a quiesced target's live streams). Decisions:
+   - **Facet index in each parent, not a bucket listing.** Each parent
+     (root or facet) records its direct facets in its own database,
+     `_cf_FACET_INDEX(name, engine)`, written in the parent's turn when it
+     starts a facet (`op_facet_rpc`/`op_facet_fetch`, before the parent's
+     identity sample, so the parent's gate covers the row before any facet
+     output), removed by `ctx.facets.delete`, kept by `deleteAll()`. It is
+     unversioned in a Dolt parent (`_cf_%`). Per parent rather than all in
+     the root, so the writer is always the parent's own connection in its
+     own isolate (a nested facet's parent is a facet). The engine recorded
+     is the latest start's; the file decides, so a fork opens a facet the
+     index names wrongly with the other engine. Facets started before the
+     index existed are carried once their parent starts them again; a
+     restore deletes the whole `<root>/facets` prefix regardless.
+   - **Export from the source's turn, parents before children.** The root
+     is read in the source's turn (SQLite: online backup through the cell's
+     own connection, so a paged root works; Dolt: committed cut), facets
+     after it on the host, each read then proved durable; the publication
+     waits on the root's output gate. Parent-before-child gives: every
+     child write a parent's image depends on is in the child's image,
+     because a child's replies and effects leave only after its stream
+     proves them. Not an instant cut across components (no root input gate
+     is held; a relay already in flight can put a sibling's write in a
+     later-read facet only), which is no stronger than what a crash of the
+     source can leave. Rejected: holding the root's gate and waiting for
+     in-flight facet calls (a facet that calls back into its root's
+     namespace would deadlock).
+   - **Publication: claim first, with a `publishing` record.** The Dolt
+     fork's claim (conditional create of a released `own.json` at epoch 1,
+     then upload) let a node activate a half-uploaded cell. Now the claim
+     carries `"publishing": nonce`, which `ownership_store::read_owner`
+     refuses, then every component's TXID-1 snapshot is uploaded at `e1`,
+     then a compare-and-swap clears `publishing`. An interrupted
+     publication leaves a cell no node activates; only an import with
+     `--replace-unfinished` takes it over. The old `__dolt_fork_export`
+     path is gone; Dolt roots use this one (and keep their key-value data,
+     which the old fork left under the source's scope).
+   - **`at` is per Dolt component**: `at` for a Dolt root,
+     `facets[name].at` for a Dolt facet; refused for a SQLite component,
+     which has no history. A root's `at` does not rewind which facets exist.
+   - **Restore = export to a staging object + adopt.** The source exports
+     itself as for a fork, to a hidden unique id whose record names the
+     target (`staging_for`), so a restore can never consume or delete an
+     ordinary fork such as a backup. The target, on its owner, in an event
+     answered before its instance exists, installs it: SQLite root by
+     backup into its own live connection (one captured write
+     transaction), Dolt root by file replacement and reopen (a new
+     generation, as after `gc()`), facets by deleting `<root>/facets` and
+     recreating each stream. Rejected: writing the target's bucket prefix
+     from outside its owner (it needs the released-record repair procedure
+     of `docs/guarantees.md` and races a live owner).
+   - **Quiesced, precisely**: no instance in the current activation, no
+     facet open or being started, no WebSocket, no residency hold, no other
+     event, no export in progress. Refused with `ERR_RESTORE_TARGET_ACTIVE`
+     otherwise; `{ stop: true }` makes the restore event itself reset the
+     target first (instance dropped with its storage closed, holds ended,
+     sockets closed 1012, loaded-isolate facets closed as at a generation
+     swap). No timer anywhere.
+   - **Roll-forward, not a multi-stream transaction.** The restore writes
+     its intent (`_cf_RESTORE`) in the target root and proves it, replaces
+     the facets, then the root, whose image carries no intent. Every event
+     that would construct the object first waits for a running restore or
+     completes a pending one (`_readyInstance`), so no event observes a
+     half-restored object, and a crash in between is completed by the next
+     activation from the same staging object (`CELLD_TEST_RESTORE_CRASH`
+     drives this in the example). The target keeps its wake record
+     (sequence moves on), its id name, and loses its alarm.
+   - **Import** uses the same publication; the class's engine comes from
+     the script's current deployment manifest, a facet's from
+     `NAME=FILE[:ENGINE]`. workerd's `_cf_KV(key, value)` becomes celld's
+     `_cf_KV(scope, k, v)` and workerd's alarm metadata is dropped. The
+     Vibestudio migration maps `<hash>.sqlite` to `--file` and
+     `<hash>.1.sqlite` to `--facet do=...` under the object name
+     `encodeUniversalKey(ref)`.
+   - Limits: images are whole files in memory; no storage is shared with
+     the source; `stop` cannot close a facet of the root's own script; an
+     import creates direct facets only.
 
 ## 4. Determinism: fixes over the earlier plans
 
@@ -366,7 +453,7 @@ Corrections are marked ✱.
 | Residency hold, available to any cell that declares it (eval kernels are ordinary per-owner Dolt cells, §8) | `Cell.held` folded into `is_active` (`logic/lib.rs:1748`), with a node-wide budget like `may_pin_outbound` |
 | No hidden deadlines | Make explicit, or remove: the JS-side 30 s `blockConcurrencyWhile` timer (`harness.js:2736`), `CELLD_OPERATION_DEADLINE_MS` (15 s, `actor.rs:41`), the 60 s stream idle expiry (`http_streams.rs:34`) and the 10 s durability timeout |
 | Local store on the Vibestudio blobstore | `ObjectStore` implementation over the CAS, with conditional writes for ownership records. Built: [vibestore.md](vibestore.md) |
-| Fork, backup, restore without private files | Dolt cells (§3.2) for DOs that want versioning. Snapshot-and-segment fork for SQLite cells. Deletes `cloneDO` and `computeWorkerdObjectIdHash` |
+| Fork, backup, restore without private files | Dolt cells (§3.2) for DOs that want versioning. Whole-object fork, restore and import for every class (§3b.9). Deletes `cloneDO` and `computeWorkerdObjectIdHash` |
 | ✱ SES `lockdown()` for internal DOs | Verify in phase 0 |
 | V8 inspector | New module, bridged like `workerdInspectorBridge.ts` |
 | Windows x64 | Port about 85 Unix-specific sites. Required, because Vibestudio ships Windows and there is no dual runtime |

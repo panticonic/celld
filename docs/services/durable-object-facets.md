@@ -128,8 +128,15 @@ given. It resolves to `{ bytes }` once the copy is durable.
   never starts from state the source could still lose.
 - Only a Dolt facet can be forked. The copy is a whole file. No storage is
   shared with the source.
-- `env.NS.fork()` of a Dolt root object copies the root only: the new
-  object starts with no facets.
+
+## Forks and restores of the whole object
+
+`env.NS.fork()` and `env.NS.restore()` copy an object with all of its
+facets, SQLite and Dolt, nested ones included, and `celld cell import`
+creates an object with facets from database files. See
+[Object fork, restore and import](object-fork.md). A parent records the
+facets it starts, by name and engine, in its own database, which is how the
+fork finds them; `ctx.facets.delete()` removes the record.
 
 ## WebSockets in a facet
 

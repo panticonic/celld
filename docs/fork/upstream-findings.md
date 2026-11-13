@@ -80,6 +80,7 @@ seeds.
 | E1 | `new Response("text")` is sent with no `content-type`. workerd sends `text/plain;charset=UTF-8`. | **Yes.** `Response` defaults `content-type` to `text/plain;charset=UTF-8` for a string (or other non-object) body, per Fetch's "extract a body". Blob type, `URLSearchParams` and `FormData` already carried theirs; streams, `ArrayBuffer` and views carry none; `Response.json` already set JSON. Responses rebuilt from host results pass `__rawBody` so they never gain a header the origin did not send. `Request` has the same gap and is not changed. | |
 | E2 | The dev-mode R2 etag is a counter, not the content MD5, so identical writes get different etags. This contradicts `docs/services/r2.md`. | No. | |
 | E3 | A graceful shutdown with an open WebSocket waits out the full 25 s drain, then the client sees close code 1006 instead of 1001. | **Yes**, for the preserved restart that `celld dev` and `POST /shutdown?handoff=preserve` use. See below. | |
+| E5 | An alarm set far in the future (year 2100) panics the node: "invalid deadline", `actor/effects.rs:252`. Found while testing object fork. | No. |
 | E4 | static-assets: `/index.html` redirects with 307 rather than a permanent redirect. A 404 is served as `Not found` with `content-type: application/json`. | No. | |
 
 **E3 detail.** `celld dev` turns SIGTERM into `POST /shutdown?handoff=preserve`,

@@ -6812,6 +6812,11 @@ impl State {
         self.capacity_waiters.clear();
         self.quiescing_cells.clear();
         self.adopting_cells.clear();
+        // A startup ownership confirmation is moot once authority is gone:
+        // its owner read now completes into a fenced cell, and a late
+        // `LocalCellsRead` must not start another round.
+        self.confirming = false;
+        self.confirming_cells.clear();
         self.active_requests.clear();
         self.active_cells.clear();
         self.admitted_gates.clear();
@@ -6888,6 +6893,13 @@ impl State {
             set_phase(&mut self.occupied, &mut cell, Phase::Fenced);
             cell.waiting_for = None;
             cell.waiting_activation = None;
+            // `Fenced` is outside both pipelines these markers describe: a
+            // startup confirmation waits on an owner read, and a balancing
+            // move (`handoff`) lives in `Dormant` while releasing or in
+            // `Adopting`. The indexes were cleared above; clear the cells to
+            // match.
+            cell.confirming = false;
+            cell.handoff = false;
             cell.alarm = None;
             cell.alarm_wake = false;
             cell.websockets.clear();

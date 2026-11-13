@@ -56,9 +56,11 @@ has not been run yet.
    - F7: Dolt remotes between cells. Locally this is chunk transfer through
      DoltLite's `DoltliteRemote` vtable, behind a capability; across nodes,
      the same transfer over the P2P binding. It is required for
-     **decentralized GAD** (user decision, 2026-11-13): every participant
-     holds its own Dolt replica of the workspace and syncs it by
-     fetch, push and merge, with no central GAD object.
+     **decentralized GAD** (user decision, 2026-11-13). GAD can stay one
+     Dolt database if its size allows. Participants (agents, the user,
+     contexts, later devices and other workspaces) work in parallel on their
+     own forks or branches and merge back by fetch, push and merge, and no
+     single object serializes the work.
 6. Finish the Vibestudio runtime cutover (`feat/celld-runtime`, per its handoff).
 7. Vibestudio Dolt redesign, P0 onward. Q1–Q5 are answered; the GAD
    section (§5) is to be rewritten as decentralized before P5.

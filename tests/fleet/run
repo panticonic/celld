@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""celld fleet fault-injection harness: single entrypoint.
+
+  tests/fleet/run list
+  tests/fleet/run <scenario> [<scenario> ...]
+  tests/fleet/run all [--jobs N]
+  tests/fleet/run clean              # remove leftover containers/networks
+  tests/fleet/run selftest           # prove the invariant checker detects violations (no docker)
+
+Environment: CELLD_BIN (celld binary, default /home/werg/celld-harness-bin/celld-uf-7c7d91f),
+FLEET_WORK (scratch dir, must be disk-backed), FLEET_TTL_MS, MINIO_IMAGE, FLEET_KEEP=1
+(keep scratch data), FLEET_RUST_LOG. See README.md.
+"""
+
+import argparse
+import json
+import os
+import signal
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+from fleetlib import cluster  # noqa: E402
+from fleetlib.scenario import run_scenario  # noqa: E402
+from fleetlib.scenarios import SCENARIOS  # noqa: E402
+
+DEFAULT_BIN = "/home/werg/celld-harness-bin/celld-uf-7c7d91f"
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("what", nargs="+", help="scenario name(s), 'all', 'list' or 'clean'")
+    ap.add_argument("--bin", default=os.environ.get("CELLD_BIN", DEFAULT_BIN))
+    ap.add_argument("--out", default=os.environ.get("FLEET_RESULTS"), help="results dir (default tests/fleet/results/<run id>)")
+    ap.add_argument("--jobs", type=int, default=1, help="scenarios to run in parallel (each has its own fleet)")
+    ap.add_argument("--ttl-ms", type=int, default=None, help="CELLD_TTL_MS for the nodes (default 10000)")
+    args = ap.parse_args()
+
+    if args.what == ["list"]:
+        for n, s in SCENARIOS.items():
+            print(f"{n:34s} {s['description']}")
+        return 0
+    if args.what == ["selftest"]:
+        from fleetlib import selftest
+        return selftest.main()
+    if args.what == ["clean"]:
+        removed = cluster.fleet_clean()
+        print(f"removed {len(removed)} harness resources")
+        return 0
+
+    names = list(SCENARIOS) if args.what == ["all"] else args.what
+    unknown = [n for n in names if n not in SCENARIOS]
+    if unknown:
+        print("unknown scenario(s):", ", ".join(unknown), "(try: run list)", file=sys.stderr)
+        return 2
+    if not os.access(args.bin, os.X_OK):
+        print(f"celld binary not executable: {args.bin} (set CELLD_BIN)", file=sys.stderr)
+        return 2
+    if args.ttl_ms:
+        os.environ["FLEET_TTL_MS"] = str(args.ttl_ms)
+
+    run_id = time.strftime("%m%d%H%M%S", time.gmtime()) + format(os.getpid() % 1296, "02x")
+    outdir = Path(args.out) if args.out else HERE / "results" / run_id
+    workbase = Path(os.environ.get("FLEET_WORK", HERE / ".work"))
+    workbase.mkdir(parents=True, exist_ok=True)
+    cluster.check_disk_backed(workbase)
+
+    # SIGTERM/SIGINT -> exception, so the `finally` below always runs.
+    def bail(signum, frame):
+        raise KeyboardInterrupt(f"signal {signum}")
+
+    signal.signal(signal.SIGTERM, bail)
+    signal.signal(signal.SIGINT, bail)
+
+    results = []
+    try:
+        cluster.ensure_node_image()
+        cluster.ensure_esbuild()
+
+        def one(name):
+            s = SCENARIOS[name]
+            print(f"=== {name}: {s['description']}", flush=True)
+            r = run_scenario(name, s["fn"], s["description"], s["opts"], outdir, run_id, args.bin, workbase)
+            print(f"=== {name}: {r['verdict']} in {r.get('duration_s')}s", flush=True)
+            return r
+
+        if args.jobs > 1 and len(names) > 1:
+            with ThreadPoolExecutor(args.jobs) as ex:
+                results = list(ex.map(one, names))
+        else:
+            for n in names:
+                results.append(one(n))
+    finally:
+        # Deterministic cleanup, even on failure/interrupt: everything this
+        # batch created (cluster ids all start with the batch id).
+        left = cluster.fleet_clean(prefix=run_id)
+        if left:
+            print(f"cleanup removed {len(left)} leftover resources", file=sys.stderr)
+        try:
+            import shutil
+            if not os.environ.get("FLEET_KEEP"):
+                for d in workbase.glob(f"{run_id}-*"):
+                    shutil.rmtree(d, ignore_errors=True)
+        except Exception:
+            pass
+        outdir.mkdir(parents=True, exist_ok=True)
+        summary = [
+            {"scenario": r["scenario"], "verdict": r["verdict"], "duration_s": r.get("duration_s"),
+             "invariants": r.get("invariants"), "violations": len(r.get("violations") or []),
+             "liveness_failures": r.get("liveness_failures"),
+             "effects_not_observed": [e["name"] for e in r.get("effects", []) if not e["ok"]]}
+            for r in results
+        ]
+        (outdir / "summary.json").write_text(json.dumps({"run_id": run_id, "celld_bin": args.bin, "results": summary}, indent=1))
+        print(f"\nresults: {outdir}")
+        for s in summary:
+            print(f"  {s['verdict']:13s} {s['scenario']:34s} {s['duration_s']}s")
+    return 0 if results and all(r["verdict"] == "PASS" for r in results) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -99,8 +99,9 @@ struct StackOptions {
     logs: bool,
     watch: bool,
     watch_ignores: Vec<Pattern>,
-    /// `--inspector-addr` and its companion flags, forwarded to the node.
-    inspector: Vec<String>,
+    /// Flags the node takes as they are given (`--inspector-addr` and its
+    /// companion flags, `--lease-ttl-ms`, `--lease-renew-ms`).
+    forwarded: Vec<String>,
 }
 
 struct Store {
@@ -312,7 +313,7 @@ pub fn print_help() -> anyhow::Result<()> {
     crate::cli_output::Output::new(crate::cli_output::Format::Text).help(
         &format!("celld dev — run an application with persistent local storage\n\n\
 USAGE:\n  celld dev [PROJECT] [--host IP] [--port PORT] [--logs] [--no-watch] [--clean]\n\
-            [--inspector-addr HOST:PORT]\n\n\
+            [--inspector-addr HOST:PORT]\n            [--lease-ttl-ms MS] [--lease-renew-ms MS]\n\n\
 PROJECT is a directory or a Wrangler config. It defaults to the current\n\
 directory. celld stores all local state in PROJECT/.celld/dev, and it keeps\n\
 that state across a restart. A configuration change does not migrate the\n\
@@ -323,8 +324,10 @@ as for wrangler dev. Without one, .env and then .env.local supply them, and\n\
 an entry of these files that cannot be a binding is skipped with a warning.\n\
 The entries override the vars of the config.\n\n\
 The node it starts inherits CELLD_NO_IMPLICIT_DEADLINES=1, which arms none of\n\
-celld's own time-based watchdogs (see `celld --help`).\n\n\
-OPTIONS:\n  --host IP              Worker listener host (default: 127.0.0.1)\n  --port PORT            Worker listener port (default: {DEFAULT_PORT})\n  --clean                Delete PROJECT/.celld/dev before the server starts\n  --logs                 Show the node warning and information logs\n  --no-watch             Do not rebuild when a project file changes\n  --inspector-addr ADDR  Serve the V8 inspector here (loopback; see docs/services/inspector.md)\n  --watch-ignore PATTERN Ignore a project-relative glob; repeat as needed\n  -h, --help             Show this help"
+celld's own time-based watchdogs (see `celld --help`). It still fences itself when\n\
+it cannot renew its node lease (10 s, renewed every third of that), which a\n\
+loaded or suspended machine can cause: raise --lease-ttl-ms (CELLD_TTL_MS) for it.\n\n\
+OPTIONS:\n  --host IP              Worker listener host (default: 127.0.0.1)\n  --port PORT            Worker listener port (default: {DEFAULT_PORT})\n  --clean                Delete PROJECT/.celld/dev before the server starts\n  --logs                 Show the node warning and information logs\n  --no-watch             Do not rebuild when a project file changes\n  --inspector-addr ADDR  Serve the V8 inspector here (loopback; see docs/services/inspector.md)\n  --lease-ttl-ms MS      Node lease lifetime (default: 10000; 1000 to 3600000)\n  --lease-renew-ms MS    Node lease renewal interval (default: a third of the lifetime;\n                         100 up to a third of it)\n  --watch-ignore PATTERN Ignore a project-relative glob; repeat as needed\n  -h, --help             Show this help"
         ),
     )
 }
@@ -337,7 +340,8 @@ fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Optio
     let mut logs = false;
     let mut watch = true;
     let mut watch_ignores = Vec::new();
-    let mut inspector = Vec::new();
+    let mut forwarded = Vec::new();
+    let mut lease = (None, None);
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -347,11 +351,26 @@ fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Optio
                 let value = arguments
                     .next()
                     .context("--inspector-addr requires a value")?;
-                inspector.push("--inspector-addr".to_string());
-                inspector.push(value);
+                forwarded.push("--inspector-addr".to_string());
+                forwarded.push(value);
             }
             "--inspector-allow-non-loopback" => {
-                inspector.push("--inspector-allow-non-loopback".to_string());
+                forwarded.push("--inspector-allow-non-loopback".to_string());
+            }
+            "--lease-ttl-ms" | "--lease-renew-ms" => {
+                let value = arguments
+                    .next()
+                    .with_context(|| format!("{argument} requires a value"))?;
+                let ms = value
+                    .parse::<u64>()
+                    .with_context(|| format!("{argument} must be a number of ms, not {value:?}"))?;
+                if argument == "--lease-ttl-ms" {
+                    lease.0 = Some(ms);
+                } else {
+                    lease.1 = Some(ms);
+                }
+                forwarded.push(argument.clone());
+                forwarded.push(value);
             }
             "--logs" => logs = true,
             "--no-watch" => watch = false,
@@ -387,6 +406,8 @@ fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Optio
     if !watch && !watch_ignores.is_empty() {
         bail!("--watch-ignore cannot be used with --no-watch");
     }
+    // The node checks the pair too; refusing here says so before it starts.
+    crate::machine::set_lease_flags(lease.0, lease.1)?;
     Ok(Some(Options {
         project,
         clean,
@@ -395,7 +416,7 @@ fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Optio
             logs,
             watch,
             watch_ignores,
-            inspector,
+            forwarded,
         },
     }))
 }
@@ -621,7 +642,7 @@ async fn run_stack(
         state,
         options.listener,
         options.logs,
-        &options.inspector,
+        &options.forwarded,
         project_hash,
         store,
         console,
@@ -653,7 +674,7 @@ async fn run_stack(
                     state,
                     options.listener,
                     options.logs,
-                    &options.inspector,
+                    &options.forwarded,
                     project_hash,
                     store,
                     console,
@@ -681,7 +702,7 @@ async fn start_node(
     state: &Path,
     listener: SocketAddr,
     logs: bool,
-    inspector: &[String],
+    forwarded: &[String],
     project_hash: &str,
     store: &Store,
     console: &Console,
@@ -717,7 +738,7 @@ async fn start_node(
             "--internal-listen",
             "127.0.0.1:0",
         ])
-        .args(inspector)
+        .args(forwarded)
         .env("CELLD_INTERNAL_DEV_STORE", &store.database)
         .env("CELLD_WATCH", state.join("runtime"))
         .env("CELLD_NODE", format!("dev-{}", &project_hash[..12]))

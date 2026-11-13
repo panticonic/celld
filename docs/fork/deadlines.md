@@ -54,7 +54,7 @@ option does not touch them.
 
 | Item | Why it stays |
 | --- | --- |
-| Node lease TTL, 10 s (`CELLD_TTL_MS`), fence timers | Distributed correctness: one writer per epoch depends on it. |
+| Node lease TTL, 10 s (`CELLD_TTL_MS`), fence timers | Distributed correctness: one writer per epoch depends on it. It is configurable, not removable: a loaded or suspended dev machine raises `--lease-ttl-ms` (docs/README.md, "Node lease timing"). |
 | Shutdown total bound (`CELLD_SHUTDOWN_TOTAL_MS`) | It is the explicit stop event itself. |
 | Admission wait, 1 s (`CELLD_ADMISSION_WAIT_MS`) | Backpressure: it decides between queueing and `CapacityExhausted`, and `0` is valid. |
 | Workflow step timeouts (`__wfTimeout`), `AbortSignal.timeout`, `setTimeout`, queue producer grouping (`producerGroupMs`) | Requested by the application or part of the API contract. |

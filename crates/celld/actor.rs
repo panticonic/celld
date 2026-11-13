@@ -2613,7 +2613,8 @@ impl Actor {
                 .unwrap_or_else(random_process_generation),
             Ownership::Memory(_) => random_process_generation(),
         };
-        let ttl_ms = crate::env_vars::positive_or("CELLD_TTL_MS", 10_000)?;
+        let crate::machine::LeaseTiming { ttl_ms, renew_ms } =
+            crate::machine::lease_timing_from_environment()?;
         let operation_deadline_ms = operation_deadline()?;
         let lease_spec = NodeLeaseSpec {
             // Startup has already resolved the environment and CLI settings
@@ -2625,6 +2626,7 @@ impl Actor {
             generation: std::env::var("CELLD_TEST_GENERATION").unwrap_or(process_generation),
             resume_generation,
             ttl_ms,
+            renew_ms,
         };
         Ok(Self {
             node_log: Arc::new(std::sync::Mutex::new(None)),

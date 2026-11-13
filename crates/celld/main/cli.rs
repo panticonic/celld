@@ -242,6 +242,24 @@ pub(crate) fn action_from_process() -> anyhow::Result<Action> {
                     .ok_or_else(|| anyhow::anyhow!("--p2p-bind requires a value"))?;
                 settings.p2p.set_bind(&value)?;
             }
+            "--lease-ttl-ms" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--lease-ttl-ms requires a value"))?;
+                let ttl_ms = value
+                    .parse::<u64>()
+                    .map_err(|_| anyhow::anyhow!("--lease-ttl-ms must be a number of ms, not {value:?}"))?;
+                celld::machine::set_lease_flags(Some(ttl_ms), None)?;
+            }
+            "--lease-renew-ms" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--lease-renew-ms requires a value"))?;
+                let renew_ms = value.parse::<u64>().map_err(|_| {
+                    anyhow::anyhow!("--lease-renew-ms must be a number of ms, not {value:?}")
+                })?;
+                celld::machine::set_lease_flags(None, Some(renew_ms))?;
+            }
             "--unsafe-public-advertise" => settings.unsafe_public_advertise = true,
             "--trust-forwarded-headers" => settings.trust_forwarded_headers = true,
             "--no-implicit-deadlines" => celld::deadlines::disable_implicit_deadlines(),
@@ -340,7 +358,7 @@ pub(crate) fn print_help() -> anyhow::Result<()> {
 USAGE:
   celld --bucket [s3://|gs://|az://]NAME[/PREFIX] [OPTIONS]
   celld deploy [PROJECT] --bucket [s3://|gs://|az://]NAME[/PREFIX] [OPTIONS]
-  celld dev [PROJECT] [--host IP] [--port PORT] [--logs]
+  celld dev [PROJECT] [--host IP] [--port PORT] [--logs] [--lease-ttl-ms MS]
   celld cell list [CLASS] --bucket [s3://|gs://|az://]NAME[/PREFIX] [OPTIONS]
   celld cell gc --dry-run [CLASS] --bucket [s3://|gs://|az://]NAME[/PREFIX] [OPTIONS]
   celld d1 migrations apply DATABASE [PROJECT] --bucket [s3://|gs://|az://]NAME[/PREFIX]
@@ -390,6 +408,10 @@ OPTIONS:
                          Let X-Forwarded-Host and X-Forwarded-Proto set the
                          scheme and host in request.url. Set this option only
                          when a trusted proxy replaces both headers
+  --lease-ttl-ms MS      Node lease lifetime, same as CELLD_TTL_MS (default:
+                         10000; 1000 to 3600000). See TUNING
+  --lease-renew-ms MS    Node lease renewal interval, same as
+                         CELLD_LEASE_RENEW_MS (default: a third of the lifetime)
   --no-implicit-deadlines
                          Arm none of the time-based watchdogs celld adds on its
                          own: the 15 s operation deadline, the 30 s
@@ -452,7 +474,14 @@ ENVIRONMENT:
   CELLD_ASSET_CACHE_BYTES         Asset cache limit
 
 TUNING:
-  CELLD_TTL_MS                    Node lease lifetime (default: 10000)
+  CELLD_TTL_MS                    Node lease lifetime, ms; same as --lease-ttl-ms
+                                  (default: 10000; 1000 to 3600000). A node that
+                                  cannot renew within it fences itself, and a peer
+                                  takes a dead node's cells once it has lapsed
+  CELLD_LEASE_RENEW_MS            Node lease renewal interval, ms; same as
+                                  --lease-renew-ms (default: a third of the
+                                  lifetime; 100 up to a third of the lifetime, so
+                                  a lease gets three attempts before it lapses)
   CELLD_OPERATION_DEADLINE_MS     Non-restore operation deadline (default: 15000;
                                   not armed under --no-implicit-deadlines)
   CELLD_SHUTDOWN_TOTAL_MS         Complete process stop bound (default: {shutdown_total_ms})

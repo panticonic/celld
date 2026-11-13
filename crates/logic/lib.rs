@@ -41,6 +41,9 @@ pub use types::*;
 #[cfg(test)]
 mod residency_tests;
 
+#[cfg(test)]
+mod lease_timing_tests;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Activation {
     Claim(Claim),
@@ -2419,7 +2422,7 @@ impl State {
             .next_timer_generation
             .checked_add(1)
             .expect("timer generation exhausted");
-        let retry_after = (spec.ttl_ms / 3).max(1);
+        let retry_after = spec.renew_interval_ms();
         effects.push(Effect::ScheduleTimer {
             timer: Timer::NodeLeaseRenew { generation },
             at_mono_ms: self.now_mono_ms.saturating_add(retry_after),
@@ -2509,7 +2512,7 @@ impl State {
         let renew_after = if std::mem::take(&mut self.nudge_pending) {
             1
         } else {
-            (spec.ttl_ms / 3).max(1)
+            spec.renew_interval_ms()
         };
         effects.push(Effect::ScheduleTimer {
             timer: Timer::NodeLeaseRenew { generation },
@@ -2565,7 +2568,7 @@ impl State {
             // fenced in the same second.
             let authority_deadline = prior.last_ok_mono_ms.saturating_add(prior.spec.ttl_ms);
             let remaining = authority_deadline.saturating_sub(now_mono_ms);
-            let cadence = (prior.spec.ttl_ms / 3).max(1);
+            let cadence = prior.spec.renew_interval_ms();
             if cadence <= remaining / 2 {
                 cadence
             } else {

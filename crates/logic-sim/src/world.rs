@@ -913,6 +913,7 @@ impl World {
             generation: format!("{}-g{}", n.id, n.incarnation),
             resume_generation: None,
             ttl_ms: self.cfg.ttl_ms,
+            renew_ms: NodeLeaseSpec::default_renew_ms(self.cfg.ttl_ms),
         };
         let event = Event::StartNodeLease {
             now_ms: n.wall(self.now),

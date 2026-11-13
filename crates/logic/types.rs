@@ -289,6 +289,23 @@ pub struct NodeLeaseSpec {
     /// still-live generation.
     pub resume_generation: Option<String>,
     pub ttl_ms: u64,
+    /// How often the lease is renewed, and the pace of the retry after a
+    /// failed attempt. The node's setting keeps it at most `ttl_ms / 3`, so a
+    /// lease always has three chances to be renewed before it lapses;
+    /// [`NodeLeaseSpec::default_renew_ms`] is the cadence when none is set.
+    pub renew_ms: u64,
+}
+
+impl NodeLeaseSpec {
+    /// The renewal cadence when the operator sets none: a third of the lease.
+    pub fn default_renew_ms(ttl_ms: u64) -> u64 {
+        (ttl_ms / 3).max(1)
+    }
+
+    /// The cadence the core renews at, never zero.
+    pub fn renew_interval_ms(&self) -> u64 {
+        self.renew_ms.max(1)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

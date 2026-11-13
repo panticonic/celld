@@ -106,8 +106,105 @@ pub const DEFAULT_LOCAL_CACHE_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// request for the kernel's own connect timeout.
 pub const PEER_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// The node lease: how long it lives and how often it is renewed.
+///
+/// The lease is the safety lane of the fleet. A node serves a cell only while
+/// its lease is live, and it fences itself (stops serving and exits) when it
+/// has not managed to renew in `ttl_ms`; a peer takes a dead node's cells only
+/// after the lease has lapsed. So the TTL is also the failover time, and the
+/// renewal interval is what decides how many failed or slow attempts one lease
+/// survives.
+///
+/// | Setting | Flag | Variable | Default |
+/// | --- | --- | --- | --- |
+/// | `ttl_ms` | `--lease-ttl-ms` | `CELLD_TTL_MS` | 10000 |
+/// | `renew_ms` | `--lease-renew-ms` | `CELLD_LEASE_RENEW_MS` | `ttl_ms / 3` |
+///
+/// Constraints, all refused at startup rather than defaulted:
+///
+/// * `MIN_LEASE_TTL_MS` (1 s) `<= ttl_ms <= MAX_LEASE_TTL_MS` (1 h). Below a
+///   second a single slow write fences the node; above an hour a dead node's
+///   cells are unavailable for as long.
+/// * `MIN_LEASE_RENEW_MS` (100 ms) `<= renew_ms <= ttl_ms / 3`. The renewal
+///   must leave at least two more attempts inside the lease after the first,
+///   which is what lets one slow or failed write pass without a fence. A
+///   cadence below 100 ms writes the bucket ten times a second for nothing.
+///
+/// A host that is overloaded, or a developer machine that is suspended and
+/// loaded, raises `ttl_ms` and leaves `renew_ms` to follow it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LeaseTiming {
+    pub ttl_ms: u64,
+    pub renew_ms: u64,
+}
+
+pub const DEFAULT_LEASE_TTL_MS: u64 = 10_000;
+pub const MIN_LEASE_TTL_MS: u64 = 1_000;
+pub const MAX_LEASE_TTL_MS: u64 = 3_600_000;
+pub const MIN_LEASE_RENEW_MS: u64 = 100;
+
+impl LeaseTiming {
+    /// Check a TTL and a renewal interval against each other. `None` selects
+    /// the default: 10 s, and a third of the TTL.
+    pub fn resolve(ttl_ms: Option<u64>, renew_ms: Option<u64>) -> anyhow::Result<Self> {
+        let ttl_ms = ttl_ms.unwrap_or(DEFAULT_LEASE_TTL_MS);
+        anyhow::ensure!(
+            (MIN_LEASE_TTL_MS..=MAX_LEASE_TTL_MS).contains(&ttl_ms),
+            "the node lease TTL (CELLD_TTL_MS, --lease-ttl-ms) must be between \
+             {MIN_LEASE_TTL_MS} and {MAX_LEASE_TTL_MS} ms, not {ttl_ms}"
+        );
+        let longest = ttl_ms / 3;
+        let renew_ms = renew_ms.unwrap_or(longest);
+        anyhow::ensure!(
+            (MIN_LEASE_RENEW_MS..=longest).contains(&renew_ms),
+            "the node lease renewal interval (CELLD_LEASE_RENEW_MS, --lease-renew-ms) must be \
+             between {MIN_LEASE_RENEW_MS} ms and a third of the lease TTL ({longest} ms for a \
+             TTL of {ttl_ms} ms), not {renew_ms}: a lease must get at least three renewal \
+             attempts before it lapses"
+        );
+        Ok(Self { ttl_ms, renew_ms })
+    }
+}
+
+/// What `--lease-ttl-ms` and `--lease-renew-ms` set. They win over the
+/// variables, as every other flag does.
+static LEASE_FLAGS: std::sync::Mutex<(Option<u64>, Option<u64>)> = std::sync::Mutex::new((None, None));
+
+/// Record the lease flags and refuse an invalid combination. Called while the
+/// command line is parsed, before anything reads the timing.
+pub fn set_lease_flags(ttl_ms: Option<u64>, renew_ms: Option<u64>) -> anyhow::Result<()> {
+    {
+        let mut flags = LEASE_FLAGS.lock().unwrap();
+        if ttl_ms.is_some() {
+            flags.0 = ttl_ms;
+        }
+        if renew_ms.is_some() {
+            flags.1 = renew_ms;
+        }
+    }
+    lease_timing_from_environment().map(|_| ())
+}
+
+/// The lease timing this process runs with: flags, then the environment, then
+/// the defaults. Fallible so startup can report a bad value; the readers below
+/// run after `env_vars::validate` and unwrap it.
+pub fn lease_timing_from_environment() -> anyhow::Result<LeaseTiming> {
+    let (flag_ttl, flag_renew) = *LEASE_FLAGS.lock().unwrap();
+    let ttl_ms = match flag_ttl {
+        Some(ttl_ms) => Some(ttl_ms),
+        None => crate::env_vars::optional::<u64>("CELLD_TTL_MS")?,
+    };
+    let renew_ms = match flag_renew {
+        Some(renew_ms) => Some(renew_ms),
+        None => crate::env_vars::optional::<u64>("CELLD_LEASE_RENEW_MS")?,
+    };
+    LeaseTiming::resolve(ttl_ms, renew_ms)
+}
+
 pub fn lease_ttl_ms_from_environment() -> u64 {
-    crate::env_vars::positive_or("CELLD_TTL_MS", 10_000).expect("validated CELLD_TTL_MS")
+    lease_timing_from_environment()
+        .expect("validated node lease timing")
+        .ttl_ms
 }
 
 pub fn ownership_on_evict_from_environment() -> anyhow::Result<OwnershipOnEvict> {
@@ -200,4 +297,59 @@ pub fn local_cache_max_bytes_from_environment() -> anyhow::Result<Option<u64>> {
 #[cfg(all(test, celld_internal_tests))]
 mod internal_tests {
     include!(env!("CELLD_INTERNAL_MACHINE_TESTS"));
+}
+
+#[cfg(test)]
+mod lease_timing_tests {
+    use super::*;
+
+    #[test]
+    fn the_defaults_are_ten_seconds_renewed_every_third() {
+        let timing = LeaseTiming::resolve(None, None).unwrap();
+        assert_eq!(timing.ttl_ms, 10_000);
+        assert_eq!(timing.renew_ms, 3_333);
+    }
+
+    #[test]
+    fn the_cadence_follows_a_raised_ttl() {
+        let timing = LeaseTiming::resolve(Some(60_000), None).unwrap();
+        assert_eq!((timing.ttl_ms, timing.renew_ms), (60_000, 20_000));
+    }
+
+    #[test]
+    fn a_cadence_up_to_a_third_of_the_ttl_is_accepted() {
+        assert!(LeaseTiming::resolve(Some(30_000), Some(10_000)).is_ok());
+        assert!(LeaseTiming::resolve(Some(30_000), Some(100)).is_ok());
+        assert!(LeaseTiming::resolve(None, Some(1_000)).is_ok());
+    }
+
+    #[test]
+    fn a_cadence_that_leaves_fewer_than_three_attempts_is_refused() {
+        let error = LeaseTiming::resolve(Some(30_000), Some(10_001)).unwrap_err();
+        assert!(
+            error.to_string().contains("a third of the lease TTL"),
+            "{error}"
+        );
+        // Half the lease is a cadence of two attempts.
+        assert!(LeaseTiming::resolve(Some(10_000), Some(5_000)).is_err());
+        // The default TTL's third is 3333, so 3334 is over.
+        assert!(LeaseTiming::resolve(None, Some(3_334)).is_err());
+    }
+
+    #[test]
+    fn a_cadence_that_hammers_the_bucket_is_refused() {
+        assert!(LeaseTiming::resolve(None, Some(99)).is_err());
+        assert!(LeaseTiming::resolve(None, Some(0)).is_err());
+    }
+
+    #[test]
+    fn the_ttl_has_bounds() {
+        assert!(LeaseTiming::resolve(Some(999), None).is_err());
+        assert!(LeaseTiming::resolve(Some(0), None).is_err());
+        assert!(LeaseTiming::resolve(Some(1_000), None).is_ok());
+        assert!(LeaseTiming::resolve(Some(MAX_LEASE_TTL_MS), None).is_ok());
+        assert!(LeaseTiming::resolve(Some(MAX_LEASE_TTL_MS + 1), None).is_err());
+        // A cadence valid for the default TTL is not valid for a shorter one.
+        assert!(LeaseTiming::resolve(Some(1_000), Some(1_000)).is_err());
+    }
 }

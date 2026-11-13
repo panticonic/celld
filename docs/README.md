@@ -426,7 +426,8 @@ celld does not scale itself. An external system starts and stops the
 nodes, and celld hands the cells off.
 
 Each node writes its lease to `nodes/<node>.json` in the bucket. The lease
-lives `CELLD_TTL_MS` (default 10000) and renews at one third of that. Its
+lives `CELLD_TTL_MS` (default 10000) and renews every `CELLD_LEASE_RENEW_MS`
+(default: one third of the lifetime); see "Node lease timing" below. Its
 load block, dated by `sampled_ms`, contains `owned_cells`,
 `placement_weight`, `resident_cells`, `host_websockets`, `rss_bytes`,
 `in_use_bytes`, `cpu_percent_x100`, `open_fds`, `pressured`,
@@ -553,6 +554,41 @@ release, so keep operator tooling and celld releases together.
   cell whose ownership record was lost and start the cell with an empty
   database. A rollback to v0.6.2 can also roll.
 
+## Node lease timing
+
+A node serves cells only while its lease is live. It renews the lease every
+renewal interval, and fences itself (stops every cell and exits) when it has
+not renewed within the lifetime. A peer takes a dead node's cells only after
+the lifetime has passed. So the lifetime is both the budget for a slow bucket
+write and the failover time.
+
+| Setting | Flag | Variable | Default | Allowed |
+| --- | --- | --- | --- | --- |
+| Lifetime | `--lease-ttl-ms` | `CELLD_TTL_MS` | 10000 | 1000 to 3600000 ms |
+| Renewal interval | `--lease-renew-ms` | `CELLD_LEASE_RENEW_MS` | a third of the lifetime | 100 ms up to a third of the lifetime |
+
+A flag wins over its variable. An invalid value, or an interval that is more
+than a third of the lifetime, stops the node at startup with a message that
+names the setting. The third is the safety constraint: a lease then gets at
+least three renewal attempts before it lapses, so one slow or failed write is
+retried inside the lease instead of fencing the node. Below one second a
+single slow write fences the node; above an hour a dead node's cells wait that
+long. The 100 ms floor keeps a misconfigured node from writing its lease ten
+times a second.
+
+When a host is overloaded or suspended, nodes that logged `SELF-FENCE: node
+lease not renewed within TTL` need a longer lifetime, not a shorter interval:
+raise `--lease-ttl-ms` and the interval follows. This matters most for `celld
+dev`, whose node has no peers to wait for, so a long lifetime costs nothing:
+
+```sh
+celld dev --lease-ttl-ms 120000          # renews every 40 s
+celld dev --lease-ttl-ms 120000 --lease-renew-ms 5000
+```
+
+`celld dev` takes both flags, checks them, and passes them to its node; the
+variables work too, and the node inherits them.
+
 ## Diagnose a fleet
 
 `celld diagnose` reads the node leases and probes each live peer. It does
@@ -669,6 +705,8 @@ unset variable selects its default. A Boolean variable accepts only `0` or
 | `CELLD_WATCH` | The local work directory for SQLite and replication |
 | `CELLD_ESBUILD` | The path of the esbuild executable |
 | `CELLD_ACTIVATIONS` | Concurrent cold-cell activations (default: 8 per CPU, at least 16, at most 128) |
+| `CELLD_TTL_MS`, `--lease-ttl-ms` | The node lease lifetime in ms (default: 10000; 1000 to 3600000) |
+| `CELLD_LEASE_RENEW_MS`, `--lease-renew-ms` | The node lease renewal interval in ms (default: a third of the lifetime; 100 up to a third of it) |
 | `CELLD_DEPLOY_POLL_S` | The deployment pointer poll interval in seconds (default: 30) |
 | `CELLD_DEPLOY_MAX_AGE_S` | Seconds before celld forces a resident Durable Object onto a new deployment (default: 60; 0 forces at once) |
 | `CELLD_OPERATION_DEADLINE_MS` | The deadline for a non-restore operation (default: 15000) |

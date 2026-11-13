@@ -266,11 +266,14 @@ pub fn validate() -> anyhow::Result<()> {
         "CELLD_PLACEMENT_WEIGHT",
         "CELLD_RELEASES",
         "CELLD_TOKIO_THREADS",
-        "CELLD_TTL_MS",
         "CELLD_WAKER_TICK_MS",
     ] {
         positive::<u64>(name)?;
     }
+
+    // The node lease: CELLD_TTL_MS and CELLD_LEASE_RENEW_MS, checked against
+    // each other (see `machine::LeaseTiming`).
+    crate::machine::lease_timing_from_environment()?;
 
     for name in [
         "CELLD_ADMISSION_WAIT_MS",

@@ -1,0 +1,598 @@
+{
+ "scenario": "restart_fleet_graceful_wiped",
+ "description": "SIGTERM all nodes at once, wipe EVERY disk, restart: state must come from the bucket alone",
+ "run_id": "11131247482e3",
+ "started_at": "2026-11-13T12:52:59Z",
+ "celld_bin": "/home/werg/celld-harness-bin/celld-uf-7c7d91f",
+ "verdict": "PASS",
+ "config": {
+  "nodes": 3,
+  "ttl_ms": 10000,
+  "cells": 6,
+  "clients": 12,
+  "readers": 3,
+  "req_timeout_s": 15.0,
+  "subnet": "10.155.112.0/24",
+  "minio_image": "pgsty/minio:latest"
+ },
+ "deploy": "Current Version ID: 6b26d66cacb2032d",
+ "diagnose": [
+  "ok bucket s3://fleet",
+  "ok bucket conditional write: create, reject-create, update, reject-stale",
+  "ok fleet: 3 node lease(s) enumerated",
+  "ok peer n1 at 10.155.112.11:8081: (signed direct probe) protocol=5 owned_cells=0 resident_cells=0 websockets=0 rss_bytes=43958272 in_use_bytes=31704056 cpu_percent=0.99 fds=23/2147483584 pressured=false shed_cells=0 restoring=0 load_age_ms=1330",
+  "ok peer n2 at 10.155.112.12:8081: (signed direct probe) protocol=5 owned_cells=0 resident_cells=0 websockets=0 rss_bytes=42086400 in_use_bytes=32223936 cpu_percent=0.00 fds=14/2147483584 pressured=false shed_cells=0 restoring=0 load_age_ms=2250",
+  "ok peer n3 at 10.155.112.13:8081: (signed direct probe) protocol=5 owned_cells=0 resident_cells=0 websockets=0 rss_bytes=42192896 in_use_bytes=30146664 cpu_percent=0.00 fds=17/2147483584 pressured=false shed_cells=0 restoring=0 load_age_ms=1326"
+ ],
+ "duration_s": 70.7,
+ "invariants": {
+  "acked_write_durable": true,
+  "single_writer": true,
+  "liveness_after_recovery": true
+ },
+ "violations": [],
+ "liveness_failures": [],
+ "effects": [
+  {
+   "name": "whole fleet is down",
+   "ok": true,
+   "detail": "",
+   "excuses": false
+  }
+ ],
+ "checker": {
+  "ok": true,
+  "violations": [],
+  "notes": [],
+  "per_cell": {
+   "cell0": {
+    "ack_timeline_by_instance": {
+     "4209840a": {
+      "first_ack_t": 317.52,
+      "n": 79,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 79,
+      "last_ack_t": 325.46
+     },
+     "d301f720": {
+      "first_ack_t": 367.91,
+      "n": 118,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 80,
+      "max_seq": 197,
+      "last_ack_t": 380.26
+     }
+    },
+    "acks": 197,
+    "attempts": 2704,
+    "unacked": 2507,
+    "unacked_but_present": 0,
+    "final_rows": 197,
+    "final_head": 197,
+    "instances_in_ledger": [
+     "4209840a",
+     "d301f720"
+    ],
+    "ack_instances": [
+     "4209840a",
+     "d301f720"
+    ],
+    "violation_counts": {}
+   },
+   "cell1": {
+    "ack_timeline_by_instance": {
+     "9b7d91e7": {
+      "first_ack_t": 317.99,
+      "n": 78,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 78,
+      "last_ack_t": 325.38
+     },
+     "14f9ce04": {
+      "first_ack_t": 367.92,
+      "n": 106,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 79,
+      "max_seq": 184,
+      "last_ack_t": 380.42
+     }
+    },
+    "acks": 184,
+    "attempts": 2688,
+    "unacked": 2504,
+    "unacked_but_present": 0,
+    "final_rows": 184,
+    "final_head": 184,
+    "instances_in_ledger": [
+     "9b7d91e7",
+     "14f9ce04"
+    ],
+    "ack_instances": [
+     "14f9ce04",
+     "9b7d91e7"
+    ],
+    "violation_counts": {}
+   },
+   "cell2": {
+    "ack_timeline_by_instance": {
+     "65f28970": {
+      "first_ack_t": 318.46,
+      "n": 77,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 77,
+      "last_ack_t": 325.26
+     },
+     "b9fd68e5": {
+      "first_ack_t": 367.92,
+      "n": 102,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 78,
+      "max_seq": 179,
+      "last_ack_t": 380.6
+     }
+    },
+    "acks": 179,
+    "attempts": 2697,
+    "unacked": 2518,
+    "unacked_but_present": 0,
+    "final_rows": 179,
+    "final_head": 179,
+    "instances_in_ledger": [
+     "65f28970",
+     "b9fd68e5"
+    ],
+    "ack_instances": [
+     "65f28970",
+     "b9fd68e5"
+    ],
+    "violation_counts": {}
+   },
+   "cell3": {
+    "ack_timeline_by_instance": {
+     "7d23dd08": {
+      "first_ack_t": 318.72,
+      "n": 87,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 87,
+      "last_ack_t": 325.44
+     },
+     "fa0fbade": {
+      "first_ack_t": 368.02,
+      "n": 112,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 88,
+      "max_seq": 199,
+      "last_ack_t": 380.78
+     }
+    },
+    "acks": 199,
+    "attempts": 2780,
+    "unacked": 2581,
+    "unacked_but_present": 0,
+    "final_rows": 199,
+    "final_head": 199,
+    "instances_in_ledger": [
+     "7d23dd08",
+     "fa0fbade"
+    ],
+    "ack_instances": [
+     "7d23dd08",
+     "fa0fbade"
+    ],
+    "violation_counts": {}
+   },
+   "cell4": {
+    "ack_timeline_by_instance": {
+     "2ac67c10": {
+      "first_ack_t": 319.0,
+      "n": 65,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 65,
+      "last_ack_t": 325.29
+     },
+     "beaebd12": {
+      "first_ack_t": 368.03,
+      "n": 97,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 66,
+      "max_seq": 162,
+      "last_ack_t": 380.99
+     }
+    },
+    "acks": 162,
+    "attempts": 2684,
+    "unacked": 2522,
+    "unacked_but_present": 0,
+    "final_rows": 162,
+    "final_head": 162,
+    "instances_in_ledger": [
+     "2ac67c10",
+     "beaebd12"
+    ],
+    "ack_instances": [
+     "2ac67c10",
+     "beaebd12"
+    ],
+    "violation_counts": {}
+   },
+   "cell5": {
+    "ack_timeline_by_instance": {
+     "ff290206": {
+      "first_ack_t": 319.28,
+      "n": 66,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 66,
+      "last_ack_t": 325.36
+     },
+     "2f211128": {
+      "first_ack_t": 367.91,
+      "n": 94,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 67,
+      "max_seq": 160,
+      "last_ack_t": 381.21
+     }
+    },
+    "acks": 160,
+    "attempts": 2813,
+    "unacked": 2653,
+    "unacked_but_present": 0,
+    "final_rows": 160,
+    "final_head": 160,
+    "instances_in_ledger": [
+     "ff290206",
+     "2f211128"
+    ],
+    "ack_instances": [
+     "2f211128",
+     "ff290206"
+    ],
+    "violation_counts": {}
+   }
+  },
+  "write_outcomes": {
+   "ack": 1081,
+   "http_503": 15166,
+   "error": 16,
+   "connect_fail": 103
+  },
+  "reads": {
+   "ok": 235,
+   "failed": 710
+  }
+ },
+ "phases": [
+  {
+   "phase": "bring-up",
+   "t_start": 310.879,
+   "t_end": 317.027,
+   "secs": 6.15,
+   "issued": 0,
+   "acked": 0,
+   "failed": {},
+   "acks_per_s": 0.0,
+   "lat_p50_s": null,
+   "lat_p99_s": null,
+   "lat_max_s": null
+  },
+  {
+   "phase": "warmup",
+   "t_start": 317.027,
+   "t_end": 320.839,
+   "secs": 3.81,
+   "issued": 116,
+   "acked": 116,
+   "failed": {},
+   "acks_per_s": 30.4,
+   "lat_p50_s": 0.1642,
+   "lat_p99_s": 0.4746,
+   "lat_max_s": 0.4963
+  },
+  {
+   "phase": "steady",
+   "t_start": 320.839,
+   "t_end": 321.101,
+   "secs": 0.26,
+   "issued": 15,
+   "acked": 15,
+   "failed": {},
+   "acks_per_s": 57.3,
+   "lat_p50_s": 0.1822,
+   "lat_p99_s": 0.2226,
+   "lat_max_s": 0.2226
+  },
+  {
+   "phase": "pre-fault load",
+   "t_start": 321.101,
+   "t_end": 325.107,
+   "secs": 4.01,
+   "issued": 306,
+   "acked": 306,
+   "failed": {},
+   "acks_per_s": 76.4,
+   "lat_p50_s": 0.1371,
+   "lat_p99_s": 0.3079,
+   "lat_max_s": 0.3601
+  },
+  {
+   "phase": "FAULT SIGTERM every node",
+   "t_start": 325.107,
+   "t_end": 366.231,
+   "secs": 41.12,
+   "issued": 15300,
+   "acked": 15,
+   "failed": {
+    "http_503": 15166,
+    "error": 16,
+    "connect_fail": 103
+   },
+   "acks_per_s": 0.4,
+   "lat_p50_s": 0.1279,
+   "lat_p99_s": 0.1843,
+   "lat_max_s": 0.1843
+  },
+  {
+   "phase": "restart every node (wiped: ['n1', 'n2', 'n3'])",
+   "t_start": 366.231,
+   "t_end": 369.157,
+   "secs": 2.93,
+   "issued": 95,
+   "acked": 95,
+   "failed": {},
+   "acks_per_s": 32.5,
+   "lat_p50_s": 0.1803,
+   "lat_p99_s": 1.0391,
+   "lat_max_s": 1.0391
+  },
+  {
+   "phase": "after restart",
+   "t_start": 369.157,
+   "t_end": 377.171,
+   "secs": 8.01,
+   "issued": 516,
+   "acked": 516,
+   "failed": {},
+   "acks_per_s": 64.4,
+   "lat_p50_s": 0.1724,
+   "lat_p99_s": 0.2561,
+   "lat_max_s": 0.2784
+  },
+  {
+   "phase": "quiesce",
+   "t_start": 377.171,
+   "t_end": 377.279,
+   "secs": 0.11,
+   "issued": 0,
+   "acked": 0,
+   "failed": {},
+   "acks_per_s": 0.0,
+   "lat_p50_s": null,
+   "lat_p99_s": null,
+   "lat_max_s": null
+  },
+  {
+   "phase": "verify: recover + probe writes + read back from every node",
+   "t_start": 377.279,
+   "t_end": 381.667,
+   "secs": 4.39,
+   "issued": 18,
+   "acked": 18,
+   "failed": {},
+   "acks_per_s": 4.1,
+   "lat_p50_s": 0.055,
+   "lat_p99_s": 0.08,
+   "lat_max_s": 0.08
+  }
+ ],
+ "timeline": [
+  {
+   "t": 310.879,
+   "at": "12:52:59.878",
+   "event": "bring-up",
+   "phase": true
+  },
+  {
+   "t": 317.027,
+   "at": "12:53:05.027",
+   "event": "warmup",
+   "phase": true
+  },
+  {
+   "t": 320.839,
+   "at": "12:53:09.839",
+   "event": "steady",
+   "phase": true
+  },
+  {
+   "t": 321.101,
+   "at": "12:53:09.101",
+   "event": "pre-fault load",
+   "phase": true
+  },
+  {
+   "t": 325.107,
+   "at": "12:53:13.106",
+   "event": "FAULT SIGTERM every node",
+   "phase": true
+  },
+  {
+   "t": 366.23,
+   "at": "12:53:54.230",
+   "event": "effect ok: whole fleet is down",
+   "detail": ""
+  },
+  {
+   "t": 366.231,
+   "at": "12:53:54.230",
+   "event": "restart every node (wiped: ['n1', 'n2', 'n3'])",
+   "phase": true
+  },
+  {
+   "t": 369.157,
+   "at": "12:53:57.156",
+   "event": "after restart",
+   "phase": true
+  },
+  {
+   "t": 377.171,
+   "at": "12:54:05.170",
+   "event": "quiesce",
+   "phase": true
+  },
+  {
+   "t": 377.279,
+   "at": "12:54:05.278",
+   "event": "verify: recover + probe writes + read back from every node",
+   "phase": true
+  }
+ ],
+ "data": {
+  "dids": {
+   "cell0": "289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546",
+   "cell1": "15d21e92a4f1516998c88bc73fc84fad24b4bcf15cb002b47b5d6bf80458d9c3",
+   "cell2": "7aa51a1e0a2b2cb2712ce2f2d96b03d0f4e597bc34c444bb10f57eec32c2418e",
+   "cell3": "b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307",
+   "cell4": "4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f",
+   "cell5": "a03bcfaa709dbf875bdb21a08663755d56bdb91c0a1af5c880832a856d4e3386"
+  },
+  "exit_codes": {
+   "n1": 0,
+   "n2": 0,
+   "n3": 0
+  },
+  "graceful_stop_s": 40.88,
+  "fleet_healthy_after_restart_s": 2.74,
+  "recovery_s": {
+   "cell0": 0.055,
+   "cell1": 0.048,
+   "cell2": 0.05,
+   "cell3": 0.052,
+   "cell4": 0.062,
+   "cell5": 0.057
+  }
+ },
+ "node_exit_codes": {
+  "n1": [
+   0,
+   "running"
+  ],
+  "n2": [
+   0,
+   "running"
+  ],
+  "n3": [
+   0,
+   "running"
+  ]
+ },
+ "log_highlights": {
+  "n1": [
+   "2026-11-13T12:53:04.430962767Z 2026-11-13T12:53:04.430653Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=1 members={\"n2\"}",
+   "2026-11-13T12:53:04.624978131Z 2026-11-13T12:53:04.623797Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=2009",
+   "2026-11-13T12:53:10.203229017Z 2026-11-13T12:53:10.192678Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n2\" rule=\"sustain\" outstanding_ms=0 own_median_ms=45 samples=40 threshold_ms=25 suspect_ms=2032 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:53:10.203236485Z 2026-11-13T12:53:10.192688Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=1 why=\"gray follower n2 evicted\"",
+   "2026-11-13T12:53:11.232224270Z 2026-11-13T12:53:11.231953Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=2 members={\"n2\", \"n3\"}",
+   "2026-11-13T12:53:11.448983975Z 2026-11-13T12:53:11.447928Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=1255",
+   "2026-11-13T12:53:31.792416650Z 2026-11-13T12:53:31.791745Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n2\" rule=\"backstop\" outstanding_ms=1506 samples=0 sibling_median_ms=2 threshold_ms=0 suspect_ms=0 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:53:31.792496772Z 2026-11-13T12:53:31.791783Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=2 why=\"gray follower n2 evicted\"",
+   "2026-11-13T12:53:31.826696070Z 2026-11-13T12:53:31.825740Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=3 members={\"n2\", \"n3\"}",
+   "2026-11-13T12:53:32.044170540Z 2026-11-13T12:53:32.043006Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:53:43.093062343Z 2026-11-13T12:53:43.092114Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n2\" rule=\"backstop\" outstanding_ms=1507 samples=0 sibling_median_ms=1 threshold_ms=0 suspect_ms=0 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:53:43.093102589Z 2026-11-13T12:53:43.092149Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=3 why=\"gray follower n2 evicted\"",
+   "2026-11-13T12:53:43.124156502Z 2026-11-13T12:53:43.123690Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=4 members={\"n3\"}",
+   "2026-11-13T12:53:43.344092169Z 2026-11-13T12:53:43.343348Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:53:44.039965105Z 2026-11-13T12:53:44.039577Z  WARN celld::drain_token: the drain token wait expired; handing off unserialized event=\"drain_token_bypassed\" holder=\"n3\" waited_ms=30003",
+   "2026-11-13T12:53:53.034156314Z 2026-11-13T12:53:53.033747Z ERROR celld: the shutdown handoff made no progress event=\"shutdown_handoff_stalled\" drain_ms=25000 shutdown_total_ms=40000 process_deadline_fired=true occupied=0 activating=0 quiescing=0 evicting=0 releasing=0 adopting=2 handed_off=0 drain_state=\"{\\\"activating\\\":0,\\\"activation_waiting\\\":0,\\\"adopting\\\":2,\\\"allocator\\\":{\\\"active_bytes\\\":1247",
+   "2026-11-13T12:53:53.034290039Z 2026-11-13T12:53:53.033837Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=4 why=\"graceful shutdown\"",
+   "2026-11-13T12:53:56.147069770Z 2026-11-13T12:53:56.146100Z  INFO celld::node_log: stale predecessor generations' recovery objects retired objects=2",
+   "2026-11-13T12:53:56.173027052Z 2026-11-13T12:53:56.172132Z  INFO celld::node_log: sealed session's recovery objects retired session=\"n2/8cdf15dd4708682c1902b92bb632c8bbbbe9c1fffcb4e70906f01d55847dc18f\" objects=4",
+   "2026-11-13T12:53:56.715338392Z 2026-11-13T12:53:56.715007Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=1 members={\"n2\", \"n3\"}",
+   "2026-11-13T12:53:56.912385312Z 2026-11-13T12:53:56.912115Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=764",
+   "2026-11-13T12:53:53.078879103Z node-log close: sealed epoch 4"
+  ],
+  "n2": [
+   "2026-11-13T12:53:03.517743108Z 2026-11-13T12:53:03.515341Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=1 members={\"n1\"}",
+   "2026-11-13T12:53:03.691515961Z 2026-11-13T12:53:03.689682Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=252",
+   "2026-11-13T12:53:10.264960910Z 2026-11-13T12:53:10.263102Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n1\" rule=\"sustain\" outstanding_ms=27 own_median_ms=44 samples=43 threshold_ms=25 suspect_ms=2024 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:53:10.264992525Z 2026-11-13T12:53:10.263127Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=1 why=\"gray follower n1 evicted\"",
+   "2026-11-13T12:53:11.337970942Z 2026-11-13T12:53:11.337068Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=2 members={\"n1\", \"n3\"}",
+   "2026-11-13T12:53:11.363782710Z 2026-11-13T12:53:11.362739Z  WARN celld::node_log: bundle flush not credited: record moved key=\"log/n2/8cdf15dd4708682c1902b92bb632c8bbbbe9c1fffcb4e70906f01d55847dc18f/bundle/e1-00000002.ltxb\"",
+   "2026-11-13T12:53:11.522339325Z 2026-11-13T12:53:11.522145Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=1259",
+   "2026-11-13T12:53:29.127322892Z 2026-11-13T12:53:29.124279Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=2 why=\"graceful shutdown\"",
+   "2026-11-13T12:53:56.543095648Z 2026-11-13T12:53:56.541724Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=1 members={\"n1\"}",
+   "2026-11-13T12:53:56.681709472Z 2026-11-13T12:53:56.681088Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:53:29.153080423Z node-log close: sealed epoch 2"
+  ],
+  "n3": [
+   "2026-11-13T12:53:04.449976480Z 2026-11-13T12:53:04.449218Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=1 members={\"n1\", \"n2\"}",
+   "2026-11-13T12:53:04.621587078Z 2026-11-13T12:53:04.620557Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=253",
+   "2026-11-13T12:53:31.749761453Z 2026-11-13T12:53:31.745112Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n2\" rule=\"backstop\" outstanding_ms=1506 samples=0 sibling_median_ms=2 threshold_ms=0 suspect_ms=0 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:53:31.749855079Z 2026-11-13T12:53:31.745152Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=1 why=\"gray follower n2 evicted\"",
+   "2026-11-13T12:53:31.775602587Z 2026-11-13T12:53:31.775346Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=2 members={\"n1\", \"n2\"}",
+   "2026-11-13T12:53:31.995807215Z 2026-11-13T12:53:31.994788Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=250",
+   "2026-11-13T12:53:43.042400096Z 2026-11-13T12:53:43.040025Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n2\" rule=\"backstop\" outstanding_ms=1506 samples=0 sibling_median_ms=1 threshold_ms=0 suspect_ms=0 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:53:43.042446516Z 2026-11-13T12:53:43.040054Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=2 why=\"gray follower n2 evicted\"",
+   "2026-11-13T12:53:43.067434695Z 2026-11-13T12:53:43.067181Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=3 members={\"n1\"}",
+   "2026-11-13T12:53:43.291073506Z 2026-11-13T12:53:43.290712Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:53:45.145472314Z 2026-11-13T12:53:45.144948Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=3 why=\"graceful shutdown\"",
+   "2026-11-13T12:53:56.589182276Z 2026-11-13T12:53:56.588773Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=1 members={\"n1\"}",
+   "2026-11-13T12:53:56.666404929Z 2026-11-13T12:53:56.665934Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=252",
+   "2026-11-13T12:53:45.187490405Z node-log close: sealed epoch 3"
+  ]
+ },
+ "error": null
+}

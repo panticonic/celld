@@ -1,0 +1,240 @@
+{
+ "run_id": "11131247482e3",
+ "celld_bin": "/home/werg/celld-harness-bin/celld-uf-7c7d91f",
+ "results": [
+  {
+   "scenario": "kill9_owner",
+   "verdict": "PASS",
+   "duration_s": 44.6,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "kill9_owner_wiped",
+   "verdict": "PASS",
+   "duration_s": 44.1,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "sigterm_owner",
+   "verdict": "PASS",
+   "duration_s": 36.4,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "drain_api_owner",
+   "verdict": "PASS",
+   "duration_s": 36.0,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "partition_owner_peers",
+   "verdict": "PASS",
+   "duration_s": 55.2,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "partition_owner_bucket",
+   "verdict": "PASS",
+   "duration_s": 58.8,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "pause_owner_zombie",
+   "verdict": "PASS",
+   "duration_s": 64.0,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "kill_follower",
+   "verdict": "PASS",
+   "duration_s": 47.6,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "lag_follower",
+   "verdict": "PASS",
+   "duration_s": 55.8,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "pause_follower",
+   "verdict": "PASS",
+   "duration_s": 48.5,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "restart_fleet_kill9",
+   "verdict": "PASS",
+   "duration_s": 38.9,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "restart_fleet_kill9_wipe_one",
+   "verdict": "PASS",
+   "duration_s": 39.1,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "restart_fleet_graceful",
+   "verdict": "PASS",
+   "duration_s": 69.2,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "restart_fleet_graceful_wiped",
+   "verdict": "PASS",
+   "duration_s": 70.7,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "slow_bucket",
+   "verdict": "PASS",
+   "duration_s": 58.4,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "slow_bucket_kill_owner",
+   "verdict": "PASS",
+   "duration_s": 59.9,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "kill_two_nodes_wiped",
+   "verdict": "PASS",
+   "duration_s": 48.9,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  },
+  {
+   "scenario": "chaos_soak",
+   "verdict": "PASS",
+   "duration_s": 203.9,
+   "invariants": {
+    "acked_write_durable": true,
+    "single_writer": true,
+    "liveness_after_recovery": true
+   },
+   "violations": 0,
+   "liveness_failures": [],
+   "effects_not_observed": []
+  }
+ ]
+}

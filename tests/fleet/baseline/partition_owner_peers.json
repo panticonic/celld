@@ -1,0 +1,655 @@
+{
+ "scenario": "partition_owner_peers",
+ "description": "Partition the owner from its peers (bucket still reachable) for 2.5 leases",
+ "run_id": "11131247482e3",
+ "started_at": "2026-11-13T12:49:20Z",
+ "celld_bin": "/home/werg/celld-harness-bin/celld-uf-7c7d91f",
+ "verdict": "PASS",
+ "config": {
+  "nodes": 3,
+  "ttl_ms": 10000,
+  "cells": 6,
+  "clients": 12,
+  "readers": 3,
+  "req_timeout_s": 15.0,
+  "subnet": "10.187.33.0/24",
+  "minio_image": "pgsty/minio:latest"
+ },
+ "deploy": "Current Version ID: 6b26d66cacb2032d",
+ "diagnose": [
+  "ok bucket s3://fleet",
+  "ok bucket conditional write: create, reject-create, update, reject-stale",
+  "ok fleet: 3 node lease(s) enumerated",
+  "ok peer n1 at 10.187.33.11:8081: (signed direct probe) protocol=5 owned_cells=0 resident_cells=0 websockets=0 rss_bytes=42717184 in_use_bytes=32363080 cpu_percent=1.98 fds=23/2147483584 pressured=false shed_cells=0 restoring=0 load_age_ms=1558",
+  "ok peer n2 at 10.187.33.12:8081: (signed direct probe) protocol=5 owned_cells=0 resident_cells=0 websockets=0 rss_bytes=41484288 in_use_bytes=31575336 cpu_percent=0.00 fds=15/2147483584 pressured=false shed_cells=0 restoring=0 load_age_ms=2318",
+  "ok peer n3 at 10.187.33.13:8081: (signed direct probe) protocol=5 owned_cells=0 resident_cells=0 websockets=0 rss_bytes=41418752 in_use_bytes=31493200 cpu_percent=0.00 fds=15/2147483584 pressured=false shed_cells=0 restoring=0 load_age_ms=1431"
+ ],
+ "duration_s": 55.2,
+ "invariants": {
+  "acked_write_durable": true,
+  "single_writer": true,
+  "liveness_after_recovery": true
+ },
+ "violations": [],
+ "liveness_failures": [],
+ "effects": [
+  {
+   "name": "victim owns cells",
+   "ok": true,
+   "detail": "n1 owns ['cell0', 'cell3']",
+   "excuses": false
+  },
+  {
+   "name": "victim has an open fleet ensemble",
+   "ok": true,
+   "detail": "log ensemble open; fleet acks enabled",
+   "excuses": false
+  }
+ ],
+ "checker": {
+  "ok": true,
+  "violations": [],
+  "notes": [],
+  "per_cell": {
+   "cell0": {
+    "ack_timeline_by_instance": {
+     "e46e362d": {
+      "first_ack_t": 99.35,
+      "n": 194,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 196,
+      "last_ack_t": 145.5
+     }
+    },
+    "acks": 194,
+    "attempts": 199,
+    "unacked": 5,
+    "unacked_but_present": 2,
+    "final_rows": 196,
+    "final_head": 196,
+    "instances_in_ledger": [
+     "e46e362d"
+    ],
+    "ack_instances": [
+     "e46e362d"
+    ],
+    "violation_counts": {}
+   },
+   "cell1": {
+    "ack_timeline_by_instance": {
+     "b7ac9276": {
+      "first_ack_t": 99.71,
+      "n": 196,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 196,
+      "last_ack_t": 145.73
+     }
+    },
+    "acks": 196,
+    "attempts": 198,
+    "unacked": 2,
+    "unacked_but_present": 0,
+    "final_rows": 196,
+    "final_head": 196,
+    "instances_in_ledger": [
+     "b7ac9276"
+    ],
+    "ack_instances": [
+     "b7ac9276"
+    ],
+    "violation_counts": {}
+   },
+   "cell2": {
+    "ack_timeline_by_instance": {
+     "82b561a1": {
+      "first_ack_t": 100.11,
+      "n": 199,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 199,
+      "last_ack_t": 145.94
+     }
+    },
+    "acks": 199,
+    "attempts": 200,
+    "unacked": 1,
+    "unacked_but_present": 0,
+    "final_rows": 199,
+    "final_head": 199,
+    "instances_in_ledger": [
+     "82b561a1"
+    ],
+    "ack_instances": [
+     "82b561a1"
+    ],
+    "violation_counts": {}
+   },
+   "cell3": {
+    "ack_timeline_by_instance": {
+     "c0d375c1": {
+      "first_ack_t": 100.33,
+      "n": 214,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 217,
+      "last_ack_t": 146.17
+     }
+    },
+    "acks": 214,
+    "attempts": 221,
+    "unacked": 7,
+    "unacked_but_present": 3,
+    "final_rows": 217,
+    "final_head": 217,
+    "instances_in_ledger": [
+     "c0d375c1"
+    ],
+    "ack_instances": [
+     "c0d375c1"
+    ],
+    "violation_counts": {}
+   },
+   "cell4": {
+    "ack_timeline_by_instance": {
+     "0caaf8af": {
+      "first_ack_t": 100.51,
+      "n": 177,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 177,
+      "last_ack_t": 146.4
+     }
+    },
+    "acks": 177,
+    "attempts": 182,
+    "unacked": 5,
+    "unacked_but_present": 0,
+    "final_rows": 177,
+    "final_head": 177,
+    "instances_in_ledger": [
+     "0caaf8af"
+    ],
+    "ack_instances": [
+     "0caaf8af"
+    ],
+    "violation_counts": {}
+   },
+   "cell5": {
+    "ack_timeline_by_instance": {
+     "6a4258cc": {
+      "first_ack_t": 100.75,
+      "n": 207,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 207,
+      "last_ack_t": 146.6
+     }
+    },
+    "acks": 207,
+    "attempts": 208,
+    "unacked": 1,
+    "unacked_but_present": 0,
+    "final_rows": 207,
+    "final_head": 207,
+    "instances_in_ledger": [
+     "6a4258cc"
+    ],
+    "ack_instances": [
+     "6a4258cc"
+    ],
+    "violation_counts": {}
+   }
+  },
+  "write_outcomes": {
+   "ack": 1187,
+   "timeout": 12,
+   "http_500": 9
+  },
+  "reads": {
+   "ok": 221,
+   "failed": 4
+  }
+ },
+ "phases": [
+  {
+   "phase": "bring-up",
+   "t_start": 91.532,
+   "t_end": 98.93,
+   "secs": 7.4,
+   "issued": 0,
+   "acked": 0,
+   "failed": {},
+   "acks_per_s": 0.0,
+   "lat_p50_s": null,
+   "lat_p99_s": null,
+   "lat_max_s": null
+  },
+  {
+   "phase": "warmup",
+   "t_start": 98.93,
+   "t_end": 102.317,
+   "secs": 3.39,
+   "issued": 123,
+   "acked": 123,
+   "failed": {},
+   "acks_per_s": 36.3,
+   "lat_p50_s": 0.1562,
+   "lat_p99_s": 0.4005,
+   "lat_max_s": 0.4209
+  },
+  {
+   "phase": "steady",
+   "t_start": 102.317,
+   "t_end": 102.844,
+   "secs": 0.53,
+   "issued": 38,
+   "acked": 38,
+   "failed": {},
+   "acks_per_s": 72.1,
+   "lat_p50_s": 0.151,
+   "lat_p99_s": 0.2369,
+   "lat_max_s": 0.2369
+  },
+  {
+   "phase": "pre-fault load",
+   "t_start": 102.844,
+   "t_end": 106.847,
+   "secs": 4.0,
+   "issued": 301,
+   "acked": 301,
+   "failed": {},
+   "acks_per_s": 75.2,
+   "lat_p50_s": 0.1355,
+   "lat_p99_s": 0.3587,
+   "lat_max_s": 0.4064
+  },
+  {
+   "phase": "FAULT partition owner from peers",
+   "t_start": 106.847,
+   "t_end": 107.284,
+   "secs": 0.44,
+   "issued": 20,
+   "acked": 14,
+   "failed": {
+    "timeout": 6
+   },
+   "acks_per_s": 32.0,
+   "lat_p50_s": 0.2198,
+   "lat_p99_s": 1.581,
+   "lat_max_s": 1.581
+  },
+  {
+   "phase": "partitioned (peers unreachable, bucket reachable)",
+   "t_start": 107.284,
+   "t_end": 132.421,
+   "secs": 25.14,
+   "issued": 67,
+   "acked": 52,
+   "failed": {
+    "timeout": 6,
+    "http_500": 9
+   },
+   "acks_per_s": 2.1,
+   "lat_p50_s": 0.9764,
+   "lat_p99_s": 13.737,
+   "lat_max_s": 13.737
+  },
+  {
+   "phase": "HEAL partition",
+   "t_start": 132.421,
+   "t_end": 132.721,
+   "secs": 0.3,
+   "issued": 0,
+   "acked": 0,
+   "failed": {},
+   "acks_per_s": 0.0,
+   "lat_p50_s": null,
+   "lat_p99_s": null,
+   "lat_max_s": null
+  },
+  {
+   "phase": "after heal",
+   "t_start": 132.721,
+   "t_end": 142.721,
+   "secs": 10.0,
+   "issued": 641,
+   "acked": 641,
+   "failed": {},
+   "acks_per_s": 64.1,
+   "lat_p50_s": 0.1408,
+   "lat_p99_s": 0.2812,
+   "lat_max_s": 0.367
+  },
+  {
+   "phase": "quiesce",
+   "t_start": 142.721,
+   "t_end": 142.949,
+   "secs": 0.23,
+   "issued": 0,
+   "acked": 0,
+   "failed": {},
+   "acks_per_s": 0.0,
+   "lat_p50_s": null,
+   "lat_p99_s": null,
+   "lat_max_s": null
+  },
+  {
+   "phase": "verify: recover + probe writes + read back from every node",
+   "t_start": 142.949,
+   "t_end": 146.7,
+   "secs": 3.75,
+   "issued": 18,
+   "acked": 18,
+   "failed": {},
+   "acks_per_s": 4.8,
+   "lat_p50_s": 0.062,
+   "lat_p99_s": 0.0822,
+   "lat_max_s": 0.0822
+  }
+ ],
+ "timeline": [
+  {
+   "t": 91.532,
+   "at": "12:49:20.532",
+   "event": "bring-up",
+   "phase": true
+  },
+  {
+   "t": 98.93,
+   "at": "12:49:27.930",
+   "event": "warmup",
+   "phase": true
+  },
+  {
+   "t": 102.317,
+   "at": "12:49:31.316",
+   "event": "steady",
+   "phase": true
+  },
+  {
+   "t": 102.764,
+   "at": "12:49:31.764",
+   "event": "victim chosen",
+   "node": "n1",
+   "cells": [
+    "cell0",
+    "cell3"
+   ],
+   "owners": {
+    "cell0": "n1",
+    "cell1": "n2",
+    "cell2": "n3",
+    "cell3": "n1",
+    "cell4": "n2",
+    "cell5": "n3"
+   }
+  },
+  {
+   "t": 102.765,
+   "at": "12:49:31.764",
+   "event": "effect ok: victim owns cells",
+   "detail": "n1 owns ['cell0', 'cell3']"
+  },
+  {
+   "t": 102.844,
+   "at": "12:49:31.844",
+   "event": "effect ok: victim has an open fleet ensemble",
+   "detail": "log ensemble open; fleet acks enabled"
+  },
+  {
+   "t": 102.844,
+   "at": "12:49:31.844",
+   "event": "pre-fault load",
+   "phase": true
+  },
+  {
+   "t": 106.847,
+   "at": "12:49:35.846",
+   "event": "FAULT partition owner from peers",
+   "phase": true,
+   "node": "n1"
+  },
+  {
+   "t": 107.284,
+   "at": "12:49:35.284",
+   "event": "partitioned (peers unreachable, bucket reachable)",
+   "phase": true
+  },
+  {
+   "t": 132.421,
+   "at": "12:50:01.421",
+   "event": "HEAL partition",
+   "phase": true
+  },
+  {
+   "t": 132.721,
+   "at": "12:50:01.721",
+   "event": "after heal",
+   "phase": true
+  },
+  {
+   "t": 142.721,
+   "at": "12:50:11.721",
+   "event": "quiesce",
+   "phase": true
+  },
+  {
+   "t": 142.949,
+   "at": "12:50:11.949",
+   "event": "verify: recover + probe writes + read back from every node",
+   "phase": true
+  }
+ ],
+ "data": {
+  "dids": {
+   "cell0": "289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546",
+   "cell1": "15d21e92a4f1516998c88bc73fc84fad24b4bcf15cb002b47b5d6bf80458d9c3",
+   "cell2": "7aa51a1e0a2b2cb2712ce2f2d96b03d0f4e597bc34c444bb10f57eec32c2418e",
+   "cell3": "b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307",
+   "cell4": "4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f",
+   "cell5": "a03bcfaa709dbf875bdb21a08663755d56bdb91c0a1af5c880832a856d4e3386"
+  },
+  "owners_before_fault": {
+   "cell0": "n1",
+   "cell1": "n2",
+   "cell2": "n3",
+   "cell3": "n1",
+   "cell4": "n2",
+   "cell5": "n3"
+  },
+  "victim": "n1",
+  "victim_cells": [
+   "cell0",
+   "cell3"
+  ],
+  "victim_status_during": "running",
+  "victim_cell_acks_during_partition": 14,
+  "victim_cell_ack_instances_during": [
+   "c0d375c1",
+   "e46e362d"
+  ],
+  "recovery_s": {
+   "cell0": 0.068,
+   "cell1": 0.069,
+   "cell2": 0.054,
+   "cell3": 0.077,
+   "cell4": 0.055,
+   "cell5": 0.055
+  }
+ },
+ "node_exit_codes": {
+  "n1": [
+   0,
+   "running"
+  ],
+  "n2": [
+   0,
+   "running"
+  ],
+  "n3": [
+   0,
+   "running"
+  ]
+ },
+ "log_highlights": {
+  "n1": [
+   "2026-11-13T12:49:26.099983728Z 2026-11-13T12:49:26.099686Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=1 members={\"n2\"}",
+   "2026-11-13T12:49:26.308998443Z 2026-11-13T12:49:26.307109Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=2009",
+   "2026-11-13T12:49:31.914970624Z 2026-11-13T12:49:31.912521Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n2\" rule=\"sustain\" outstanding_ms=10 own_median_ms=46 samples=46 threshold_ms=25 suspect_ms=2027 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:49:31.914997259Z 2026-11-13T12:49:31.912549Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=1 why=\"gray follower n2 evicted\"",
+   "2026-11-13T12:49:33.049414208Z 2026-11-13T12:49:33.049057Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=2 members={\"n2\", \"n3\"}",
+   "2026-11-13T12:49:33.179197300Z 2026-11-13T12:49:33.178214Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=1266",
+   "2026-11-13T12:49:38.141210755Z 2026-11-13T12:49:38.140851Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=2 why=\"member append failed\"",
+   "2026-11-13T12:49:38.284469200Z 2026-11-13T12:49:38.284317Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=3 members={\"n2\", \"n3\"}",
+   "2026-11-13T12:49:38.477977900Z 2026-11-13T12:49:38.477675Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=252",
+   "2026-11-13T12:49:42.245999262Z 2026-11-13T12:49:42.245113Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n2\" rule=\"backstop\" outstanding_ms=1503 samples=0 sibling_median_ms=1602 threshold_ms=0 suspect_ms=0 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:49:42.246050658Z 2026-11-13T12:49:42.245148Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=3 why=\"gray follower n2 evicted\"",
+   "2026-11-13T12:49:42.294013923Z 2026-11-13T12:49:42.293271Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=4 members={\"n2\", \"n3\"}",
+   "2026-11-13T12:49:42.497123502Z 2026-11-13T12:49:42.496551Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:49:50.704474655Z 2026-11-13T12:49:50.704121Z  WARN celld: HTTP connections failed event=\"http_connection_failures\" total=1 since_last=1 cause=\"incomplete_message\" cause_total=1 surface=\"public\" peer=Some(10.187.33.1:39896) error=connection closed before message completed",
+   "2026-11-13T12:49:52.292872328Z 2026-11-13T12:49:52.291962Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n2\" rule=\"backstop\" outstanding_ms=1534 samples=0 sibling_median_ms=1601 threshold_ms=0 suspect_ms=0 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:49:52.292928884Z 2026-11-13T12:49:52.291987Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=4 why=\"gray follower n2 evicted\"",
+   "2026-11-13T12:49:52.342970853Z 2026-11-13T12:49:52.342055Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=5 members={\"n2\", \"n3\"}",
+   "2026-11-13T12:49:52.543837414Z 2026-11-13T12:49:52.543568Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:49:52.617993718Z 2026-11-13T12:49:52.616952Z  WARN celld: HTTP connections failed event=\"http_connection_failures\" total=4 since_last=3 cause=\"incomplete_message\" cause_total=4 surface=\"public\" peer=Some(10.187.33.1:36256) error=connection closed before message completed",
+   "2026-11-13T12:49:53.836646306Z 2026-11-13T12:49:53.836044Z  WARN celld: peer owner unreachable scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f owner=10.187.33.12:8081 error=error sending request for url (http://10.187.33.12:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.12:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:49:53.836724571Z 2026-11-13T12:49:53.836144Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f node=n2 epoch=1 attempt=NeverConnected action=Redispatch",
+   "2026-11-13T12:49:54.255473874Z 2026-11-13T12:49:54.255210Z  WARN celld: peer owner unreachable scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f owner=10.187.33.12:8081 error=error sending request for url (http://10.187.33.12:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.12:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:49:54.255505891Z 2026-11-13T12:49:54.255265Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f node=n2 epoch=1 attempt=NeverConnected action=Redispatch",
+   "2026-11-13T12:49:54.944124387Z 2026-11-13T12:49:54.943664Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=5 why=\"member append failed\"",
+   "2026-11-13T12:49:55.106998374Z 2026-11-13T12:49:55.106665Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=6 members={\"n2\", \"n3\"}",
+   "2026-11-13T12:49:55.217752548Z 2026-11-13T12:49:55.217334Z  WARN celld: peer owner unreachable scope=Ledger:15d21e92a4f1516998c88bc73fc84fad24b4bcf15cb002b47b5d6bf80458d9c3 owner=10.187.33.12:8081 error=error sending request for url (http://10.187.33.12:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.12:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:49:55.217768764Z 2026-11-13T12:49:55.217383Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:15d21e92a4f1516998c88bc73fc84fad24b4bcf15cb002b47b5d6bf80458d9c3 node=n2 epoch=1 attempt=NeverConnected action=Redispatch",
+   "2026-11-13T12:49:55.303730251Z 2026-11-13T12:49:55.303235Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=250",
+   "2026-11-13T12:49:56.844977302Z 2026-11-13T12:49:56.842669Z  WARN celld: peer owner unreachable scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f owner=10.187.33.12:8081 error=error sending request for url (http://10.187.33.12:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.12:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:49:56.845020807Z 2026-11-13T12:49:56.842714Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f node=n2 epoch=1 attempt=NeverConnected action=Stop",
+   "2026-11-13T12:49:57.262368554Z 2026-11-13T12:49:57.261287Z  WARN celld: peer owner unreachable scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f owner=10.187.33.12:8081 error=error sending request for url (http://10.187.33.12:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.12:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:49:57.262446501Z 2026-11-13T12:49:57.261334Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f node=n2 epoch=1 attempt=NeverConnected action=Stop",
+   "2026-11-13T12:49:57.541220368Z 2026-11-13T12:49:57.540925Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=6 why=\"member append failed\"",
+   "2026-11-13T12:49:57.591145528Z 2026-11-13T12:49:57.590869Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=7 members={\"n2\", \"n3\"}",
+   "2026-11-13T12:49:57.813734794Z 2026-11-13T12:49:57.813395Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=250",
+   "2026-11-13T12:49:58.224975042Z 2026-11-13T12:49:58.223872Z  WARN celld: peer owner unreachable scope=Ledger:15d21e92a4f1516998c88bc73fc84fad24b4bcf15cb002b47b5d6bf80458d9c3 owner=10.187.33.12:8081 error=error sending request for url (http://10.187.33.12:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.12:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:49:58.225019570Z 2026-11-13T12:49:58.223933Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:15d21e92a4f1516998c88bc73fc84fad24b4bcf15cb002b47b5d6bf80458d9c3 node=n2 epoch=1 attempt=NeverConnected action=Stop",
+   "2026-11-13T12:49:58.680219824Z 2026-11-13T12:49:58.677847Z  WARN celld: peer owner unreachable scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f owner=10.187.33.12:8081 error=error sending request for url (http://10.187.33.12:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.12:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:49:58.680269778Z 2026-11-13T12:49:58.678124Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f node=n2 epoch=1 attempt=NeverConnected action=Redispatch",
+   "2026-11-13T12:49:59.215882550Z 2026-11-13T12:49:59.215672Z  WARN celld: peer owner unreachable scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f owner=10.187.33.12:8081 error=error sending request for url (http://10.187.33.12:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.12:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:49:59.218241573Z 2026-11-13T12:49:59.216048Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f node=n2 epoch=1 attempt=NeverConnected action=Redispatch",
+   "2026-11-13T12:49:59.958002234Z 2026-11-13T12:49:59.957675Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=7 why=\"member append failed\"",
+   "2026-11-13T12:50:00.132144705Z 2026-11-13T12:50:00.131831Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=8 members={\"n2\", \"n3\"}",
+   "2026-11-13T12:50:00.326642910Z 2026-11-13T12:50:00.326129Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:50:01.244405498Z 2026-11-13T12:50:01.243370Z  WARN celld: peer owner unreachable scope=Ledger:15d21e92a4f1516998c88bc73fc84fad24b4bcf15cb002b47b5d6bf80458d9c3 owner=10.187.33.12:8081 error=error sending request for url (http://10.187.33.12:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.12:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:50:01.244446031Z 2026-11-13T12:50:01.243427Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:15d21e92a4f1516998c88bc73fc84fad24b4bcf15cb002b47b5d6bf80458d9c3 node=n2 epoch=1 attempt=NeverConnected action=Redispatch",
+   "2026-11-13T12:50:01.685151469Z 2026-11-13T12:50:01.683329Z  WARN celld: peer owner unreachable scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f owner=10.187.33.12:8081 error=error sending request for url (http://10.187.33.12:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.12:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:50:01.685208082Z 2026-11-13T12:50:01.683386Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f node=n2 epoch=1 attempt=NeverConnected action=Stop",
+   "2026-11-13T12:50:01.808116033Z 2026-11-13T12:50:01.807341Z  WARN celld::node_log: append refused: fragment adoption failed against the record leader=\"n2/f2867e236ddbeb65b5083d745fdea608e26aa7fe0547602f76bacef615b92784\" epoch=6 held_epoch=2 sealed_to=0",
+   "2026-11-13T12:50:01.811165635Z 2026-11-13T12:50:01.810547Z  WARN celld::node_log: append refused: fragment adoption failed against the record leader=\"n2/f2867e236ddbeb65b5083d745fdea608e26aa7fe0547602f76bacef615b92784\" epoch=6 held_epoch=2 sealed_to=0",
+   "2026-11-13T12:50:01.906014291Z 2026-11-13T12:50:01.904849Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=8 why=\"correlated member stall; suspecting ourselves\"",
+   "2026-11-13T12:50:02.224122530Z 2026-11-13T12:50:02.223007Z  WARN celld: peer owner unreachable scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f owner=10.187.33.12:8081 error=error sending request for url (http://10.187.33.12:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.12:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:50:02.224177603Z 2026-11-13T12:50:02.223056Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f node=n2 epoch=1 attempt=NeverConnected action=Stop",
+   "2026-11-13T12:50:05.033972391Z 2026-11-13T12:50:05.033186Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=9 members={\"n2\", \"n3\"}",
+   "2026-11-13T12:50:05.221542622Z 2026-11-13T12:50:05.221288Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=3316"
+  ],
+  "n2": [
+   "2026-11-13T12:49:25.307322324Z 2026-11-13T12:49:25.305060Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=1 members={\"n1\"}",
+   "2026-11-13T12:49:25.478396844Z 2026-11-13T12:49:25.476490Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:49:31.906387057Z 2026-11-13T12:49:31.904117Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n1\" rule=\"sustain\" outstanding_ms=0 own_median_ms=46 samples=48 threshold_ms=25 suspect_ms=2085 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:49:31.906391297Z 2026-11-13T12:49:31.904141Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=1 why=\"gray follower n1 evicted\"",
+   "2026-11-13T12:49:32.961993943Z 2026-11-13T12:49:32.961538Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=2 members={\"n1\", \"n3\"}",
+   "2026-11-13T12:49:33.165027131Z 2026-11-13T12:49:33.164110Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=1260",
+   "2026-11-13T12:49:37.936737459Z 2026-11-13T12:49:37.936490Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=2 why=\"member append failed\"",
+   "2026-11-13T12:49:38.017403658Z 2026-11-13T12:49:38.017075Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=3 members={\"n1\", \"n3\"}",
+   "2026-11-13T12:49:38.223356693Z 2026-11-13T12:49:38.222934Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:49:39.878014879Z 2026-11-13T12:49:39.877581Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=3 why=\"member append failed\"",
+   "2026-11-13T12:49:40.020984901Z 2026-11-13T12:49:40.020575Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=4 members={\"n1\", \"n3\"}",
+   "2026-11-13T12:49:40.233023913Z 2026-11-13T12:49:40.231954Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=249",
+   "2026-11-13T12:49:46.762134528Z 2026-11-13T12:49:46.760654Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n1\" rule=\"backstop\" outstanding_ms=1507 samples=0 sibling_median_ms=1 threshold_ms=0 suspect_ms=0 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:49:46.762333799Z 2026-11-13T12:49:46.760683Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=4 why=\"gray follower n1 evicted\"",
+   "2026-11-13T12:49:46.806097005Z 2026-11-13T12:49:46.805371Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=5 members={\"n1\", \"n3\"}",
+   "2026-11-13T12:49:47.012915479Z 2026-11-13T12:49:47.012132Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:49:50.724980045Z 2026-11-13T12:49:50.724246Z  WARN celld: HTTP connections failed event=\"http_connection_failures\" total=1 since_last=1 cause=\"incomplete_message\" cause_total=1 surface=\"public\" peer=Some(10.187.33.1:33428) error=connection closed before message completed",
+   "2026-11-13T12:49:52.083966444Z 2026-11-13T12:49:52.083564Z  WARN celld: HTTP connections failed event=\"http_connection_failures\" total=3 since_last=2 cause=\"incomplete_message\" cause_total=3 surface=\"public\" peer=Some(10.187.33.1:33474) error=connection closed before message completed",
+   "2026-11-13T12:49:53.406385149Z 2026-11-13T12:49:53.406239Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=5 why=\"member append failed\"",
+   "2026-11-13T12:49:53.575217519Z 2026-11-13T12:49:53.574936Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=6 members={\"n1\", \"n3\"}",
+   "2026-11-13T12:49:53.796500585Z 2026-11-13T12:49:53.796252Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:49:55.598819593Z 2026-11-13T12:49:55.598029Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=6 why=\"member append failed\"",
+   "2026-11-13T12:49:55.844996061Z 2026-11-13T12:49:55.843151Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=7 members={\"n1\", \"n3\"}",
+   "2026-11-13T12:49:56.057480768Z 2026-11-13T12:49:56.056608Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:49:57.604248207Z 2026-11-13T12:49:57.602082Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n1\" rule=\"backstop\" outstanding_ms=1594 samples=0 sibling_median_ms=73 threshold_ms=0 suspect_ms=0 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:49:57.604303189Z 2026-11-13T12:49:57.602117Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=7 why=\"gray follower n1 evicted\"",
+   "2026-11-13T12:49:58.637287346Z 2026-11-13T12:49:58.637084Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=8 members={\"n1\", \"n3\"}",
+   "2026-11-13T12:49:58.857684493Z 2026-11-13T12:49:58.857081Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=1255",
+   "2026-11-13T12:49:59.076476937Z 2026-11-13T12:49:59.076255Z  WARN celld: peer owner unreachable scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 owner=10.187.33.11:8081 error=error sending request for url (http://10.187.33.11:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.11:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:49:59.077052018Z 2026-11-13T12:49:59.076460Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 node=n1 epoch=1 attempt=NeverConnected action=Redispatch",
+   "2026-11-13T12:50:00.030523168Z 2026-11-13T12:50:00.029626Z  WARN celld: peer owner unreachable scope=Ledger:289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546 owner=10.187.33.11:8081 error=error sending request for url (http://10.187.33.11:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.11:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:50:00.032433646Z 2026-11-13T12:50:00.029669Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546 node=n1 epoch=1 attempt=NeverConnected action=Redispatch",
+   "2026-11-13T12:50:02.083237375Z 2026-11-13T12:50:02.082768Z  WARN celld: peer owner unreachable scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 owner=10.187.33.11:8081 error=error sending request for url (http://10.187.33.11:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.11:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:50:02.083322029Z 2026-11-13T12:50:02.083076Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 node=n1 epoch=1 attempt=NeverConnected action=Stop"
+  ],
+  "n3": [
+   "2026-11-13T12:49:26.225919673Z 2026-11-13T12:49:26.225556Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=1 members={\"n1\", \"n2\"}",
+   "2026-11-13T12:49:26.417098122Z 2026-11-13T12:49:26.416379Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:49:37.523066144Z 2026-11-13T12:49:37.519807Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n1\" rule=\"backstop\" outstanding_ms=1552 samples=0 sibling_median_ms=45 threshold_ms=0 suspect_ms=0 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:49:37.523084544Z 2026-11-13T12:49:37.519841Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=1 why=\"gray follower n1 evicted\"",
+   "2026-11-13T12:49:38.578938621Z 2026-11-13T12:49:38.578143Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=2 members={\"n1\", \"n2\"}",
+   "2026-11-13T12:49:38.777086162Z 2026-11-13T12:49:38.776509Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=1256",
+   "2026-11-13T12:49:40.923204151Z 2026-11-13T12:49:40.922940Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=2 why=\"member append failed\"",
+   "2026-11-13T12:49:41.083533954Z 2026-11-13T12:49:41.083281Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=3 members={\"n1\", \"n2\"}",
+   "2026-11-13T12:49:41.288055496Z 2026-11-13T12:49:41.287136Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:49:49.575168780Z 2026-11-13T12:49:49.574679Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n1\" rule=\"backstop\" outstanding_ms=1506 samples=0 sibling_median_ms=1 threshold_ms=0 suspect_ms=0 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:49:49.575209213Z 2026-11-13T12:49:49.574708Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=3 why=\"gray follower n1 evicted\"",
+   "2026-11-13T12:49:49.619218453Z 2026-11-13T12:49:49.619029Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=4 members={\"n1\", \"n2\"}",
+   "2026-11-13T12:49:49.826308542Z 2026-11-13T12:49:49.825823Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=252",
+   "2026-11-13T12:49:50.725033714Z 2026-11-13T12:49:50.724802Z  WARN celld: HTTP connections failed event=\"http_connection_failures\" total=1 since_last=1 cause=\"incomplete_message\" cause_total=1 surface=\"public\" peer=Some(10.187.33.1:55038) error=connection closed before message completed",
+   "2026-11-13T12:49:53.684972027Z 2026-11-13T12:49:53.684393Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=4 why=\"member append failed\"",
+   "2026-11-13T12:49:53.820287373Z 2026-11-13T12:49:53.819031Z  WARN celld: peer owner unreachable scope=Ledger:289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546 owner=10.187.33.11:8081 error=error sending request for url (http://10.187.33.11:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.11:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:49:53.820474551Z 2026-11-13T12:49:53.819111Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546 node=n1 epoch=1 attempt=NeverConnected action=Redispatch",
+   "2026-11-13T12:49:53.959669585Z 2026-11-13T12:49:53.959452Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=5 members={\"n1\", \"n2\"}",
+   "2026-11-13T12:49:54.155297473Z 2026-11-13T12:49:54.154565Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=250",
+   "2026-11-13T12:49:55.071374436Z 2026-11-13T12:49:55.071062Z  WARN celld: HTTP connections failed event=\"http_connection_failures\" total=6 since_last=5 cause=\"incomplete_message\" cause_total=6 surface=\"public\" peer=Some(10.187.33.1:39134) error=connection closed before message completed",
+   "2026-11-13T12:49:56.829242841Z 2026-11-13T12:49:56.828020Z  WARN celld: peer owner unreachable scope=Ledger:289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546 owner=10.187.33.11:8081 error=error sending request for url (http://10.187.33.11:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.11:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:49:56.829280899Z 2026-11-13T12:49:56.828375Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546 node=n1 epoch=1 attempt=NeverConnected action=Stop",
+   "2026-11-13T12:49:56.838996984Z 2026-11-13T12:49:56.829020Z  WARN celld: peer owner unreachable scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 owner=10.187.33.11:8081 error=error sending request for url (http://10.187.33.11:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.11:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:49:56.839032332Z 2026-11-13T12:49:56.829051Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 node=n1 epoch=1 attempt=NeverConnected action=Redispatch",
+   "2026-11-13T12:49:56.952023430Z 2026-11-13T12:49:56.951277Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=5 why=\"member append failed\"",
+   "2026-11-13T12:49:57.241827137Z 2026-11-13T12:49:57.241628Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=6 members={\"n1\", \"n2\"}",
+   "2026-11-13T12:49:57.445103939Z 2026-11-13T12:49:57.444853Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=252",
+   "2026-11-13T12:49:58.073788754Z 2026-11-13T12:49:58.072913Z  WARN celld: peer owner unreachable scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 owner=10.187.33.11:8081 error=error sending request for url (http://10.187.33.11:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.11:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:49:58.073824731Z 2026-11-13T12:49:58.072959Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 node=n1 epoch=1 attempt=NeverConnected action=Redispatch",
+   "2026-11-13T12:49:59.142069317Z 2026-11-13T12:49:59.141141Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=6 why=\"member append failed\"",
+   "2026-11-13T12:49:59.264054339Z 2026-11-13T12:49:59.263618Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=7 members={\"n1\", \"n2\"}",
+   "2026-11-13T12:49:59.453356356Z 2026-11-13T12:49:59.452250Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:49:59.842786849Z 2026-11-13T12:49:59.842024Z  WARN celld: peer owner unreachable scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 owner=10.187.33.11:8081 error=error sending request for url (http://10.187.33.11:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.11:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:49:59.842826564Z 2026-11-13T12:49:59.842087Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 node=n1 epoch=1 attempt=NeverConnected action=Stop",
+   "2026-11-13T12:50:01.079322092Z 2026-11-13T12:50:01.079150Z  WARN celld: peer owner unreachable scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 owner=10.187.33.11:8081 error=error sending request for url (http://10.187.33.11:8081/peer/tunnel) cause=error sending request for url (http://10.187.33.11:8081/peer/tunnel): client error (Connect): tcp connect error: deadline ",
+   "2026-11-13T12:50:01.085441973Z 2026-11-13T12:50:01.079422Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 node=n1 epoch=1 attempt=NeverConnected action=Stop",
+   "2026-11-13T12:50:04.125058921Z 2026-11-13T12:50:04.124315Z  WARN celld: HTTP connections failed event=\"http_connection_failures\" total=7 since_last=1 cause=\"incomplete_message\" cause_total=7 surface=\"internal\" peer=Some(10.187.33.11:45868) error=connection closed before message completed"
+  ]
+ },
+ "error": null
+}

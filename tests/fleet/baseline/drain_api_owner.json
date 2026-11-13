@@ -1,0 +1,640 @@
+{
+ "scenario": "drain_api_owner",
+ "description": "POST /shutdown (drain with handoff) on the owner mid write stream; restart it",
+ "run_id": "11131247482e3",
+ "started_at": "2026-11-13T12:48:39Z",
+ "celld_bin": "/home/werg/celld-harness-bin/celld-uf-7c7d91f",
+ "verdict": "PASS",
+ "config": {
+  "nodes": 3,
+  "ttl_ms": 10000,
+  "cells": 6,
+  "clients": 12,
+  "readers": 3,
+  "req_timeout_s": 15.0,
+  "subnet": "10.168.111.0/24",
+  "minio_image": "pgsty/minio:latest"
+ },
+ "deploy": "Current Version ID: 6b26d66cacb2032d",
+ "diagnose": [
+  "Error: bind --listen 127.0.0.1:8080",
+  "",
+  "Caused by:",
+  "    Address already in use (os error 98)"
+ ],
+ "duration_s": 36.0,
+ "invariants": {
+  "acked_write_durable": true,
+  "single_writer": true,
+  "liveness_after_recovery": true
+ },
+ "violations": [],
+ "liveness_failures": [],
+ "effects": [
+  {
+   "name": "victim owns cells",
+   "ok": true,
+   "detail": "n1 owns ['cell0', 'cell3']",
+   "excuses": false
+  },
+  {
+   "name": "victim has an open fleet ensemble",
+   "ok": true,
+   "detail": "log ensemble open; fleet acks enabled",
+   "excuses": false
+  },
+  {
+   "name": "victim exited by itself",
+   "ok": true,
+   "detail": "exit code 0 after 1.29s",
+   "excuses": false
+  }
+ ],
+ "checker": {
+  "ok": true,
+  "violations": [],
+  "notes": [],
+  "per_cell": {
+   "cell0": {
+    "ack_timeline_by_instance": {
+     "e314dfa2": {
+      "first_ack_t": 57.03,
+      "n": 77,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 77,
+      "last_ack_t": 65.15
+     },
+     "23831318": {
+      "first_ack_t": 65.68,
+      "n": 115,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 78,
+      "max_seq": 192,
+      "last_ack_t": 85.39
+     }
+    },
+    "acks": 192,
+    "attempts": 200,
+    "unacked": 8,
+    "unacked_but_present": 0,
+    "final_rows": 192,
+    "final_head": 192,
+    "instances_in_ledger": [
+     "e314dfa2",
+     "23831318"
+    ],
+    "ack_instances": [
+     "23831318",
+     "e314dfa2"
+    ],
+    "violation_counts": {}
+   },
+   "cell1": {
+    "ack_timeline_by_instance": {
+     "879f43ca": {
+      "first_ack_t": 57.44,
+      "n": 184,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 184,
+      "last_ack_t": 85.61
+     }
+    },
+    "acks": 184,
+    "attempts": 188,
+    "unacked": 4,
+    "unacked_but_present": 0,
+    "final_rows": 184,
+    "final_head": 184,
+    "instances_in_ledger": [
+     "879f43ca"
+    ],
+    "ack_instances": [
+     "879f43ca"
+    ],
+    "violation_counts": {}
+   },
+   "cell2": {
+    "ack_timeline_by_instance": {
+     "9bc76eb4": {
+      "first_ack_t": 57.85,
+      "n": 176,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 176,
+      "last_ack_t": 85.86
+     }
+    },
+    "acks": 176,
+    "attempts": 181,
+    "unacked": 5,
+    "unacked_but_present": 0,
+    "final_rows": 176,
+    "final_head": 176,
+    "instances_in_ledger": [
+     "9bc76eb4"
+    ],
+    "ack_instances": [
+     "9bc76eb4"
+    ],
+    "violation_counts": {}
+   },
+   "cell3": {
+    "ack_timeline_by_instance": {
+     "896f90d4": {
+      "first_ack_t": 58.07,
+      "n": 87,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 88,
+      "last_ack_t": 65.11
+     },
+     "2b3eee8b": {
+      "first_ack_t": 65.66,
+      "n": 128,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 89,
+      "max_seq": 216,
+      "last_ack_t": 86.13
+     }
+    },
+    "acks": 215,
+    "attempts": 220,
+    "unacked": 5,
+    "unacked_but_present": 1,
+    "final_rows": 216,
+    "final_head": 216,
+    "instances_in_ledger": [
+     "896f90d4",
+     "2b3eee8b"
+    ],
+    "ack_instances": [
+     "2b3eee8b",
+     "896f90d4"
+    ],
+    "violation_counts": {}
+   },
+   "cell4": {
+    "ack_timeline_by_instance": {
+     "4ebe6d5c": {
+      "first_ack_t": 58.3,
+      "n": 177,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 177,
+      "last_ack_t": 86.36
+     }
+    },
+    "acks": 177,
+    "attempts": 183,
+    "unacked": 6,
+    "unacked_but_present": 0,
+    "final_rows": 177,
+    "final_head": 177,
+    "instances_in_ledger": [
+     "4ebe6d5c"
+    ],
+    "ack_instances": [
+     "4ebe6d5c"
+    ],
+    "violation_counts": {}
+   },
+   "cell5": {
+    "ack_timeline_by_instance": {
+     "a35806e3": {
+      "first_ack_t": 58.52,
+      "n": 195,
+      "entry_nodes": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "min_seq": 1,
+      "max_seq": 195,
+      "last_ack_t": 86.6
+     }
+    },
+    "acks": 195,
+    "attempts": 199,
+    "unacked": 4,
+    "unacked_but_present": 0,
+    "final_rows": 195,
+    "final_head": 195,
+    "instances_in_ledger": [
+     "a35806e3"
+    ],
+    "ack_instances": [
+     "a35806e3"
+    ],
+    "violation_counts": {}
+   }
+  },
+  "write_outcomes": {
+   "ack": 1139,
+   "http_503": 19,
+   "http_500": 1,
+   "error": 3,
+   "connect_fail": 9
+  },
+  "reads": {
+   "ok": 260,
+   "failed": 9
+  }
+ },
+ "phases": [
+  {
+   "phase": "bring-up",
+   "t_start": 50.619,
+   "t_end": 56.688,
+   "secs": 6.07,
+   "issued": 0,
+   "acked": 0,
+   "failed": {},
+   "acks_per_s": 0.0,
+   "lat_p50_s": null,
+   "lat_p99_s": null,
+   "lat_max_s": null
+  },
+  {
+   "phase": "warmup",
+   "t_start": 56.688,
+   "t_end": 60.114,
+   "secs": 3.43,
+   "issued": 126,
+   "acked": 126,
+   "failed": {},
+   "acks_per_s": 36.8,
+   "lat_p50_s": 0.1506,
+   "lat_p99_s": 0.411,
+   "lat_max_s": 0.412
+  },
+  {
+   "phase": "steady",
+   "t_start": 60.114,
+   "t_end": 60.942,
+   "secs": 0.83,
+   "issued": 53,
+   "acked": 53,
+   "failed": {},
+   "acks_per_s": 64.0,
+   "lat_p50_s": 0.1623,
+   "lat_p99_s": 0.2834,
+   "lat_max_s": 0.2834
+  },
+  {
+   "phase": "pre-fault load",
+   "t_start": 60.942,
+   "t_end": 64.942,
+   "secs": 4.0,
+   "issued": 270,
+   "acked": 269,
+   "failed": {
+    "http_500": 1
+   },
+   "acks_per_s": 67.3,
+   "lat_p50_s": 0.1576,
+   "lat_p99_s": 0.3147,
+   "lat_max_s": 0.3385
+  },
+  {
+   "phase": "FAULT POST /shutdown owner",
+   "t_start": 64.942,
+   "t_end": 66.23,
+   "secs": 1.29,
+   "issued": 111,
+   "acked": 89,
+   "failed": {
+    "http_503": 19,
+    "error": 3
+   },
+   "acks_per_s": 69.1,
+   "lat_p50_s": 0.1321,
+   "lat_p99_s": 1.4971,
+   "lat_max_s": 1.4971
+  },
+  {
+   "phase": "post-drain load",
+   "t_start": 66.23,
+   "t_end": 72.23,
+   "secs": 6.0,
+   "issued": 90,
+   "acked": 81,
+   "failed": {
+    "connect_fail": 9
+   },
+   "acks_per_s": 13.5,
+   "lat_p50_s": 0.7518,
+   "lat_p99_s": 1.2836,
+   "lat_max_s": 1.2836
+  },
+  {
+   "phase": "restart victim",
+   "t_start": 72.23,
+   "t_end": 74.033,
+   "secs": 1.8,
+   "issued": 52,
+   "acked": 52,
+   "failed": {},
+   "acks_per_s": 28.8,
+   "lat_p50_s": 0.2975,
+   "lat_p99_s": 0.7807,
+   "lat_max_s": 0.7807
+  },
+  {
+   "phase": "after rejoin",
+   "t_start": 74.033,
+   "t_end": 82.035,
+   "secs": 8.0,
+   "issued": 451,
+   "acked": 451,
+   "failed": {},
+   "acks_per_s": 56.4,
+   "lat_p50_s": 0.2018,
+   "lat_p99_s": 0.3709,
+   "lat_max_s": 0.4451
+  },
+  {
+   "phase": "quiesce",
+   "t_start": 82.035,
+   "t_end": 82.291,
+   "secs": 0.26,
+   "issued": 0,
+   "acked": 0,
+   "failed": {},
+   "acks_per_s": 0.0,
+   "lat_p50_s": null,
+   "lat_p99_s": null,
+   "lat_max_s": null
+  },
+  {
+   "phase": "verify: recover + probe writes + read back from every node",
+   "t_start": 82.291,
+   "t_end": 86.655,
+   "secs": 4.36,
+   "issued": 18,
+   "acked": 18,
+   "failed": {},
+   "acks_per_s": 4.1,
+   "lat_p50_s": 0.0625,
+   "lat_p99_s": 0.1332,
+   "lat_max_s": 0.1332
+  }
+ ],
+ "timeline": [
+  {
+   "t": 50.619,
+   "at": "12:48:39.619",
+   "event": "bring-up",
+   "phase": true
+  },
+  {
+   "t": 56.688,
+   "at": "12:48:45.688",
+   "event": "warmup",
+   "phase": true
+  },
+  {
+   "t": 60.114,
+   "at": "12:48:48.113",
+   "event": "steady",
+   "phase": true
+  },
+  {
+   "t": 60.849,
+   "at": "12:48:49.848",
+   "event": "victim chosen",
+   "node": "n1",
+   "cells": [
+    "cell0",
+    "cell3"
+   ],
+   "owners": {
+    "cell0": "n1",
+    "cell1": "n2",
+    "cell2": "n3",
+    "cell3": "n1",
+    "cell4": "n2",
+    "cell5": "n3"
+   }
+  },
+  {
+   "t": 60.849,
+   "at": "12:48:49.848",
+   "event": "effect ok: victim owns cells",
+   "detail": "n1 owns ['cell0', 'cell3']"
+  },
+  {
+   "t": 60.942,
+   "at": "12:48:49.942",
+   "event": "effect ok: victim has an open fleet ensemble",
+   "detail": "log ensemble open; fleet acks enabled"
+  },
+  {
+   "t": 60.942,
+   "at": "12:48:49.942",
+   "event": "pre-fault load",
+   "phase": true
+  },
+  {
+   "t": 64.942,
+   "at": "12:48:53.942",
+   "event": "FAULT POST /shutdown owner",
+   "phase": true,
+   "node": "n1"
+  },
+  {
+   "t": 66.229,
+   "at": "12:48:54.229",
+   "event": "effect ok: victim exited by itself",
+   "detail": "exit code 0 after 1.29s"
+  },
+  {
+   "t": 66.23,
+   "at": "12:48:54.229",
+   "event": "post-drain load",
+   "phase": true
+  },
+  {
+   "t": 72.23,
+   "at": "12:49:00.229",
+   "event": "restart victim",
+   "phase": true
+  },
+  {
+   "t": 72.292,
+   "at": "12:49:01.292",
+   "event": "supervisor restart",
+   "node": "n1",
+   "wipe": false
+  },
+  {
+   "t": 74.033,
+   "at": "12:49:02.033",
+   "event": "node healthy",
+   "node": "n1"
+  },
+  {
+   "t": 74.033,
+   "at": "12:49:02.033",
+   "event": "after rejoin",
+   "phase": true
+  },
+  {
+   "t": 82.035,
+   "at": "12:49:10.034",
+   "event": "quiesce",
+   "phase": true
+  },
+  {
+   "t": 82.291,
+   "at": "12:49:11.291",
+   "event": "verify: recover + probe writes + read back from every node",
+   "phase": true
+  }
+ ],
+ "data": {
+  "dids": {
+   "cell0": "289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546",
+   "cell1": "15d21e92a4f1516998c88bc73fc84fad24b4bcf15cb002b47b5d6bf80458d9c3",
+   "cell2": "7aa51a1e0a2b2cb2712ce2f2d96b03d0f4e597bc34c444bb10f57eec32c2418e",
+   "cell3": "b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307",
+   "cell4": "4e8fc6fd4933ff414f487483cbd1bbb4e39e892496cc06419993f74ccf9b326f",
+   "cell5": "a03bcfaa709dbf875bdb21a08663755d56bdb91c0a1af5c880832a856d4e3386"
+  },
+  "owners_before_fault": {
+   "cell0": "n1",
+   "cell1": "n2",
+   "cell2": "n3",
+   "cell3": "n1",
+   "cell4": "n2",
+   "cell5": "n3"
+  },
+  "victim": "n1",
+  "victim_cells": [
+   "cell0",
+   "cell3"
+  ],
+  "drain_s": 1.29,
+  "victim_exit_code": 0,
+  "failover_s": {
+   "cell0": 0.023,
+   "cell3": 0.009
+  },
+  "recovery_s": {
+   "cell0": 0.058,
+   "cell1": 0.069,
+   "cell2": 0.062,
+   "cell3": 0.058,
+   "cell4": 0.073,
+   "cell5": 0.082
+  }
+ },
+ "node_exit_codes": {
+  "n1": [
+   0,
+   "running"
+  ],
+  "n2": [
+   0,
+   "running"
+  ],
+  "n3": [
+   0,
+   "running"
+  ]
+ },
+ "log_highlights": {
+  "n1": [
+   "2026-11-13T12:48:44.552081827Z 2026-11-13T12:48:44.551470Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=1 members={\"n2\", \"n3\"}",
+   "2026-11-13T12:48:44.773978365Z 2026-11-13T12:48:44.772183Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=2009",
+   "2026-11-13T12:48:54.220450018Z 2026-11-13T12:48:54.219497Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=1 why=\"graceful shutdown\"",
+   "2026-11-13T12:49:02.426518330Z 2026-11-13T12:49:02.426063Z  INFO celld::node_log: stale predecessor generations' recovery objects retired objects=4",
+   "2026-11-13T12:49:02.564028869Z 2026-11-13T12:49:02.562867Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=1 members={\"n2\", \"n3\"}",
+   "2026-11-13T12:49:02.683081512Z 2026-11-13T12:49:02.682228Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:48:54.280984964Z node-log close: sealed epoch 1"
+  ],
+  "n2": [
+   "2026-11-13T12:48:43.619933685Z 2026-11-13T12:48:43.618074Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=1 members={\"n1\"}",
+   "2026-11-13T12:48:43.806079757Z 2026-11-13T12:48:43.805260Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=250",
+   "2026-11-13T12:48:49.582011992Z 2026-11-13T12:48:49.581450Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n1\" rule=\"sustain\" outstanding_ms=10 own_median_ms=44 samples=44 threshold_ms=25 suspect_ms=2009 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:48:49.582041373Z 2026-11-13T12:48:49.581483Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=1 why=\"gray follower n1 evicted\"",
+   "2026-11-13T12:48:50.638566438Z 2026-11-13T12:48:50.638224Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=2 members={\"n1\", \"n3\"}",
+   "2026-11-13T12:48:50.836267628Z 2026-11-13T12:48:50.835292Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=1254",
+   "2026-11-13T12:48:54.085840989Z 2026-11-13T12:48:54.085485Z  WARN celld: peer owner unreachable scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 owner=10.168.111.11:8081 error=peer no longer owns Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 cause=peer no longer owns Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 connec",
+   "2026-11-13T12:48:54.085854626Z 2026-11-13T12:48:54.085554Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 node=n1 epoch=1 attempt=NotOwner action=WaitForOwner",
+   "2026-11-13T12:48:54.119578636Z 2026-11-13T12:48:54.118807Z  WARN celld: peer owner unreachable scope=Ledger:289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546 owner=10.168.111.11:8081 error=peer no longer owns Ledger:289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546 cause=peer no longer owns Ledger:289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546 connec",
+   "2026-11-13T12:48:54.120011564Z 2026-11-13T12:48:54.118834Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546 node=n1 epoch=1 attempt=NotOwner action=WaitForOwner",
+   "2026-11-13T12:48:54.298648081Z 2026-11-13T12:48:54.297326Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=2 why=\"member append failed\"",
+   "2026-11-13T12:48:54.496987394Z 2026-11-13T12:48:54.495919Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=3 members={\"n1\", \"n3\"}",
+   "2026-11-13T12:48:54.667104450Z 2026-11-13T12:48:54.666180Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:48:54.695271289Z 2026-11-13T12:48:54.692261Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=3 why=\"member append failed\"",
+   "2026-11-13T12:48:55.459063541Z 2026-11-13T12:48:55.458500Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=4 members={\"n1\", \"n3\"}",
+   "2026-11-13T12:48:55.671802774Z 2026-11-13T12:48:55.671319Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=754",
+   "2026-11-13T12:48:58.085674846Z 2026-11-13T12:48:58.085446Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=4 why=\"member append failed\"",
+   "2026-11-13T12:48:58.268181996Z 2026-11-13T12:48:58.268021Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=5 members={\"n1\", \"n3\"}",
+   "2026-11-13T12:48:58.459783406Z 2026-11-13T12:48:58.459457Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:49:00.393764416Z 2026-11-13T12:49:00.393566Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=5 why=\"member append failed\"",
+   "2026-11-13T12:49:00.521840287Z 2026-11-13T12:49:00.521630Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=6 members={\"n1\", \"n3\"}",
+   "2026-11-13T12:49:00.720712910Z 2026-11-13T12:49:00.719756Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:49:02.141785078Z 2026-11-13T12:49:02.141419Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=6 why=\"member append failed\"",
+   "2026-11-13T12:49:02.273071373Z 2026-11-13T12:49:02.272723Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=7 members={\"n1\", \"n3\"}",
+   "2026-11-13T12:49:02.401813819Z 2026-11-13T12:49:02.400115Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=7 why=\"member append failed\"",
+   "2026-11-13T12:49:03.281548004Z 2026-11-13T12:49:03.281174Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=8 members={\"n1\", \"n3\"}",
+   "2026-11-13T12:49:03.482934219Z 2026-11-13T12:49:03.482594Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=1255"
+  ],
+  "n3": [
+   "2026-11-13T12:48:44.369526340Z 2026-11-13T12:48:44.369218Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=1 members={\"n1\", \"n2\"}",
+   "2026-11-13T12:48:44.573038700Z 2026-11-13T12:48:44.571789Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:48:54.085873046Z 2026-11-13T12:48:54.085375Z  WARN celld: peer owner unreachable scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 owner=10.168.111.11:8081 error=peer no longer owns Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 cause=peer no longer owns Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 connec",
+   "2026-11-13T12:48:54.085884869Z 2026-11-13T12:48:54.085423Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:b4eae08a1c05b5a7c6fd07be9b1a03bb1a6942b88743ec84e62e053825575307 node=n1 epoch=1 attempt=NotOwner action=WaitForOwner",
+   "2026-11-13T12:48:54.119215069Z 2026-11-13T12:48:54.118293Z  WARN celld: peer owner unreachable scope=Ledger:289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546 owner=10.168.111.11:8081 error=peer no longer owns Ledger:289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546 cause=peer no longer owns Ledger:289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546 connec",
+   "2026-11-13T12:48:54.119235753Z 2026-11-13T12:48:54.118338Z  WARN celld: a peer attempt changed the remote route retry state event=\"remote_route_retry\" scope=Ledger:289b15419e3bb0c5cf762ad18e3a00e106f1b09a2890a84ab7eef04884510546 node=n1 epoch=1 attempt=NotOwner action=WaitForOwner",
+   "2026-11-13T12:48:54.296614419Z 2026-11-13T12:48:54.296419Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=1 why=\"member append failed\"",
+   "2026-11-13T12:48:54.558815582Z 2026-11-13T12:48:54.555633Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=2 members={\"n1\", \"n2\"}",
+   "2026-11-13T12:48:54.698705621Z 2026-11-13T12:48:54.698529Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:48:56.206117111Z 2026-11-13T12:48:56.204940Z  WARN celld::node_log: gray follower evicted event=\"log_evict_verdict\" member=\"n1\" rule=\"backstop\" outstanding_ms=1625 samples=0 sibling_median_ms=51 threshold_ms=0 suspect_ms=0 backstop_ms=1500 budget_ms=25",
+   "2026-11-13T12:48:56.206263277Z 2026-11-13T12:48:56.204966Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=2 why=\"gray follower n1 evicted\"",
+   "2026-11-13T12:48:57.249654279Z 2026-11-13T12:48:57.249390Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=3 members={\"n1\", \"n2\"}",
+   "2026-11-13T12:48:57.461615126Z 2026-11-13T12:48:57.460865Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=1256",
+   "2026-11-13T12:48:59.269313164Z 2026-11-13T12:48:59.268832Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=3 why=\"member append failed\"",
+   "2026-11-13T12:48:59.506377233Z 2026-11-13T12:48:59.506120Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=4 members={\"n1\", \"n2\"}",
+   "2026-11-13T12:48:59.721138569Z 2026-11-13T12:48:59.720959Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:49:01.373198843Z 2026-11-13T12:49:01.372246Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=4 why=\"member append failed\"",
+   "2026-11-13T12:49:01.534243783Z 2026-11-13T12:49:01.533505Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=5 members={\"n1\", \"n2\"}",
+   "2026-11-13T12:49:01.732469337Z 2026-11-13T12:49:01.731665Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251",
+   "2026-11-13T12:49:02.412281805Z 2026-11-13T12:49:02.409195Z  WARN celld::node_log: log ensemble degraded; acks ride the bucket epoch=5 why=\"member append failed\"",
+   "2026-11-13T12:49:02.638257528Z 2026-11-13T12:49:02.636940Z  INFO celld::node_log: log ensemble open; fleet acks enabled epoch=6 members={\"n1\", \"n2\"}",
+   "2026-11-13T12:49:02.735943184Z 2026-11-13T12:49:02.735702Z  INFO celld::node_log: fleet posture repaired event=\"posture_repair\" degraded_ms=251"
+  ]
+ },
+ "error": null
+}

@@ -1,0 +1,680 @@
+celld patch 0004: packs, the transport of Dolt remotes between cells.
+
+Why. DoltLite's remote machinery moves chunks between a store and a remote
+that is a file (file://) or an HTTP server. A celld cell is neither: it is one
+file owned by one node, written by one owner, and the cell that wants its
+history may be on another node. The engine's fetch needs only four things from
+a remote (the refs, the chunks it asks for by hash, a presence test), so the
+transport can be any request and response, as long as the chunks of one
+request are enough for the walk.
+
+What. Three SQL functions, none of which touches the network or a file.
+
+  dolt_pack_build(branches, haves) -> BLOB
+    The sender's half. branches is a newline-separated list of "name" or
+    "name=sent-as"; haves a list of commit hashes the receiver holds. Returns
+    the refs of those branches (commits only: no working sets, tags, remotes
+    or tracking refs, so nothing uncommitted or local leaves the store) and
+    every chunk of their history that the haves do not cover, found with the
+    trusted-set walk that fetch validation already uses.
+
+  dolt_pack_fetch(remote, pack) -> text
+    The receiver's half. Opens the pack as a read-only DoltliteRemote and runs
+    the engine's own doltliteFetchInto for every branch it carries, into the
+    remote-tracking branches remote/<branch>: every chunk is hashed, the graph
+    is checked before a tracking ref is installed, and the install is one
+    ordinary refs commit. Registered unscoped, like dolt_fetch.
+
+  dolt_pack_haves() -> text
+    The commits this store holds under a name (branches, tags, tracking
+    branches), for a sender to leave out.
+
+--- a/sqlite3.c
++++ b/sqlite3.c
+@@ -530709,7 +530709,7 @@
+   static const char *const azUnscoped[] = {
+     "dolt_connect_branch", "dolt_config", "dolt_creds", "dolt_creds_new",
+     "dolt_gc", "dolt_remote", "dolt_push", "dolt_fetch", "dolt_pull",
+-    "dolt_clone",
++    "dolt_clone", "dolt_pack_fetch",
+   };
+   static const char *const azNoWait[] = { "dolt_clean", "dolt_reset" };
+   if( doltliteNameIn(zName, azUnscoped, ArraySize(azUnscoped)) ){
+@@ -602015,6 +602015,624 @@
+ }
+ #endif
+ 
++/* ---- celld: packs (patch 0004) -------------------------------------------
++**
++** A pack is the transport between two cells that are not two files a peer can
++** open: a refs blob (only the branches the sender chose to reveal, commits
++** only: no working sets, tags, remotes or tracking refs) and the chunks of
++** those branches' history that the receiver does not have. The sender builds
++** it from its committed state (dolt_pack_build); the receiver fetches from it
++** with the engine's own fetch (dolt_pack_fetch), so every chunk is verified
++** against its hash, the whole graph is checked before a tracking ref lands,
++** and the result is one ordinary ref commit.
++**
++** Wire format, all integers little endian:
++**   "CPK1" | u32 nRefs | refs | u32 nChunks | nChunks x (hash | u32 n | bytes)
++*/
++#define CELLD_PACK_MAGIC "CPK1"
++
++typedef struct CelldPackEnt CelldPackEnt;
++struct CelldPackEnt {
++  ProllyHash hash;
++  const u8 *pData;
++  int nData;
++};
++
++typedef struct CelldPackRemote CelldPackRemote;
++struct CelldPackRemote {
++  DoltliteRemote base;
++  const u8 *pRefs;
++  int nRefs;
++  int nEnt;
++  CelldPackEnt *aEnt;
++};
++
++static u32 celldPackGet32(const u8 *p){
++  return (u32)p[0] | ((u32)p[1]<<8) | ((u32)p[2]<<16) | ((u32)p[3]<<24);
++}
++
++static void celldPackPut32(u8 *p, u32 v){
++  p[0] = (u8)v; p[1] = (u8)(v>>8); p[2] = (u8)(v>>16); p[3] = (u8)(v>>24);
++}
++
++static int celldPackEntCmp(const void *a, const void *b){
++  return memcmp(((const CelldPackEnt*)a)->hash.data,
++                ((const CelldPackEnt*)b)->hash.data, PROLLY_HASH_SIZE);
++}
++
++static const CelldPackEnt *celldPackFind(
++  CelldPackRemote *p,
++  const ProllyHash *pHash
++){
++  CelldPackEnt key;
++  memcpy(&key.hash, pHash, sizeof(key.hash));
++  return (const CelldPackEnt*)bsearch(&key, p->aEnt, p->nEnt,
++                                      sizeof(CelldPackEnt), celldPackEntCmp);
++}
++
++static int celldPackGetChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
++                             u8 **ppData, int *pnData){
++  CelldPackRemote *p = (CelldPackRemote*)pRemote;
++  const CelldPackEnt *e = celldPackFind(p, pHash);
++  *ppData = 0;
++  *pnData = 0;
++  if( !e ) return SQLITE_NOTFOUND;
++  *ppData = sqlite3_malloc(e->nData>0 ? e->nData : 1);
++  if( !*ppData ) return SQLITE_NOMEM;
++  memcpy(*ppData, e->pData, e->nData);
++  *pnData = e->nData;
++  return SQLITE_OK;
++}
++
++static int celldPackGetChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
++                              int nHash, u8 **apData, int *anData){
++  int i;
++  int rc = SQLITE_OK;
++  for(i=0; i<nHash; i++){
++    apData[i] = 0;
++    anData[i] = 0;
++  }
++  for(i=0; i<nHash && rc==SQLITE_OK; i++){
++    rc = celldPackGetChunk(pRemote, &aHash[i], &apData[i], &anData[i]);
++    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
++  }
++  return rc;
++}
++
++static int celldPackHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
++                              int nHash, u8 *aResult){
++  CelldPackRemote *p = (CelldPackRemote*)pRemote;
++  int i;
++  for(i=0; i<nHash; i++) aResult[i] = celldPackFind(p, &aHash[i]) ? 1 : 0;
++  return SQLITE_OK;
++}
++
++static int celldPackGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
++  CelldPackRemote *p = (CelldPackRemote*)pRemote;
++  *ppData = sqlite3_malloc(p->nRefs>0 ? p->nRefs : 1);
++  if( !*ppData ){
++    *pnData = 0;
++    return SQLITE_NOMEM;
++  }
++  memcpy(*ppData, p->pRefs, p->nRefs);
++  *pnData = p->nRefs;
++  return SQLITE_OK;
++}
++
++static int celldPackPutChunk(DoltliteRemote *p, const ProllyHash *h,
++                             const u8 *d, int n){
++  (void)p; (void)h; (void)d; (void)n;
++  return SQLITE_READONLY;
++}
++
++static int celldPackSetRefs(DoltliteRemote *p, const char *z, int bForce,
++                            const u8 *d, int n){
++  (void)p; (void)z; (void)bForce; (void)d; (void)n;
++  return SQLITE_READONLY;
++}
++
++static int celldPackSetRefsIf(DoltliteRemote *p, const ProllyHash *h,
++                              const char *z, int bForce, const u8 *d, int n){
++  (void)p; (void)h; (void)z; (void)bForce; (void)d; (void)n;
++  return SQLITE_READONLY;
++}
++
++static int celldPackCommit(DoltliteRemote *p){
++  (void)p;
++  return SQLITE_OK;
++}
++
++static void celldPackClose(DoltliteRemote *pRemote){
++  CelldPackRemote *p = (CelldPackRemote*)pRemote;
++  sqlite3_free(p->aEnt);
++  sqlite3_free(p);
++}
++
++static const char *celldPackErrMsg(DoltliteRemote *p){
++  (void)p;
++  return 0;
++}
++
++/* A read-only remote over the pack in pBlob, which must outlive it. */
++static int celldPackOpen(const u8 *pBlob, int nBlob, DoltliteRemote **ppRemote){
++  CelldPackRemote *p;
++  i64 off;
++  u32 nRefs;
++  u32 nEnt;
++  u32 i;
++
++  *ppRemote = 0;
++  if( !pBlob || nBlob<12 || memcmp(pBlob, CELLD_PACK_MAGIC, 4)!=0 ){
++    return SQLITE_CORRUPT;
++  }
++  nRefs = celldPackGet32(pBlob+4);
++  off = 8;
++  if( (i64)nRefs>(i64)nBlob-off-4 ) return SQLITE_CORRUPT;
++  p = sqlite3_malloc(sizeof(*p));
++  if( !p ) return SQLITE_NOMEM;
++  memset(p, 0, sizeof(*p));
++  p->pRefs = pBlob + off;
++  p->nRefs = (int)nRefs;
++  off += nRefs;
++  nEnt = celldPackGet32(pBlob+off);
++  off += 4;
++  if( (i64)nEnt*(PROLLY_HASH_SIZE+4)>(i64)nBlob-off ){
++    sqlite3_free(p);
++    return SQLITE_CORRUPT;
++  }
++  p->aEnt = sqlite3_malloc64(((sqlite3_uint64)nEnt+1)*sizeof(CelldPackEnt));
++  if( !p->aEnt ){
++    sqlite3_free(p);
++    return SQLITE_NOMEM;
++  }
++  for(i=0; i<nEnt; i++){
++    u32 n;
++    if( off+PROLLY_HASH_SIZE+4>nBlob ) goto corrupt;
++    memcpy(p->aEnt[i].hash.data, pBlob+off, PROLLY_HASH_SIZE);
++    n = celldPackGet32(pBlob+off+PROLLY_HASH_SIZE);
++    off += PROLLY_HASH_SIZE+4;
++    if( (i64)n>(i64)nBlob-off ) goto corrupt;
++    p->aEnt[i].pData = pBlob+off;
++    p->aEnt[i].nData = (int)n;
++    off += n;
++  }
++  if( off!=nBlob ) goto corrupt;
++  p->nEnt = (int)nEnt;
++  qsort(p->aEnt, p->nEnt, sizeof(CelldPackEnt), celldPackEntCmp);
++  p->base.xGetChunk = celldPackGetChunk;
++  p->base.xGetChunks = celldPackGetChunks;
++  p->base.xPutChunk = celldPackPutChunk;
++  p->base.xHasChunks = celldPackHasChunks;
++  p->base.xGetRefs = celldPackGetRefs;
++  p->base.xSetRefs = celldPackSetRefs;
++  p->base.xSetRefsIf = celldPackSetRefsIf;
++  p->base.xCheckRefsIf = celldPackSetRefsIf;
++  p->base.xCommit = celldPackCommit;
++  p->base.xClose = celldPackClose;
++  p->base.xErrMsg = celldPackErrMsg;
++  *ppRemote = &p->base;
++  return SQLITE_OK;
++corrupt:
++  sqlite3_free(p->aEnt);
++  sqlite3_free(p);
++  return SQLITE_CORRUPT;
++}
++
++typedef struct CelldPackOut CelldPackOut;
++struct CelldPackOut {
++  u8 *p;
++  i64 n;
++  i64 nAlloc;
++};
++
++static int celldPackAppend(CelldPackOut *o, const void *pData, i64 n){
++  if( o->n+n>o->nAlloc ){
++    i64 nNew = o->nAlloc ? o->nAlloc*2 : 65536;
++    u8 *pNew;
++    while( nNew<o->n+n ) nNew *= 2;
++    if( nNew>0x7fffffff ) return SQLITE_TOOBIG;
++    pNew = sqlite3_realloc64(o->p, nNew);
++    if( !pNew ) return SQLITE_NOMEM;
++    o->p = pNew;
++    o->nAlloc = nNew;
++  }
++  if( n>0 ) memcpy(o->p+o->n, pData, n);
++  o->n += n;
++  return SQLITE_OK;
++}
++
++/* Split zList at newlines, dropping empty lines. The array and the strings
++** are one allocation (sqlite3_free). */
++static char **celldPackSplit(const char *zList, int *pn){
++  int nList = zList ? (int)strlen(zList) : 0;
++  int nLine = 1;
++  int i;
++  int j = 0;
++  char **az;
++  char *zCopy;
++  int k = 0;
++  for(i=0; i<nList; i++) if( zList[i]=='\n' ) nLine++;
++  *pn = 0;
++  az = sqlite3_malloc64((sqlite3_uint64)nLine*sizeof(char*) + nList + 1);
++  if( !az ) return 0;
++  zCopy = (char*)&az[nLine];
++  if( nList>0 ) memcpy(zCopy, zList, nList);
++  zCopy[nList] = 0;
++  az[k++] = zCopy;
++  for(i=0; i<nList; i++){
++    if( zCopy[i]=='\n' ){
++      zCopy[i] = 0;
++      az[k++] = &zCopy[i+1];
++    }
++  }
++  for(i=0; i<k; i++){
++    if( az[i][0] ) az[j++] = az[i];
++  }
++  *pn = j;
++  return az;
++}
++
++/* The chunks reachable from the commits aRoots that a holder of the commits
++** aHave lacks. */
++static int celldPackCollect(
++  ChunkStore *cs,
++  const ProllyHash *aRoots,
++  int nRoots,
++  const ProllyHash *aHave,
++  int nHave,
++  CelldPackOut *o,
++  u32 *pnChunk
++){
++  ProllyHashSet trusted;
++  ProllyHashSet seen;
++  SyncQueue queue;
++  ProllyHash hash;
++  int bTrusted = 0;
++  int rc;
++  int i;
++
++  *pnChunk = 0;
++  rc = prollyHashSetInit(&trusted, 1024);
++  if( rc!=SQLITE_OK ) return rc;
++  rc = prollyHashSetInit(&seen, 256);
++  if( rc!=SQLITE_OK ){
++    prollyHashSetFree(&trusted);
++    return rc;
++  }
++  rc = syncQueueInit(&queue);
++  if( rc!=SQLITE_OK ){
++    prollyHashSetFree(&trusted);
++    prollyHashSetFree(&seen);
++    return rc;
++  }
++  if( nHave>0 ){
++    rc = remoteBuildTrustedSet(cs, aHave, nHave, &trusted);
++    if( rc==SQLITE_OK ){
++      bTrusted = 1;
++    }else if( rc!=SQLITE_NOMEM ){
++      /* An anchor that cannot be read proves nothing: send everything. */
++      rc = SQLITE_OK;
++    }
++  }
++  for(i=0; i<nRoots && rc==SQLITE_OK; i++){
++    if( !prollyHashIsEmpty(&aRoots[i])
++     && !prollyHashSetContains(&seen, &aRoots[i]) ){
++      rc = prollyHashSetAdd(&seen, &aRoots[i]);
++      if( rc==SQLITE_OK ) rc = syncQueuePush(&queue, &aRoots[i]);
++    }
++  }
++  while( rc==SQLITE_OK && syncQueuePop(&queue, &hash) ){
++    u8 *pData = 0;
++    int nData = 0;
++    u8 aHdr[PROLLY_HASH_SIZE+4];
++    if( bTrusted && prollyHashSetContains(&trusted, &hash) ) continue;
++    rc = chunkStoreGet(cs, &hash, &pData, &nData);
++    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_CORRUPT;
++    if( rc!=SQLITE_OK ) break;
++    memcpy(aHdr, hash.data, PROLLY_HASH_SIZE);
++    celldPackPut32(aHdr+PROLLY_HASH_SIZE, (u32)nData);
++    rc = celldPackAppend(o, aHdr, sizeof(aHdr));
++    if( rc==SQLITE_OK ) rc = celldPackAppend(o, pData, nData);
++    if( rc==SQLITE_OK ) rc = syncEnqueueChildren(pData, nData, &queue, &seen);
++    sqlite3_free(pData);
++    (*pnChunk)++;
++  }
++  prollyHashSetFree(&trusted);
++  prollyHashSetFree(&seen);
++  syncQueueFree(&queue);
++  return rc;
++}
++
++/* dolt_pack_build(branches, haves): the pack that carries the named
++** branches to a holder of the commits in haves. branches and haves are text
++** lists, one entry per line; a branch is "name" or "name=sent-as", a have a
++** commit hash (those this store lacks are ignored). Reads the committed refs
++** of this connection and nothing else. */
++static void celldPackBuildFunc(
++  sqlite3_context *ctx,
++  int argc,
++  sqlite3_value **argv
++){
++  sqlite3 *db = sqlite3_context_db_handle(ctx);
++  ChunkStore *cs = doltliteGetChunkStore(db);
++  ChunkStore view;
++  char **azBranch = 0;
++  char **azHave = 0;
++  ProllyHash *aRoots = 0;
++  ProllyHash *aHave = 0;
++  u8 *pRefs = 0;
++  int nRefs = 0;
++  u8 *pViewRefs = 0;
++  int nViewRefs = 0;
++  int nBranch = 0;
++  int nHaveLine = 0;
++  int nHave = 0;
++  int nRoot = 0;
++  CelldPackOut out;
++  u32 nChunk = 0;
++  char *zErrOwned = 0;
++  int bView = 0;
++  int rc;
++  int i;
++  int j;
++  (void)argc;
++
++  if( !cs ){
++    sqlite3_result_error(ctx, "no Dolt store", -1);
++    return;
++  }
++  memset(&out, 0, sizeof(out));
++  memset(&view, 0, sizeof(view));
++  azBranch = celldPackSplit((const char*)sqlite3_value_text(argv[0]), &nBranch);
++  azHave = celldPackSplit((const char*)sqlite3_value_text(argv[1]), &nHaveLine);
++  if( !azBranch || !azHave ){
++    rc = SQLITE_NOMEM;
++    goto build_done;
++  }
++  rc = chunkStoreSerializeRefsToBlob(cs, &pRefs, &nRefs);
++  if( rc!=SQLITE_OK ) goto build_done;
++  rc = chunkStoreLoadRefsFromBlob(&view, pRefs, nRefs);
++  bView = 1;
++  if( rc!=SQLITE_OK ) goto build_done;
++
++  /* Every named branch must exist. */
++  for(i=0; i<nBranch && rc==SQLITE_OK; i++){
++    char *zEq = strchr(azBranch[i], '=');
++    if( zEq ) *zEq = 0;
++    if( chunkStoreFindBranch(&view, azBranch[i], 0)!=SQLITE_OK ){
++      zErrOwned = sqlite3_mprintf("branch not found: %s", azBranch[i]);
++      rc = SQLITE_NOTFOUND;
++    }
++    if( zEq ) *zEq = '=';
++  }
++  if( rc!=SQLITE_OK ) goto build_done;
++
++  /* Keep the named branches, under the names they are sent as, and reveal
++  ** commits only. */
++  {
++    int nAll = view.refs.nBranches;
++    BranchRef *aKeep = sqlite3_malloc64(((sqlite3_uint64)nAll+1)*sizeof(BranchRef));
++    int nKeep = 0;
++    if( !aKeep ){
++      rc = SQLITE_NOMEM;
++      goto build_done;
++    }
++    for(j=0; j<nAll; j++){
++      BranchRef *b = &view.refs.aBranches[j];
++      const char *zAs = 0;
++      char *zRenamed;
++      for(i=0; i<nBranch; i++){
++        char *zEq = strchr(azBranch[i], '=');
++        int nName = zEq ? (int)(zEq-azBranch[i]) : (int)strlen(azBranch[i]);
++        if( (int)strlen(b->zName)==nName
++         && memcmp(b->zName, azBranch[i], nName)==0 ){
++          zAs = zEq ? zEq+1 : azBranch[i];
++          break;
++        }
++      }
++      if( zAs ){
++        zRenamed = sqlite3_mprintf("%s", zAs);
++        if( !zRenamed ) rc = SQLITE_NOMEM;
++      }else{
++        zRenamed = 0;
++      }
++      if( zRenamed ){
++        aKeep[nKeep] = *b;
++        aKeep[nKeep].zName = zRenamed;
++        memset(&aKeep[nKeep].workingSetHash, 0, sizeof(ProllyHash));
++        nKeep++;
++      }
++      sqlite3_free(b->zName);
++    }
++    memcpy(view.refs.aBranches, aKeep, (size_t)nKeep*sizeof(BranchRef));
++    view.refs.nBranches = nKeep;
++    sqlite3_free(aKeep);
++  }
++  if( rc!=SQLITE_OK ) goto build_done;
++  csFreeTags(&view);
++  csFreeRemotes(&view);
++  csFreeTracking(&view);
++  if( view.refs.nBranches>0 ){
++    rc = chunkStoreSetDefaultBranch(&view, view.refs.aBranches[0].zName);
++    if( rc!=SQLITE_OK ) goto build_done;
++  }
++  rc = chunkStoreSerializeRefsToBlob(&view, &pViewRefs, &nViewRefs);
++  if( rc!=SQLITE_OK ) goto build_done;
++
++  aRoots = sqlite3_malloc64(((sqlite3_uint64)view.refs.nBranches+1)*sizeof(ProllyHash));
++  aHave = sqlite3_malloc64(((sqlite3_uint64)nHaveLine+1)*sizeof(ProllyHash));
++  if( !aRoots || !aHave ){
++    rc = SQLITE_NOMEM;
++    goto build_done;
++  }
++  for(i=0; i<view.refs.nBranches; i++){
++    aRoots[nRoot++] = view.refs.aBranches[i].commitHash;
++  }
++  for(i=0; i<nHaveLine; i++){
++    ProllyHash h;
++    int has = 0;
++    if( doltliteHexToHash(azHave[i], &h)!=SQLITE_OK ) continue;
++    if( chunkStoreHas(cs, &h, &has)==SQLITE_OK && has ) aHave[nHave++] = h;
++  }
++
++  rc = celldPackAppend(&out, CELLD_PACK_MAGIC, 4);
++  {
++    u8 aLen[4];
++    celldPackPut32(aLen, (u32)nViewRefs);
++    if( rc==SQLITE_OK ) rc = celldPackAppend(&out, aLen, 4);
++    if( rc==SQLITE_OK ) rc = celldPackAppend(&out, pViewRefs, nViewRefs);
++    if( rc==SQLITE_OK ) rc = celldPackAppend(&out, aLen, 4);
++  }
++  if( rc==SQLITE_OK ){
++    i64 iCount = out.n-4;
++    rc = celldPackCollect(cs, aRoots, nRoot, aHave, nHave, &out, &nChunk);
++    if( rc==SQLITE_OK ) celldPackPut32(out.p+iCount, nChunk);
++  }
++
++build_done:
++  if( rc==SQLITE_OK ){
++    sqlite3_result_blob64(ctx, out.p, (sqlite3_uint64)out.n, SQLITE_TRANSIENT);
++  }else if( zErrOwned ){
++    sqlite3_result_error(ctx, zErrOwned, -1);
++  }else if( rc==SQLITE_CORRUPT ){
++    sqlite3_result_error(ctx,
++        "dolt_pack_build: the store is missing chunks of a branch", -1);
++  }else if( rc==SQLITE_NOMEM ){
++    sqlite3_result_error_nomem(ctx);
++  }else{
++    sqlite3_result_error(ctx, "dolt_pack_build failed", -1);
++  }
++  if( bView ) chunkStoreClose(&view);
++  sqlite3_free(zErrOwned);
++  sqlite3_free(out.p);
++  sqlite3_free(pRefs);
++  sqlite3_free(pViewRefs);
++  sqlite3_free(aRoots);
++  sqlite3_free(aHave);
++  sqlite3_free(azBranch);
++  sqlite3_free(azHave);
++}
++
++/* dolt_pack_haves(): the commits this store holds under a name, one hash per
++** line: its branches, its tags and its remote-tracking branches. A sender
++** uses them to leave out what this store has. */
++static void celldPackHavesFunc(
++  sqlite3_context *ctx,
++  int argc,
++  sqlite3_value **argv
++){
++  sqlite3 *db = sqlite3_context_db_handle(ctx);
++  ChunkStore *cs = doltliteGetChunkStore(db);
++  CelldPackOut out;
++  char zHex[PROLLY_HASH_SIZE*2+2];
++  int rc = SQLITE_OK;
++  int nBr, nTg, nTr;
++  const BranchRef *aBr;
++  const TagRef *aTg;
++  const TrackingBranch *aTr;
++  int i;
++  (void)argc; (void)argv;
++  if( !cs ){
++    sqlite3_result_error(ctx, "no Dolt store", -1);
++    return;
++  }
++  memset(&out, 0, sizeof(out));
++  refsTableGetBranches(&cs->refs, &nBr, &aBr);
++  refsTableGetTags(&cs->refs, &nTg, &aTg);
++  refsTableGetTracking(&cs->refs, &nTr, &aTr);
++  for(i=0; i<nBr+nTg+nTr && rc==SQLITE_OK; i++){
++    const ProllyHash *h = i<nBr ? &aBr[i].commitHash
++                        : i<nBr+nTg ? &aTg[i-nBr].commitHash
++                        : &aTr[i-nBr-nTg].commitHash;
++    if( prollyHashIsEmpty(h) ) continue;
++    doltliteHashToHex(h, zHex);
++    zHex[PROLLY_HASH_SIZE*2] = '\n';
++    rc = celldPackAppend(&out, zHex, PROLLY_HASH_SIZE*2+1);
++  }
++  if( rc==SQLITE_OK ){
++    sqlite3_result_text64(ctx, (const char*)out.p, (sqlite3_uint64)out.n,
++                          SQLITE_TRANSIENT, SQLITE_UTF8);
++  }else{
++    sqlite3_result_error_nomem(ctx);
++  }
++  sqlite3_free(out.p);
++}
++
++/* dolt_pack_fetch(remote, pack): fetch every branch the pack carries into the
++** remote-tracking branches remote/<branch>, exactly as dolt_fetch does from
++** a remote that holds the pack's chunks. Answers "branch hash" lines. Run it
++** in autocommit, as dolt_fetch. */
++static void celldPackFetchFunc(
++  sqlite3_context *ctx,
++  int argc,
++  sqlite3_value **argv
++){
++  sqlite3 *db = sqlite3_context_db_handle(ctx);
++  ChunkStore *cs = doltliteGetChunkStore(db);
++  DoltliteRemote *pRemote = 0;
++  const char *zRemote;
++  const u8 *pBlob;
++  int nBlob;
++  char **azNames = 0;
++  int nNames = 0;
++  CelldPackOut out;
++  int rc;
++  int i;
++  (void)argc;
++
++  if( !cs ){
++    doltliteVcResultError(ctx, db, "no database");
++    return;
++  }
++  zRemote = (const char*)sqlite3_value_text(argv[0]);
++  pBlob = (const u8*)sqlite3_value_blob(argv[1]);
++  nBlob = sqlite3_value_bytes(argv[1]);
++  if( !zRemote || !zRemote[0] ){
++    doltliteVcResultError(ctx, db, "dolt_pack_fetch needs a remote name");
++    return;
++  }
++  memset(&out, 0, sizeof(out));
++  rc = celldPackOpen(pBlob, nBlob, &pRemote);
++  if( rc!=SQLITE_OK ){
++    (void)doltliteVcSealSavepointError(db);
++    remoteSqlResultError(ctx, rc,
++        rc==SQLITE_NOMEM ? 0 : "dolt_pack_fetch: not a pack");
++    return;
++  }
++  rc = parseRemoteBranchNames(pRemote, &azNames, &nNames);
++  for(i=0; i<nNames && rc==SQLITE_OK; i++){
++    int missing = 0;
++    rc = doltliteFetchInto(cs, pRemote, zRemote, azNames[i], azNames[i],
++                           &missing);
++    if( rc==SQLITE_OK ){
++      ProllyHash h;
++      char zHex[PROLLY_HASH_SIZE*2+1];
++      if( chunkStoreFindTracking(cs, zRemote, azNames[i], &h)==SQLITE_OK ){
++        doltliteHashToHex(&h, zHex);
++        rc = celldPackAppend(&out, azNames[i], (i64)strlen(azNames[i]));
++        if( rc==SQLITE_OK ) rc = celldPackAppend(&out, " ", 1);
++        if( rc==SQLITE_OK ) rc = celldPackAppend(&out, zHex, PROLLY_HASH_SIZE*2);
++        if( rc==SQLITE_OK ) rc = celldPackAppend(&out, "\n", 1);
++      }
++    }
++  }
++  if( rc!=SQLITE_OK ){
++    const char *zMsg = pRemote->zMissingChunkError[0]
++        ? pRemote->zMissingChunkError : "dolt_pack_fetch: fetch failed";
++    char *zOwned = sqlite3_mprintf("%s", zMsg);
++    (void)doltliteVcSealSavepointError(db);
++    remoteSqlResultError(ctx, rc, zOwned);
++    sqlite3_free(zOwned);
++  }else{
++    sqlite3_result_text64(ctx, (const char*)out.p, (sqlite3_uint64)out.n,
++                          SQLITE_TRANSIENT, SQLITE_UTF8);
++  }
++  pRemote->xClose(pRemote);
++  doltliteFreeStringArray(azNames, nNames);
++  doltliteNoteSessionMissedDiskTip(db);
++  sqlite3_free(out.p);
++}
++
+ int doltliteRemoteSqlRegister(sqlite3 *db){
+   int rc;
+   rc = doltliteCreateCommandFunc(db, "dolt_remote", -1,
+@@ -602027,6 +602645,12 @@
+                                  doltPullFunc);
+   if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_clone", -1,
+                                  doltCloneFunc);
++  if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_pack_fetch", 2,
++                                 celldPackFetchFunc);
++  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_pack_build", 2,
++                                 SQLITE_UTF8, 0, celldPackBuildFunc, 0, 0);
++  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_pack_haves", 0,
++                                 SQLITE_UTF8, 0, celldPackHavesFunc, 0, 0);
+ #ifdef DOLTLITE_HAVE_AUTH
+   if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_creds_new", -1,
+                                  doltCredsNewFunc);

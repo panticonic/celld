@@ -22,6 +22,8 @@ supports, one service or API at a time:
 - `workflow/` — a Workflow that builds a report in one durable step
 - `rpc/` — Durable Object method calls through JS RPC
 - `dynamic-worker-tails/` — a runtime-loaded Worker with a Tail Worker
+- `egress/` — outbound traffic through a node egress proxy, with a test that
+  checks the identity each request carries (`node test.mjs`)
 - `facets/` — a Durable Object facet over a class the Worker Loader starts
 - `container/` — a Durable Object that supervises a container with
   `@cloudflare/containers`; needs `npm install` and a Docker or Podman CLI

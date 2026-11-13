@@ -575,6 +575,7 @@ impl Generation {
                     .with_queue_consumers(queue_catalog.clone())
                     .with_crons(if is_primary { crons } else { Vec::new() })
                     .with_containers(containers)
+                    .with_deployment(&version)
                     .with_generation(id),
             );
             let pool = crate::runtime::StatelessRuntime::start(

@@ -36,6 +36,10 @@ pub struct OutboundWsReq {
     /// op derives it from the running event, so the socket routes through
     /// the facet's root and never names the facet as a cell.
     pub facet: Option<FacetSocket>,
+    /// Set when the node routes outbound traffic through an egress proxy: the
+    /// connector dials the proxy with this identity instead of `url`'s host.
+    /// Decided on the JS thread, where the caller's identity is known.
+    pub via: Option<crate::egress::ProxyRoute>,
     pub reply: tokio::sync::oneshot::Sender<Result<OutboundWsOpen>>,
 }
 

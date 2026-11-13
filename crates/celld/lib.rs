@@ -62,6 +62,7 @@ pub mod env_vars;
 pub mod fault {
     include!(env!("CELLD_INTERNAL_SQLITE_FAULT"));
 }
+pub mod egress;
 pub(crate) mod facet_streams;
 pub mod fleet;
 pub mod generation;

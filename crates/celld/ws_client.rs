@@ -109,6 +109,18 @@ fn accept_key(key: &str) -> String {
 /// The caller owns the timeout: nothing here bounds how long a server may take
 /// to answer.
 pub async fn connect(url: &str, extra: HeaderMap) -> Result<Connection, Error> {
+    connect_via(url, extra, None).await
+}
+
+/// [`connect`], optionally through the node's egress proxy. With a route the
+/// handshake goes to the proxy in absolute form (`GET ws://host/path`) with the
+/// caller's signed identity added, and the destination is never resolved or
+/// dialed from here; TLS to a `wss://` origin is the proxy's.
+pub async fn connect_via(
+    url: &str,
+    mut extra: HeaderMap,
+    via: Option<&crate::egress::ProxyRoute>,
+) -> Result<Connection, Error> {
     let url = url::Url::parse(url).context("parse WebSocket URL")?;
     // `fetch("http://…", { headers: { Upgrade: "websocket" } })` is the
     // Workers idiom for an outbound socket, and the only form a container
@@ -127,25 +139,47 @@ pub async fn connect(url: &str, extra: HeaderMap) -> Result<Connection, Error> {
         (false, 80) | (true, 443) => host.clone(),
         _ => format!("{host}:{port}"),
     };
-    let target = match url.query() {
+    let mut target = match url.query() {
         Some(query) => format!("{}?{query}", url.path()),
         None => url.path().to_string(),
     };
 
-    let tcp = tokio::net::TcpStream::connect((host.as_str(), port))
-        .await
-        .with_context(|| format!("connect {authority}"))?;
-    let stream: Box<dyn Stream> = if tls {
-        let name = rustls::pki_types::ServerName::try_from(host.clone())
-            .map_err(|_| anyhow!("invalid TLS server name: {host}"))?;
-        Box::new(
-            tls_config()
-                .connect(name, tcp)
-                .await
-                .with_context(|| format!("TLS handshake with {authority}"))?,
-        )
+    let stream: Box<dyn Stream> = if let Some(route) = via {
+        let (absolute, _) = crate::egress::websocket_target(&url)?;
+        // Anything of ours that the caller supplied is replaced, never merged.
+        let reserved: Vec<_> = extra
+            .keys()
+            .filter(|name| crate::egress::is_reserved_header(name.as_str()))
+            .cloned()
+            .collect();
+        for name in reserved {
+            extra.remove(name);
+        }
+        for (name, value) in route.headers(crate::egress::Kind::WebSocket, "GET", &absolute) {
+            extra.insert(
+                hyper::header::HeaderName::from_static(name),
+                HeaderValue::from_str(&value).context("egress header value")?,
+            );
+        }
+        target = absolute;
+        let (io, _) = crate::egress::dial(route).await?;
+        Box::new(io)
     } else {
-        Box::new(tcp)
+        let tcp = tokio::net::TcpStream::connect((host.as_str(), port))
+            .await
+            .with_context(|| format!("connect {authority}"))?;
+        if tls {
+            let name = rustls::pki_types::ServerName::try_from(host.clone())
+                .map_err(|_| anyhow!("invalid TLS server name: {host}"))?;
+            Box::new(
+                tls_config()
+                    .connect(name, tcp)
+                    .await
+                    .with_context(|| format!("TLS handshake with {authority}"))?,
+            )
+        } else {
+            Box::new(tcp)
+        }
     };
 
     let key = fastwebsockets::handshake::generate_key();

@@ -139,6 +139,7 @@ the Cloudflare service.
 - [Static assets](services/static-assets.md)
 - [Dynamic Workers](services/dynamic-workers.md)
 - [Containers](services/containers.md)
+- [Egress proxy](services/egress.md)
 
 ## Install
 

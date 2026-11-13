@@ -4597,6 +4597,60 @@ pub fn dolt_op(scope: &str, op: &str, args: &serde_json::Value) -> Result<serde_
     result
 }
 
+/// Run one `ctx.storage.dolt` operation inside the caller's open storage
+/// transaction (`transactionSync(fn, { commit })`, `dolt.merge` with a
+/// resolver). The harness opened the transaction, so the connection must not
+/// be in autocommit mode; the operation joins it instead of opening its own,
+/// and the transaction's own COMMIT or ROLLBACK ends it.
+///
+/// An operation that can change the store advances the cell's committed-write
+/// position as `dolt_op` does, so the output gate holds the next output until
+/// a capture after the transaction is proved durable.
+pub fn dolt_tx_op(
+    scope: &str,
+    op: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    require_sql_healthy(scope)?;
+    let result = dbs(|d| {
+        let mut dbs = d.borrow_mut();
+        let Some(cell) = dbs.get_mut(scope) else {
+            return Err(format!("no database for {scope}"));
+        };
+        if cell.engine != celld_ltx::Engine::Dolt {
+            return Err("ctx.storage.dolt is only available on Dolt cells \
+                        (declare the class in migrations[].new_dolt_classes) \
+                        and Dolt facets (FacetStartupOptions.celld.storage)"
+                .to_string());
+        }
+        if cell.connection.is_autocommit() {
+            return Err(format!("dolt.{op} runs inside a storage transaction"));
+        }
+        if crate::dolt_cell::mutates_in_transaction(op) {
+            cell.dolt_mutations += 1;
+        }
+        let connection = &cell.connection;
+        let result = without_sql_authorizer(connection, || {
+            let result = crate::dolt_cell::run_in_transaction(connection, op, args);
+            if result.is_ok() && cell.replicated_wake && crate::dolt_cell::changes_schema_in_transaction(op) {
+                if let Err(error) = crate::dolt_cell::ensure_wake_triggers(connection) {
+                    return Err(error.context("restore the wake triggers"));
+                }
+            }
+            result
+        });
+        if crate::dolt_cell::changes_schema_in_transaction(op) {
+            connection.flush_prepared_statement_cache();
+        }
+        result.map_err(|error| format!("{error:#}"))
+    });
+    if crate::dolt_cell::changes_schema_in_transaction(op) {
+        close_sql_statement_cache(scope);
+        cells(|c| c.schema_cookies.borrow_mut().remove(scope));
+    }
+    result
+}
+
 /// Where a root cell's database lives, for the object operations
 /// (`crate::object_image`): its file, its engine and its activation epoch.
 pub(crate) struct RootFile {

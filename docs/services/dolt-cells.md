@@ -57,6 +57,37 @@ Every method is synchronous, like `ctx.storage.sql`, and throws on failure.
 | `query(sql, bindings?, { limits?, maxRows? })` | one read-only statement under the local-read profile and a step budget, `{ columns, rows }` with exact storage classes: INTEGER is a `bigint`, REAL a number, BLOB a `Uint8Array`. A refusal throws an error whose `code` is `SQL_PROFILE_VIOLATION`, `SQL_STEP_LIMIT`, `SQL_RESULT_LIMIT`, ... |
 | `engineDigest()` | the digest of the engine build and execution profile; it changes whenever execution semantics could |
 
+### Commit at the end of a transaction
+
+`ctx.storage.transactionSync(fn, { commit })` and
+`ctx.storage.transaction(fn, { commit })` make the transaction's SQL writes and
+a Dolt commit one durable step:
+
+```js
+const count = ctx.storage.transactionSync(
+  () => {
+    ctx.storage.sql.exec("INSERT INTO notes(body) VALUES (?)", body);
+    return ctx.storage.sql.exec("SELECT count(*) AS n FROM notes").one().n;
+  },
+  { commit: { message: "add a note", author: "Ann <ann@example.com>", date } },
+);
+```
+
+`commit` is `{ message, author?, date?, allowEmpty? }`, a bare message, or a
+function of the callback's result that returns either (a message rendered
+from the facts the callback wrote). A function may return `null` to leave the
+writes uncommitted. The call still returns the callback's result; the new
+commit is `ctx.storage.dolt.hashOf("HEAD")`.
+
+The writes and the commit are written as **one root record**, so one replicated
+unit: a crash can never leave the writes uncommitted, which is the window that
+a write followed by `dolt.commit()` has (two root records). If the callback
+throws, if the commit cannot be made (nothing to commit without `allowEmpty`,
+a malformed author), or if anything fails after it, the whole transaction rolls
+back: no rows, no commit. `{ commit }` belongs to the outermost transaction;
+on a nested one (a savepoint, which a Dolt commit cannot undo) and on a SQLite
+cell it throws.
+
 Values passed to `execute` and `query` keep SQLite's storage classes: a safe
 integer or a `bigint` is INTEGER, any other number is REAL, a one-element
 `Float64Array` is REAL even when integral, bytes are BLOB. Programs cannot read
@@ -96,7 +127,9 @@ after a SQL `INSERT`. Read methods behave like a SQL `SELECT`.
 **Transactions.** No method runs inside `transaction()` or
 `transactionSync()`; each one throws there. SQL writes made before a
 `commit()` in the same handler are committed SQLite transactions already, so
-`commit()` sees them.
+`commit()` sees them, but they are a separate durable step from the commit.
+To make writes and commit one step, give the transaction
+[`{ commit }`](#commit-at-the-end-of-a-transaction).
 
 **Merge conflicts never commit.** A merge runs in a transaction. When it
 conflicts, the transaction rolls back, the branch is unchanged, and the result

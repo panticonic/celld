@@ -135,6 +135,61 @@ export class Repo {
         const rows = probe ? this.sql.exec(probe).toArray() : [];
         return Response.json({ outcome, rows, digest: dolt.engineDigest() });
       }
+      case "tx": {
+        // transactionSync(fn, { commit }): the writes and the Dolt commit
+        // are one durable step; a throw anywhere rolls both back.
+        const body = q("body", "note");
+        try {
+          const result = this.ctx.storage.transactionSync(
+            () => {
+              this.sql.exec("INSERT INTO notes(body) VALUES (?)", body);
+              if (q("fail") === "after-write") throw new Error("declined");
+              return this.notes().length;
+            },
+            {
+              // A function renders the message from what the callback wrote.
+              commit: q("fn") === "1"
+                ? (count) => ({ message: `${count} notes`, author: q("author", undefined) ?? undefined })
+                : {
+                    message: q("message", "tx"),
+                    author: q("author", undefined) ?? undefined,
+                    date: q("date") == null ? undefined : Number(q("date")),
+                  },
+            },
+          );
+          return Response.json({ result, head: dolt.hashOf("HEAD"), status: dolt.status(), notes: this.notes() });
+        } catch (error) {
+          return Response.json({
+            error: String(error.message), head: dolt.hashOf("HEAD"), status: dolt.status(), notes: this.notes(),
+          });
+        }
+      }
+      case "tx-async": {
+        try {
+          const result = await this.ctx.storage.transaction(
+            async () => {
+              this.sql.exec("INSERT INTO notes(body) VALUES (?)", q("body", "async"));
+              await Promise.resolve();
+              return "ran";
+            },
+            { commit: (result) => `async transaction ${result}` },
+          );
+          return Response.json({ result, log: dolt.log({ limit: 1 }), status: dolt.status() });
+        } catch (error) {
+          return Response.json({ error: String(error.message) });
+        }
+      }
+      case "tx-nested": {
+        // { commit } belongs to the outermost transaction.
+        try {
+          this.ctx.storage.transactionSync(() => {
+            this.ctx.storage.transactionSync(() => {}, { commit: { message: "nested" } });
+          });
+          return Response.json({ error: null });
+        } catch (error) {
+          return Response.json({ error: String(error.message), log: dolt.log({ limit: 1 }) });
+        }
+      }
       case "sql-versioning": {
         // Application SQL cannot reach the versioning surface.
         try {

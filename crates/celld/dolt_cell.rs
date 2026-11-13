@@ -311,6 +311,39 @@ pub(crate) fn changes_schema(op: &str) -> bool {
     matches!(op, "checkout" | "reset" | "merge" | "gc" | "execute")
 }
 
+/// Whether an operation that runs inside the caller's open transaction
+/// ([`run_in_transaction`]) can change the store.
+pub(crate) fn mutates_in_transaction(op: &str) -> bool {
+    matches!(op, "txCommit")
+}
+
+/// Whether an operation that runs inside the caller's open transaction can
+/// change the schema the connection sees.
+pub(crate) fn changes_schema_in_transaction(_op: &str) -> bool {
+    false
+}
+
+/// Run one operation inside the caller's open storage transaction, with the
+/// application authorizer lifted. Only the operations whose engine commands
+/// are written for that (DoltLite's scoped commands) are here; the others
+/// refuse a transaction (`storage::dolt_op`).
+///
+/// `txCommit` is `commit` inside the transaction: DoltLite's `dolt_commit`
+/// commits the transaction's SQL writes and records the Dolt commit in one
+/// root record, then reopens the transaction, so the caller's COMMIT that
+/// follows has nothing left to write. The commit and the writes are one
+/// durable step, and one replicated unit.
+pub(crate) fn run_in_transaction(
+    connection: &Connection,
+    op: &str,
+    args: &Value,
+) -> anyhow::Result<Value> {
+    match op {
+        "txCommit" => commit(connection, args),
+        other => bail!("dolt operation {other:?} cannot run inside a storage transaction"),
+    }
+}
+
 /// Run one `ctx.storage.dolt` operation. The caller holds the cell's
 /// connection outside any transaction, with the application authorizer
 /// lifted.
@@ -885,6 +918,72 @@ mod tests {
         assert_eq!(branches.as_array().unwrap().len(), 1);
         assert!(run(&c, "branchDelete", &json!({"name": "main"})).is_err());
         assert!(run(&c, "checkout", &json!({"branch": "-D"})).is_err());
+    }
+
+    /// The number of sealed root records appended to the chunk file at
+    /// `path` after the cut `from` (a commit appends chunks and one root).
+    fn roots_after(path: &str, from: celld_ltx::dolt::Cut) -> usize {
+        let bytes = std::fs::read(path).unwrap();
+        let mut ends = std::collections::BTreeSet::new();
+        for end in from.resume as usize..=bytes.len() {
+            ends.insert(celld_ltx::dolt::scan_wal(&bytes[..end], 0, from.resume, from).end);
+        }
+        ends.len() - 1
+    }
+
+    fn cut_of(path: &str) -> celld_ltx::dolt::Cut {
+        celld_ltx::dolt::scan_file(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    /// F2: the SQL writes of a transaction and the Dolt commit made inside it
+    /// are one root record. Written the old way (a write, then a commit),
+    /// they are two, and a crash between them leaves uncommitted rows.
+    #[test]
+    fn commit_in_a_transaction_is_one_durable_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, c) = cell(dir.path());
+        c.execute_batch("CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);").unwrap();
+        run(&c, "commit", &json!({"message": "base"})).unwrap();
+
+        let before = cut_of(&path);
+        c.execute("INSERT INTO t(b) VALUES ('two steps')", []).unwrap();
+        run(&c, "commit", &json!({"message": "two steps"})).unwrap();
+        assert_eq!(roots_after(&path, before), 2);
+
+        let before = cut_of(&path);
+        c.execute_batch("BEGIN IMMEDIATE").unwrap();
+        c.execute("INSERT INTO t(b) VALUES ('one step')", []).unwrap();
+        let hash = run_in_transaction(&c, "txCommit", &json!({"message": "one step"})).unwrap();
+        c.execute_batch("COMMIT").unwrap();
+        assert_eq!(roots_after(&path, before), 1);
+        assert_eq!(hash, run(&c, "hashOf", &json!({"ref": "HEAD"})).unwrap());
+        assert_eq!(run(&c, "status", &json!({})).unwrap(), json!([]));
+        let diff = run(&c, "diff", &json!({"from": "HEAD~1", "to": "HEAD"})).unwrap();
+        assert_eq!(diff["patch"].as_array().unwrap().len(), 1, "{diff}");
+
+        // A commit that cannot be made (nothing to commit, a bad author)
+        // fails with the transaction still open, and its rollback drops the
+        // writes: nothing of it is left behind.
+        let before = cut_of(&path);
+        c.execute_batch("BEGIN IMMEDIATE").unwrap();
+        c.execute("INSERT INTO t(b) VALUES ('doomed')", []).unwrap();
+        let error = run_in_transaction(
+            &c,
+            "txCommit",
+            &json!({"message": "doomed", "author": "nobody"}),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("author must look like"), "{error:#}");
+        assert!(!c.is_autocommit());
+        c.execute_batch("ROLLBACK").unwrap();
+        let n: i64 = c.query_row("SELECT count(*) FROM t WHERE b='doomed'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(roots_after(&path, before), 0);
+
+        c.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let error = run_in_transaction(&c, "txCommit", &json!({"message": "empty"})).unwrap_err();
+        assert!(format!("{error:#}").contains("nothing to commit"), "{error:#}");
+        c.execute_batch("ROLLBACK").unwrap();
     }
 
     #[test]

@@ -1232,8 +1232,9 @@ pub(super) fn op_dolt_enabled(
     rv.set(v8::Boolean::new(scope, storage::is_dolt(&cell)).into());
 }
 
-/// `__dolt_op(cell, op, argsJson)` — one synchronous `ctx.storage.dolt`
-/// operation; the answer is JSON. A failure throws `dolt.<op>: ...`.
+/// `__dolt_op(cell, op, argsJson, inTransaction?)` — one synchronous
+/// `ctx.storage.dolt` operation; the answer is JSON. A failure throws
+/// `dolt.<op>: ...`.
 pub(super) fn op_dolt_op(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -1246,7 +1247,15 @@ pub(super) fn op_dolt_op(
             Ok(input) => input,
             Err(error) => return throw_storage_error(scope, &format!("dolt.{op}"), error),
         };
-    match storage::dolt_op(&cell, &op, &input) {
+    // A fourth argument of `true` runs the operation inside the storage
+    // transaction the harness opened (`transactionSync(fn, { commit })`).
+    let in_transaction = args.get(3).boolean_value(scope);
+    let output = if in_transaction {
+        storage::dolt_tx_op(&cell, &op, &input)
+    } else {
+        storage::dolt_op(&cell, &op, &input)
+    };
+    match output {
         Ok(output) => rv.set(v8::String::new(scope, &output.to_string()).unwrap().into()),
         Err(error) => throw_storage_error(scope, &format!("dolt.{op}"), error),
     }

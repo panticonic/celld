@@ -105,6 +105,24 @@ check "exact local query"    "$(get "/query?repo=ex1&sql=SELECT%20big,%20x%20FRO
 check "query is read-only"   "$(get "/query?repo=ex1&sql=DELETE%20FROM%20ledger")"       '.error == "SQL_PROFILE_VIOLATION"'
 check "begin/commit/rollback" "$(get "/txn?repo=ex1")"                     '.rows == [{"x":1}]'
 
+echo "-- F2: commit at the end of a SQL transaction"
+T="repo=tx"
+get "/add?$T&body=base" >/dev/null
+get "/commit?$T&message=base" >/dev/null
+TXHEAD=$(get "/hash?$T" | jq -r .hash)
+check "tx writes and commits"  "$(get "/tx?$T&body=in-tx&message=one%20step&author=Ann%20%3Cann%40example.com%3E")" \
+  '.result == 2 and .status == [] and (.notes | length) == 2 and .head != "'"$TXHEAD"'"'
+check "tx commit in the log"   "$(get "/log?$T&limit=2")"                '.[0].message == "one step" and .[0].committer == "Ann" and .[1].message == "base"'
+TXHEAD=$(get "/hash?$T" | jq -r .hash)
+check "tx throw rolls back both" "$(get "/tx?$T&body=doomed&fail=after-write")" \
+  '.error == "declined" and (.notes | length) == 2 and .status == [] and .head == "'"$TXHEAD"'"'
+check "tx message from result" "$(get "/tx?$T&body=three&fn=1")"        '.result == 3 and .status == []'
+check "tx message log"         "$(get "/log?$T&limit=1")"               '.[0].message == "3 notes"'
+check "async transaction"      "$(get "/tx-async?$T")"                  '.result == "ran" and .log[0].message == "async transaction ran" and .status == []'
+check "nested commit refused"  "$(get "/tx-nested?$T")"                 '(.error | test("outermost")) and .log[0].message == "async transaction ran"'
+check "tx commit with a bad author fails whole" "$(get "/tx?$T&body=bad&author=nobody")" \
+  '(.error | test("author")) and (.notes | length) == 4 and .status == []'
+
 echo "-- restart (local resume)"
 stop
 start
@@ -124,6 +142,8 @@ check "restored branch"      "$(get "/engine?$R")"                        '.bran
 check "restored kv"          "$(get "/kv?$R")"                            '.kv == "runtime-state"'
 check "restored main"        "$(get "/hash?$R&ref=main")"                 ".hash == \"$C2\""
 check "restored fork"        "$(get "/byid/$FORK_ID/notes")"              '(.notes | length) == 1'
+check "restored tx commit"   "$(get "/log?repo=tx&limit=10")"             'map(.message) | (index("one step") != null and index("3 notes") != null)'
+check "restored tx rows"     "$(get "/notes?repo=tx")"                    '(.notes | length) == 4'
 get "/add?$R&body=after-restore" >/dev/null
 check "commit after restore" "$(get "/commit?$R&message=after")"          '.hash | length == 40'
 check "gc"                   "$(get "/gc?$R")"                            '.gc != null'

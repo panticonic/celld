@@ -1511,15 +1511,7 @@ class DoltStorage {
     return JSON.parse(__dolt_op(this._scope, op, JSON.stringify(args)));
   }
   commit(options = {}) {
-    if (typeof options === "string") options = { message: options };
-    let date = options.date ?? null;
-    if (date instanceof Date) date = date.getTime();
-    return this._op("commit", {
-      message: options.message == null ? null : String(options.message),
-      author: options.author == null ? null : String(options.author),
-      date,
-      allowEmpty: !!options.allowEmpty,
-    });
+    return this._op("commit", __doltCommitArgs(options));
   }
   checkout(branch, options = {}) {
     return this._op("checkout", { branch: String(branch), create: !!options.create });
@@ -1612,6 +1604,19 @@ class DoltStorage {
     };
   }
   engineDigest() { return this._op("engineDigest", {}); }
+}
+// The arguments of a Dolt commit: `{ message, author?, date?, allowEmpty? }`
+// or just the message.
+function __doltCommitArgs(options) {
+  if (typeof options === "string") options = { message: options };
+  let date = options.date ?? null;
+  if (date instanceof Date) date = date.getTime();
+  return {
+    message: options.message == null ? null : String(options.message),
+    author: options.author == null ? null : String(options.author),
+    date,
+    allowEmpty: !!options.allowEmpty,
+  };
 }
 function __doltStatement(step, what) {
   if (typeof step === "string") step = { sql: step };
@@ -1917,6 +1922,52 @@ class DurableObjectStorage {
     if (!this._flushPendingPuts()) return;
     __alarm_delete(this._scope);
   }
+  // celld fork: `{ commit }` on transactionSync() and transaction() makes the
+  // transaction's writes one Dolt commit: the SQL writes and the commit are
+  // one durable step (one root record, one replicated unit), so a crash can
+  // never leave the writes uncommitted. `commit` is `{ message, author?,
+  // date?, allowEmpty? }`, the message, or a function of the callback's
+  // result that returns either (a message rendered from the facts the
+  // callback wrote; it may return null to leave the writes uncommitted). A
+  // throw anywhere, the commit's included, rolls the whole transaction back.
+  // Returns the option, or null when there is none.
+  _commitOption(options, what) {
+    if (options === undefined || options === null) return null;
+    if (typeof options !== "object")
+      throw new TypeError(what + " options must be an object.");
+    for (const key of Object.keys(options))
+      if (key !== "commit")
+        throw new TypeError(what + " options has no `" + key + "`; the option is `commit`.");
+    const spec = options.commit;
+    if (spec === undefined || spec === null || spec === false) return null;
+    if (typeof spec !== "object" && typeof spec !== "function" && typeof spec !== "string")
+      throw new TypeError(what + " `commit` must be { message }, a message or a function.");
+    if (this._transactionDepth > 0)
+      throw new Error(
+        what + ": { commit } is only for the outermost transaction; a nested " +
+        "transaction is a savepoint and a Dolt commit cannot be undone by one.");
+    if (this.dolt === undefined)
+      throw new Error(
+        what + ": { commit } needs a Dolt cell (migrations[].new_dolt_classes) or a Dolt facet.");
+    return spec;
+  }
+  _commitInTransaction(spec, value) {
+    let resolved = typeof spec === "function" ? spec(value) : spec;
+    if (resolved === null || resolved === undefined || resolved === false) return;
+    if (typeof resolved === "string") resolved = { message: resolved };
+    if (typeof resolved !== "object")
+      throw new TypeError("transaction commit: expected { message } or a message.");
+    const args = __doltCommitArgs(resolved);
+    if (args.message === null || args.message === "")
+      throw new TypeError("transaction commit needs a non-empty message.");
+    this._doltTransactionOp("txCommit", args);
+  }
+  // A Dolt operation that joins the open storage transaction.
+  _doltTransactionOp(op, args) {
+    if (this._state && this._state._aborted)
+      throw new Error("the Durable Object was reset; this event's storage is closed");
+    return JSON.parse(__dolt_op(this._scope, op, JSON.stringify(args), true));
+  }
   _transactionStart() {
     const root = this._transactionRoot;
     const savepoint = "cells_tx_" + (++root._transactionSerial);
@@ -2016,8 +2067,9 @@ class DurableObjectStorage {
       },
     });
   }
-  transactionSync(f) {
+  transactionSync(f, options) {
     this._assertTransactionActive("transactionSync");
+    const commit = this._commitOption(options, "transactionSync");
     const root = this._transactionRoot;
     if (this._transactionDepth === 0) {
       // A callback can call a helper that reaches the root `ctx.storage`
@@ -2032,11 +2084,11 @@ class DurableObjectStorage {
       // The synchronous transaction is preferred over an asynchronous one,
       // because it is the innermost open layer whenever both are open.
       if (root._activeSyncTransaction !== null)
-        return root._activeSyncTransaction.transactionSync(f);
+        return root._activeSyncTransaction.transactionSync(f, options);
       const owner = String(__io_context_id());
       if (owner !== "" && root._transactionOwner === owner &&
           root._activeTransaction !== null)
-        return root._activeTransaction.transactionSync(f);
+        return root._activeTransaction.transactionSync(f, options);
     }
     const savepoint = this._transactionStart();
     const control = this._newTransactionControl(savepoint);
@@ -2053,6 +2105,7 @@ class DurableObjectStorage {
       // inside the transaction, and a throw rolls it back.
       const value = f();
       if (!control.rolledBack) {
+        if (commit !== null) this._commitInTransaction(commit, value);
         this._transactionCommit(savepoint);
         control.committed = true;
       }
@@ -2089,7 +2142,7 @@ class DurableObjectStorage {
     while (control.pending.size !== 0)
       await Promise.allSettled(Array.from(control.pending));
   }
-  async _runTransactionWith(f, savepoint, control) {
+  async _runTransactionWith(f, savepoint, control, commit = null) {
     const view = this._transactionView(control);
     const root = this._transactionRoot;
     const owner = String(__io_context_id());
@@ -2104,6 +2157,7 @@ class DurableObjectStorage {
       // child's savepoint and let its continuation run against a false owner.
       await this._drainNestedTransactions(control);
       if (!control.rolledBack) {
+        if (commit !== null) this._commitInTransaction(commit, value);
         this._transactionCommit(savepoint);
         control.committed = true;
       } else if (!control.rollbackPerformed) {
@@ -2155,8 +2209,9 @@ class DurableObjectStorage {
     const savepoint = this._transactionStart();
     return this._runTransactionWith(f, savepoint, this._newTransactionControl(savepoint));
   }
-  async transaction(f) {
+  async transaction(f, options) {
     this._assertTransactionActive("transaction");
+    const commit = this._commitOption(options, "transaction");
     if (this._transactionDepth > 0) {
       const nested = this._runTransaction(f);
       const pending = this._transactionControl.pending;
@@ -2171,7 +2226,7 @@ class DurableObjectStorage {
     const owner = String(__io_context_id());
     if (owner !== "" && root._transactionOwner === owner &&
         root._activeTransaction !== null)
-      return root._activeTransaction.transaction(f);
+      return root._activeTransaction.transaction(f, options);
     // Workerd runs the callback under blockConcurrencyWhile: the input gate
     // shuts, so no other event starts in the object while the transaction is
     // open. Without it another event's reads saw uncommitted rows, its
@@ -2223,7 +2278,7 @@ class DurableObjectStorage {
         try {
           const savepoint = this._transactionStart();
           control = this._newTransactionControl(savepoint);
-          return { value: await this._runTransactionWith(f, savepoint, control) };
+          return { value: await this._runTransactionWith(f, savepoint, control, commit) };
         } catch (error) {
           return { error };
         }

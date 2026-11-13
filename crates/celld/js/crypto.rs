@@ -129,6 +129,24 @@ fn x25519_pkcs8(scalar: &[u8; 32]) -> Vec<u8> {
     der
 }
 
+/// An Ed25519 private key as Node writes it: PKCS#8 version 0 (RFC 8410's
+/// `OneAsymmetricKey` v1), which carries the 32-byte seed and no public key.
+/// `ed25519-dalek`'s own encoder writes version 1 with the public key
+/// appended (83 bytes where Node's is 48), and anything that takes the seed as
+/// `der.subarray(-32)`, as code written for Node does, would get the public key
+/// from it. Import accepts both versions; every key celld writes is version 0.
+/// Matches the DER Node 22 exports for `generateKeyPairSync("ed25519")`.
+fn ed25519_pkcs8(seed: &[u8; 32]) -> Vec<u8> {
+    let mut der = vec![
+        0x30, 0x2e, // SEQUENCE, 46 bytes
+        0x02, 0x01, 0x00, // version 0
+        0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, // AlgorithmIdentifier, Ed25519
+        0x04, 0x22, 0x04, 0x20, // OCTET STRING(34) wrapping OCTET STRING(32)
+    ];
+    der.extend_from_slice(seed);
+    der
+}
+
 fn x25519_spki(point: &[u8; 32]) -> Vec<u8> {
     let mut der = vec![
         0x30, 0x2a, // SEQUENCE, 42 bytes
@@ -332,11 +350,24 @@ fn describe_key(der: &[u8], private: bool) -> Result<ParsedKey> {
                 details: serde_json::json!({ "namedCurve": named }),
             })
         }
-        ED25519_OID => Ok(ParsedKey {
-            kind: "ed25519",
-            der: der.to_vec(),
-            details: serde_json::json!({}),
-        }),
+        ED25519_OID => {
+            // A private key is re-encoded as version 0 whichever version it
+            // arrived in, so an import and a later export give back what Node
+            // gives: OpenSSL writes version 0 however the key was read.
+            let der = if private {
+                use ed25519_dalek::pkcs8::DecodePrivateKey;
+                let key = ed25519_dalek::SigningKey::from_pkcs8_der(der)
+                    .map_err(|_| anyhow!("invalid Ed25519 private key"))?;
+                ed25519_pkcs8(key.as_bytes())
+            } else {
+                der.to_vec()
+            };
+            Ok(ParsedKey {
+                kind: "ed25519",
+                der,
+                details: serde_json::json!({}),
+            })
+        }
         DSA_OID => {
             use dsa::pkcs8::DecodePrivateKey;
             use dsa::pkcs8::DecodePublicKey;
@@ -602,9 +633,7 @@ fn key_from_jwk(jwk: &serde_json::Value, want_private: bool) -> Result<Vec<u8>> 
                     .as_slice()
                     .try_into()
                     .map_err(|_| anyhow!("Ed25519 JWK private key must be 32 bytes"))?;
-                let key = ed25519_dalek::SigningKey::from_bytes(&seed);
-                use ed25519_dalek::pkcs8::EncodePrivateKey;
-                Ok(key.to_pkcs8_der()?.as_bytes().to_vec())
+                Ok(ed25519_pkcs8(&seed))
             } else {
                 let x = jwk_bytes(jwk, "OKP", "x")?;
                 let point: [u8; 32] = x
@@ -1166,7 +1195,6 @@ fn crypto_operation(operation: &str, args: &serde_json::Value) -> Result<serde_j
                     ec_curve!(crv, generate)
                 }
                 "ed25519" => {
-                    use ed25519_dalek::pkcs8::EncodePrivateKey as _;
                     // No `generate` on this build of ed25519-dalek (its
                     // `rand_core` feature is off); the seed is 32 random
                     // bytes either way.
@@ -1174,7 +1202,7 @@ fn crypto_operation(operation: &str, args: &serde_json::Value) -> Result<serde_j
                     rand::RngCore::fill_bytes(&mut rng, &mut seed);
                     let key = ed25519_dalek::SigningKey::from_bytes(&seed);
                     (
-                        key.to_pkcs8_der()?.as_bytes().to_vec(),
+                        ed25519_pkcs8(&seed),
                         key.verifying_key().to_public_key_der()?.as_bytes().to_vec(),
                     )
                 }
@@ -2013,4 +2041,97 @@ pub(super) fn op_webcrypto_aes_decrypt(
     rv: v8::ReturnValue<v8::Value>,
 ) {
     op_webcrypto_aes(scope, args, rv, false);
+}
+
+#[cfg(test)]
+mod ed25519_key_tests {
+    use super::*;
+    use ed25519_dalek::pkcs8::{DecodePrivateKey, EncodePrivateKey};
+
+    const SEED: [u8; 32] = [7; 32];
+    // Node 22: `generateKeyPairSync('ed25519')`'s private key exported as DER
+    // PKCS#8 is this prefix and the seed, 48 bytes, no public key.
+    const NODE_PREFIX: [u8; 16] = [
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
+        0x20,
+    ];
+
+    fn v2(seed: &[u8; 32]) -> Vec<u8> {
+        ed25519_dalek::SigningKey::from_bytes(seed)
+            .to_pkcs8_der()
+            .unwrap()
+            .as_bytes()
+            .to_vec()
+    }
+
+    #[test]
+    fn the_encoding_is_node_s_version_0_without_a_public_key() {
+        let der = ed25519_pkcs8(&SEED);
+        assert_eq!(der.len(), 48);
+        assert_eq!(&der[..16], &NODE_PREFIX);
+        assert_eq!(&der[16..], &SEED);
+        // The seed is the last 32 bytes, which is what code written for Node
+        // takes it to be.
+        assert_eq!(&der[der.len() - 32..], &SEED);
+        let key = ed25519_dalek::SigningKey::from_pkcs8_der(&der).unwrap();
+        assert_eq!(key.to_bytes(), SEED);
+    }
+
+    #[test]
+    fn the_library_encoder_writes_version_1_which_is_not_what_node_writes() {
+        // The reason `ed25519_pkcs8` exists.
+        assert_eq!(v2(&SEED).len(), 83);
+    }
+
+    #[test]
+    fn both_versions_import_and_come_back_as_version_0() {
+        let v1 = ed25519_pkcs8(&SEED);
+        for given in [v1.clone(), v2(&SEED)] {
+            let parsed = describe_key(&given, true).unwrap();
+            assert_eq!(parsed.kind, "ed25519");
+            assert_eq!(parsed.der, v1, "a {}-byte key normalizes to version 0", given.len());
+        }
+        // The key still signs the same bytes whichever version it came in as.
+        let sign = |key: &[u8]| {
+            crypto_operation(
+                "ed25519-sign",
+                &serde_json::json!({ "key": key, "data": b"message".to_vec() }),
+            )
+            .unwrap()["bytes"]
+                .clone()
+        };
+        assert_eq!(sign(&v1), sign(&v2(&SEED)));
+    }
+
+    #[test]
+    fn a_malformed_private_key_is_refused_at_import() {
+        let mut bad = ed25519_pkcs8(&SEED);
+        bad.truncate(40);
+        assert!(describe_key(&bad, true).is_err());
+    }
+
+    #[test]
+    fn generated_and_jwk_imported_keys_are_version_0() {
+        let generated = crypto_operation(
+            "asym-key-generate",
+            &serde_json::json!({ "type": "ed25519" }),
+        )
+        .unwrap();
+        let private: Vec<u8> = serde_json::from_value(generated["privateDer"].clone()).unwrap();
+        let public: Vec<u8> = serde_json::from_value(generated["publicDer"].clone()).unwrap();
+        assert_eq!(private.len(), 48);
+        assert_eq!(&private[..16], &NODE_PREFIX);
+        let seed: [u8; 32] = private[16..].try_into().unwrap();
+        // `.subarray(-32)` is the seed, and it derives the generated public key.
+        let derived = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key();
+        assert_eq!(&public[public.len() - 32..], derived.as_bytes());
+
+        let jwk = serde_json::json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "d": base64url(&SEED),
+            "x": base64url(ed25519_dalek::SigningKey::from_bytes(&SEED).verifying_key().as_bytes()),
+        });
+        assert_eq!(key_from_jwk(&jwk, true).unwrap(), ed25519_pkcs8(&SEED));
+    }
 }

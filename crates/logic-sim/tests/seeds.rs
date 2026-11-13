@@ -128,3 +128,23 @@ fn mutation_lease_always_expired_is_caught() {
         &[ViolationKind::StaleServe, ViolationKind::StaleAck],
     );
 }
+
+/// Seeds that once reproduced a defect in the core (see
+/// `docs/fork/upstream-findings.md`), replayed with every finding fatal.
+const FIXED_FINDINGS: &[(&str, &[u64])] = &[("S1", &[52])];
+
+#[test]
+fn fixed_findings_stay_fixed() {
+    let mut failures = Vec::new();
+    for (finding, seeds) in FIXED_FINDINGS {
+        for &seed in *seeds {
+            let mut config = SimConfig::for_seed(seed);
+            config.strict = true;
+            let outcome = run(config);
+            if let Some(v) = outcome.safety_violation() {
+                failures.push(format!("{finding} seed {seed}: {:?}: {}", v.kind, v.detail));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

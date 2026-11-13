@@ -5054,6 +5054,9 @@ impl State {
             }
         }
         self.cells.insert(id, cell);
+        // A release in flight blocks evicting a woken cell (`begin_eviction`),
+        // so shedding that was refused for it can proceed now.
+        self.pump_capacity(effects);
     }
 
     /// Finish one shutdown handoff after a successor acquired the cell. The
@@ -5949,6 +5952,15 @@ impl State {
         let Phase::Resident { epoch } = cell.phase else {
             return Err(EvictRefusal::CellTransitioning);
         };
+        // A cell woken while its owner release is still in flight is resident
+        // again, but `releasing` still names that write. Finishing a second
+        // rebalancing eviction would overwrite the slot, orphaning the first
+        // operation's index entry. `admit_eviction` refuses this state for an
+        // explicit eviction; every caller reaches that rule here. The release
+        // is bounded by its deadline, and its completion pumps capacity.
+        if cell.releasing.is_some() {
+            return Err(EvictRefusal::CellTransitioning);
+        }
         if !cell
             .alarm
             .as_ref()

@@ -135,7 +135,14 @@ fn pointed_branch(connection: &Connection) -> anyhow::Result<String> {
 
 /// Move a just-opened connection to the cell's active branch. Runs before
 /// any runtime table is read: DoltLite opens every connection on `main`.
+///
+/// Idempotent: the pointer is read on `main`, where every connection opens,
+/// so a connection already on another branch was attached before (a second
+/// read there would find no pointer and move it back to `main`).
 pub(crate) fn attach_active_branch(connection: &Connection) -> anyhow::Result<()> {
+    if active_branch(connection)? != HOME_BRANCH {
+        return Ok(());
+    }
     let target = pointed_branch(connection)?;
     if target != active_branch(connection)? {
         let _: i64 = connection
@@ -727,30 +734,70 @@ pub(crate) fn fork_image(
     built
 }
 
+/// Refuse a facet fork onto a facet that exists: one whose stream restored
+/// state from the bucket, or whose file is already present locally.
+pub(crate) fn ensure_fork_target(target: &std::path::Path, restored: bool) -> anyhow::Result<()> {
+    let present = std::fs::metadata(target).is_ok_and(|metadata| metadata.len() > 0);
+    anyhow::ensure!(
+        !restored && !present,
+        "the fork target facet already exists; delete it first"
+    );
+    Ok(())
+}
+
+/// The image a fork of the Dolt facet whose file is `source` starts from
+/// (see [`fork_image`]). The scratch copy sits beside `target`.
+pub(crate) fn fork_facet_image(
+    source: &std::path::Path,
+    target: &std::path::Path,
+    at: Option<&str>,
+) -> anyhow::Result<Vec<u8>> {
+    let bytes = match std::fs::read(source) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            bail!("the source facet has no storage")
+        }
+        Err(error) => return Err(error).context("read the source facet"),
+    };
+    anyhow::ensure!(
+        celld_ltx::dolt::is_chunk_store(&bytes),
+        "only a Dolt facet can be forked (FacetStartupOptions.celld.storage)"
+    );
+    let scratch = target.with_file_name(".facet-fork-scratch.db");
+    fork_image(&bytes, &scratch, at)
+}
+
+/// Write a fork's image as the target facet's file, durably. The target's
+/// stream is resident and saw no file, so its next capture takes the whole
+/// image as a new generation.
+pub(crate) fn install_fork_image(target: &std::path::Path, image: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write;
+    let parent = target.parent().context("facet file has no parent")?;
+    std::fs::create_dir_all(parent)?;
+    let temp = target.with_file_name(".facet-fork.tmp");
+    let mut file = std::fs::File::create(&temp)?;
+    file.write_all(image)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&temp, target)?;
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
 /// The whole-image LTX snapshot that opens a fork's first epoch.
 pub(crate) fn fork_snapshot(image: &[u8]) -> anyhow::Result<Vec<u8>> {
     let page = celld_ltx::dolt::DOLT_PAGE_SIZE as usize;
-    let commit = image.len().div_ceil(page);
-    anyhow::ensure!(
-        (commit as u32) < celld_ltx::ltx::lock_pgno(page as u32),
-        "a Dolt cell of 1 GiB or more cannot be forked yet"
-    );
+    // Numbered past the LTX lock page, as every Dolt capture is.
+    let (commit, pages) = celld_ltx::dolt::image_pages(image)?;
     let mut rolling: celld_ltx::Checksum = celld_ltx::CHECKSUM_FLAG;
-    let mut pages = Vec::with_capacity(commit);
-    for index in 0..commit {
-        let mut data = vec![0u8; page];
-        let start = index * page;
-        let end = (start + page).min(image.len());
-        data[..end - start].copy_from_slice(&image[start..end]);
-        let pgno = index as u32 + 1;
-        rolling = celld_ltx::CHECKSUM_FLAG | (rolling ^ celld_ltx::ltx::checksum_page(pgno, &data));
-        pages.push((pgno, data));
+    for (pgno, data) in &pages {
+        rolling = celld_ltx::CHECKSUM_FLAG | (rolling ^ celld_ltx::ltx::checksum_page(*pgno, data));
     }
     let header = celld_ltx::ltx::Header {
         version: celld_ltx::ltx::VERSION,
         flags: 0,
         page_size: page as u32,
-        commit: commit as u32,
+        commit,
         min_txid: celld_ltx::TXID(1),
         max_txid: celld_ltx::TXID(1),
         timestamp: chrono::Utc::now().timestamp_millis(),
@@ -921,6 +968,97 @@ mod tests {
         let (dolt, c) = cell(dir.path());
         drop(c);
         assert!(open_connection(&dolt, celld_ltx::Engine::Sqlite, None).is_err());
+    }
+
+    /// A Dolt facet opens in two steps (`storage::open_embedded`, then
+    /// `finish_open`), each attaching to the active branch: the second must
+    /// not move a connection already on a branch back to `main`.
+    #[test]
+    fn attach_is_idempotent_off_main() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, c) = cell(dir.path());
+        run(&c, "checkout", &json!({"branch": "work", "create": true})).unwrap();
+        drop(c);
+        let c = open_connection(&path, celld_ltx::Engine::Dolt, None).unwrap();
+        attach_active_branch(&c).unwrap();
+        attach_active_branch(&c).unwrap();
+        assert_eq!(active_branch(&c).unwrap(), "work");
+    }
+
+    /// `ctx.facets.fork`: the target must not exist, the source must be a
+    /// Dolt facet, and the installed image is a complete store that a fresh
+    /// capture store over the target picks up whole.
+    #[test]
+    fn facet_fork_installs_a_capturable_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let (source, c) = cell(dir.path());
+        c.execute_batch("CREATE TABLE t(a INTEGER PRIMARY KEY);").unwrap();
+        c.execute("INSERT INTO t VALUES (1)", []).unwrap();
+        let first = run(&c, "commit", &json!({"message": "one"})).unwrap();
+        c.execute("INSERT INTO t VALUES (2)", []).unwrap();
+        run(&c, "commit", &json!({"message": "two"})).unwrap();
+        run(&c, "checkout", &json!({"branch": "side", "create": true})).unwrap();
+        let target_dir = dir.path().join("target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let target = target_dir.join("db.sqlite");
+        // The target's stream is resident with no file before the install.
+        let mut store =
+            celld_ltx::DoltStore::open(&target, celld_ltx::LtxHost::default()).unwrap();
+        use celld_ltx::CellStore as _;
+        store.sync().unwrap();
+        assert_eq!(store.pos().unwrap().txid, celld_ltx::TXID(0));
+
+        ensure_fork_target(&target, false).unwrap();
+        assert!(ensure_fork_target(&target, true).is_err(), "a restored target exists");
+        let image = fork_facet_image(
+            std::path::Path::new(&source),
+            &target,
+            Some(first.as_str().unwrap()),
+        )
+        .unwrap();
+        install_fork_image(&target, &image).unwrap();
+        assert!(ensure_fork_target(&target, false).is_err(), "a local target exists");
+        // No scratch file is left beside the target.
+        let leftovers: Vec<_> = std::fs::read_dir(&target_dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "db.sqlite")
+            .collect();
+        assert!(
+            leftovers.iter().all(|name| !name.starts_with(".facet-fork")),
+            "{leftovers:?}"
+        );
+
+        store.sync().unwrap();
+        assert_eq!(store.pos().unwrap().txid, celld_ltx::TXID(1));
+        let mut snapshot = Vec::new();
+        store.snapshot_to_writer(&mut snapshot).unwrap();
+        let restored = dir.path().join("restored.db");
+        std::fs::write(&restored, celld_ltx::ltx::decode_database_image(&snapshot).unwrap())
+            .unwrap();
+        celld_ltx::DoltStore::open(&restored, celld_ltx::LtxHost::default()).unwrap();
+        let f = Connection::open(&restored).unwrap();
+        attach_active_branch(&f).unwrap();
+        // The fork starts on the source's checked-out branch, reset to `at`.
+        assert_eq!(active_branch(&f).unwrap(), "side");
+        let n: i64 = f.query_row("SELECT count(*) FROM t", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        let branches: i64 = f
+            .query_row("SELECT count(*) FROM dolt_branches", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(branches, 2);
+
+        // A SQLite facet's file cannot be forked as a Dolt facet.
+        let stock = dir.path().join("stock.db");
+        Connection::open(&stock).unwrap().execute_batch("CREATE TABLE t(a)").unwrap();
+        let error = fork_facet_image(&stock, &target_dir.join("other.db"), None).unwrap_err();
+        assert!(format!("{error:#}").contains("only a Dolt facet"), "{error:#}");
+        // A missing source has no storage.
+        let error =
+            fork_facet_image(&dir.path().join("absent.db"), &target_dir.join("x.db"), None)
+                .unwrap_err();
+        assert!(format!("{error:#}").contains("no storage"), "{error:#}");
     }
 }
 

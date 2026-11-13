@@ -2327,6 +2327,18 @@ class DurableObjectFacets {
         if (meta === undefined)
           throw new TypeError(
             "FacetStartupOptions.class must be a DurableObjectClass.");
+        // celld fork: `celld: { storage: "dolt" }` makes the facet a Dolt
+        // facet. Namespaced under `celld` (docs/fork/design.md section 3a) so a
+        // future workerd `FacetStartupOptions` key cannot collide with it.
+        // The engine is fixed when the facet is created: the host refuses
+        // a later start that names the other one.
+        const fork = options.celld;
+        if (fork !== undefined && (fork === null || typeof fork !== "object"))
+          throw new TypeError("FacetStartupOptions.celld must be an object.");
+        const storage = fork?.storage === undefined ? "sqlite" : fork.storage;
+        if (storage !== "sqlite" && storage !== "dolt")
+          throw new TypeError(
+            'FacetStartupOptions.celld.storage must be "sqlite" or "dolt".');
         const { id: loader } = await meta.loadPromise;
         const id = options.id === undefined ? this._state.id : options.id;
         // Keep the ID kind and name in one clone. A string round-trip erases
@@ -2334,7 +2346,7 @@ class DurableObjectFacets {
         const idSc = __sc_encode(id instanceof DurableObjectId
           ? [id._className, id.toString(), id.name] : String(id));
         // Keep the load alive after the startup callback and class are gone.
-        return [loader, meta.name, idSc, meta.propsSc, meta];
+        return [loader, meta.name, idSc, meta.propsSc, meta, storage];
       });
     const invoke = async (operation) => {
       if (record.aborted) throw record.error;
@@ -2346,26 +2358,26 @@ class DurableObjectFacets {
     const session = {
       get: () => Promise.reject(new Error(
         "Awaitable properties on facets are not supported yet.")),
-      call: (path, args) => invoke(async ([loader, className, id, propsSc]) => {
+      call: (path, args) => invoke(async ([loader, className, id, propsSc, , storage]) => {
         if (path.length !== 1)
           throw new Error(
             "Pipelined property paths on facets are not supported yet.");
         return __rpcDes(await __facet_rpc(
           loader, className, this._state._scope, record.owner, name, id,
-          propsSc, path[0], __rpcOut(args, false)));
+          propsSc, path[0], __rpcOut(args, false), storage));
       }),
     };
     // Arrow closures retain the manager because `target.fetch`'s method
     // receiver is the target object, not the DurableObjectFacets instance.
     const manager = this;
     target.fetch = async function(input, init) {
-      return invoke(async ([loader, className, id, propsSc]) => {
+      return invoke(async ([loader, className, id, propsSc, , storage]) => {
         const req = new Request(input, init);
         const headers = JSON.stringify(req.headers.__celldHeaderList);
         const { body, streamId } = await __subrequestBody(req);
         const response = JSON.parse(await __facet_fetch(
           loader, className, manager._state._scope, record.owner, name, id,
-          propsSc, req.url, req.method, body, headers, streamId));
+          propsSc, req.url, req.method, body, headers, streamId, storage));
         const responseBody = response.streamId !== undefined
           ? new CelldHttpBodyStream(response.streamId)
           : response.body !== undefined ? response.body
@@ -2424,6 +2436,37 @@ class DurableObjectFacets {
     // Keep a failed delete as the name's barrier. Clearing it would let the
     // next get reload the image which the failed operation did not delete.
     barrier.then(clear, () => {});
+  }
+  // celld fork: copy the Dolt facet `source` (every branch and its history)
+  // into the new Dolt facet `target`, with the target's checked-out branch
+  // reset to `options.at` when given. `target` must not exist and must not
+  // be running; a `get(target)` waits until the fork settles. `source` may be
+  // running: the fork reads its newest commit.
+  fork(source, target, options) {
+    source = this._validName(source);
+    target = this._validName(target);
+    if (this._state._facetDepth >= 3)
+      throw new Error(
+        "Facet nesting depth limit exceeded. The maximum depth including the root Durable Object is 4.");
+    if (source === target)
+      throw new TypeError("A facet cannot be forked onto itself.");
+    if (options !== undefined && (options === null || typeof options !== "object"))
+      throw new TypeError("facets.fork options must be an object.");
+    const at = options?.at;
+    if (at !== undefined && typeof at !== "string")
+      throw new TypeError("facets.fork options.at must be a string.");
+    if (this._running.has(target))
+      throw new Error("The fork target facet is running; delete it first.");
+    const barrier = Promise.all([
+      this._barriers.get(source), this._barriers.get(target),
+    ]).then(() => __facet_fork(this._state._scope, source, target, at))
+      .then((result) => JSON.parse(result));
+    const held = barrier.then(() => {}, () => {});
+    this._barriers.set(target, held);
+    held.then(() => {
+      if (this._barriers.get(target) === held) this._barriers.delete(target);
+    });
+    return barrier;
   }
   _release() {
     // The host closes these facets during give-back. Queuing _abort here

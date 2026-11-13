@@ -229,6 +229,7 @@ impl CellRuntime {
         root: &str,
         epoch: u64,
         names: &[String],
+        engine: celld_ltx::Engine,
     ) -> anyhow::Result<(PathBuf, bool)> {
         self.facets
             .open(
@@ -237,6 +238,7 @@ impl CellRuntime {
                 root,
                 epoch,
                 names,
+                engine,
             )
             .await
     }
@@ -257,6 +259,52 @@ impl CellRuntime {
                 names,
             )
             .await
+    }
+
+    /// Fork the Dolt facet at `source` into the new Dolt facet at `target`,
+    /// both below `root` at its resident `epoch`.
+    ///
+    /// The target's stream is activated first and must be empty: nothing in
+    /// the bucket and no local file, so a fork never overwrites a facet.
+    /// The source's file is read at its newest sealed root (a chunk file is
+    /// append-only, so any reader sees a committed prefix), and its stream
+    /// is proved durable past that read before the target is written, so a
+    /// fork never starts from state the source could still lose. The target
+    /// is then proved too: once this returns, the fork survives a crash.
+    pub async fn fork_facet(
+        &self,
+        root: &str,
+        epoch: u64,
+        source: &[String],
+        target: &[String],
+        at: Option<&str>,
+    ) -> anyhow::Result<u64> {
+        let engine = celld_ltx::Engine::Dolt;
+        let (target_path, restored) = self.open_facet(root, epoch, target, engine).await?;
+        let (source_path, _) = self.open_facet(root, epoch, source, engine).await?;
+        let at = at.map(str::to_string);
+        let checked = target_path.clone();
+        let image = asyncrt::blocking(move || -> anyhow::Result<Vec<u8>> {
+            crate::dolt_cell::ensure_fork_target(&checked, restored)?;
+            crate::dolt_cell::fork_facet_image(&source_path, &checked, at.as_deref())
+        })
+        .await??;
+        let source_stream = crate::engine_api::facet_cell(root, source);
+        self.prove_facet(&source_stream, epoch)
+            .await
+            .context("prove the source facet before its fork")?;
+        let size = image.len() as u64;
+        let installed = target_path.clone();
+        asyncrt::blocking(move || -> anyhow::Result<()> {
+            crate::dolt_cell::ensure_fork_target(&installed, restored)?;
+            crate::dolt_cell::install_fork_image(&installed, &image)
+        })
+        .await??;
+        let target_stream = crate::engine_api::facet_cell(root, target);
+        self.prove_facet(&target_stream, epoch)
+            .await
+            .context("prove the forked facet")?;
+        Ok(size)
     }
 
     /// Prove every committed write of a facet's stream durable.

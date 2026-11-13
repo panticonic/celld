@@ -47,6 +47,9 @@ pub enum FacetReq {
         root: String,
         epoch: u64,
         names: Vec<String>,
+        /// The engine the facet's startup options name; a stream whose
+        /// file is of the other engine refuses to open.
+        engine: celld_ltx::Engine,
         reply: tokio::sync::oneshot::Sender<Result<(std::path::PathBuf, bool)>>,
     },
     /// Delete the facet's stream and every stream below it.
@@ -55,6 +58,16 @@ pub enum FacetReq {
         epoch: u64,
         names: Vec<String>,
         reply: tokio::sync::oneshot::Sender<Result<()>>,
+    },
+    /// Fork the Dolt facet at `source` into the new Dolt facet at `target`
+    /// (both below `root`), and answer the image size.
+    Fork {
+        root: String,
+        epoch: u64,
+        source: Vec<String>,
+        target: Vec<String>,
+        at: Option<String>,
+        reply: tokio::sync::oneshot::Sender<Result<u64>>,
     },
     /// Prove every committed write of the stream durable.
     Prove {

@@ -9,6 +9,9 @@ supports, one service or API at a time:
 - `counter/` — a SQLite-backed Durable Object
 - `dolt/` — a Dolt-backed Durable Object: commits, branches, merge, fork
   (fork-only feature; `demo.sh` runs it end to end under `celld dev`)
+- `dolt-facets/` — Dolt facets of a SQLite supervisor, from a Worker Loader
+  class: versioning, `execute`, facet fork, restart and restore (fork-only
+  feature; `demo.sh` runs it end to end under `celld dev`)
 - `vectordb/` — nearest-color search with a per-object `vec0` index
 - `d1/` — a guestbook on a D1 database
 - `r2/` — object reads, writes, and deletes on an R2 bucket

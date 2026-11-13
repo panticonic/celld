@@ -213,7 +213,7 @@ their own switches.
   ```jsonc
   "celld": {
     "durable_objects": {
-      "Class": { "codegen": true, "residency": true, "secrets": ["NAME"] }
+      "Class": { "codegen": true, "residency": true, "secrets": ["NAME"], "doltLocal": ["outbox_%"], "doltRemotes": true }
     }
   }
   ```

@@ -886,6 +886,8 @@ fn serve_push(
 }
 
 #[cfg(test)]
+// The tests copy a cell's file to make a fork of it.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

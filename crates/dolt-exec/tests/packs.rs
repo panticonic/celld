@@ -7,6 +7,9 @@
 //! corrupt pack installs nothing, and the fetch lands as an ordinary
 //! remote-tracking branch that `dolt_merge` can use.
 
+// The tests copy a store's file to make a fork of it.
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use common::{open_dolt, GENESIS};
@@ -62,7 +65,7 @@ fn a_pack_carries_only_what_the_receiver_lacks() {
     let delta = pack(&a, "main", &haves);
     assert!(delta.len() < full.len(), "{} !< {}", delta.len(), full.len());
 
-    let fetched = text(&b, &format!("SELECT dolt_pack_fetch('a', ?1)").replace("?1", &blob_literal(&delta)));
+    let fetched = text(&b, &format!("SELECT dolt_pack_fetch('a', {})", blob_literal(&delta)));
     assert_eq!(fetched.trim(), format!("main {tip}"));
     assert_eq!(text(&b, "SELECT dolt_hashof('a/main')"), tip);
     // The fetch changed no branch and no working data.
@@ -222,4 +225,46 @@ fn tracking_branches_can_be_moved_onto_branches_and_removed() {
         .query_row("SELECT count(*) FROM dolt_remote_branches", [], |row| row.get(0))
         .unwrap();
     assert_eq!(left, 0);
+}
+
+#[test]
+fn a_large_store_sends_only_the_changed_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let a_path = dir.path().join("a.db");
+    let a = open_dolt(&a_path, Some(GENESIS));
+    a.execute_batch("CREATE TABLE big (id INTEGER PRIMARY KEY, body TEXT);").unwrap();
+    a.execute_batch("BEGIN").unwrap();
+    for id in 0..30_000 {
+        a.execute(
+            "INSERT INTO big VALUES (?1, ?2)",
+            rusqlite::params![id, format!("row number {id} of the big table")],
+        )
+        .unwrap();
+    }
+    a.execute_batch("COMMIT").unwrap();
+    commit(&a, "base");
+    let b_path = dir.path().join("b.db");
+    std::fs::copy(&a_path, &b_path).unwrap();
+    let b = open_dolt(&b_path, None);
+
+    a.execute("UPDATE big SET body = 'changed' WHERE id IN (7, 15000, 29999)", []).unwrap();
+    let tip = commit(&a, "three rows");
+    let full = pack(&a, "main", "");
+    let delta = pack(&a, "main", &text(&b, "SELECT dolt_pack_haves()"));
+    // The whole table is megabytes; three changed rows are a path through
+    // the prolly tree and their leaves.
+    assert!(full.len() > 1_000_000, "full {}", full.len());
+    assert!(delta.len() < full.len() / 20, "delta {} vs full {}", delta.len(), full.len());
+    call(&b, &format!("SELECT dolt_pack_fetch('a', {})", blob_literal(&delta)));
+    assert_eq!(text(&b, "SELECT dolt_hashof('a/main')"), tip);
+    call(&b, "SELECT dolt_merge('a/main')");
+    assert_eq!(
+        b.query_row("SELECT body FROM big WHERE id = 15000", [], |row| row.get::<_, String>(0)).unwrap(),
+        "changed"
+    );
+    // A receiver that has nothing can take the full pack as well.
+    let c_path = dir.path().join("c.db");
+    let c = open_dolt(&c_path, Some(GENESIS));
+    call(&c, &format!("SELECT dolt_pack_fetch('a', {})", blob_literal(&full)));
+    assert_eq!(text(&c, "SELECT dolt_hashof('a/main')"), tip);
 }

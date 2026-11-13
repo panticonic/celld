@@ -17,7 +17,7 @@ WORK=$(mktemp -d)
 mkdir -p "$WORK/app"
 cp "$HERE/index.js" "$HERE/wrangler.jsonc" "$WORK/app/"
 BUCKET="vibestore://$WORK/blobs?index=$WORK/index.db"
-BASEPORT=$((20000 + $$ % 20000 * 1))
+BASEPORT=$((20000 + $$ % 20000))
 P1=${P1:-$BASEPORT}; Q1=${Q1:-$((BASEPORT + 1))}; P2=${P2:-$((BASEPORT + 2))}; Q2=${Q2:-$((BASEPORT + 3))}
 N1="http://127.0.0.1:$P1"
 N2="http://127.0.0.1:$P2"

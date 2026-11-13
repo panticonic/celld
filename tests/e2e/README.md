@@ -134,7 +134,7 @@ restore-from-log, with the counters/data continuing across each.
 | hello, webapi, body, router, async | fetch handler; URL/TextEncoder/btoa/Headers; JSON, 1 MB and invalid bodies; Worker to DO routing; concurrent requests are serialised |
 | counter, rpc, facets, vectordb | DO storage per name; RPC methods; facet with own SQLite and parameterised service binding; sqlite-vec `vec0` shadow tables across LTX capture and restore |
 | kv, r2, d1 | binding semantics (overwrite, delete, 1 MB and binary values, content-type, SQL binding and constraint errors) and durability |
-| alarm | arm, `getAlarm`, fire once; an alarm pending at SIGKILL / at local-state loss still fires |
+| alarm | arm, `getAlarm`, fire once; an alarm pending at SIGKILL / at local-state loss still fires; an alarm set for the year 2100 is kept across all three |
 | cron | minute-aligned ticks, continue after restart, never duplicated |
 | queues | the example's retry to dead-letter path (log) and `queues-probe`: batch size limit, `delaySeconds`, text/json/bytes/v8 bodies, redelivery with the same id, DLQ, delayed message surviving SIGKILL and restore |
 | workflow | durable step with output, survives restart/crash/restore without re-running the step |
@@ -144,6 +144,12 @@ restore-from-log, with the counters/data continuing across each.
 | python | Pyodide Worker with vendored BeautifulSoup and KV |
 | wasm | workers-rs DO compiled to Wasm |
 | container, sandbox | Docker containers per DO, load balancing, cleanup at shutdown; Sandbox SDK exec/files/processes |
+| object-fork | whole-object fork and restore across SQLite and Dolt facets, through restart, SIGKILL and restore |
+| secrets | a class secret is seen by its class only, and sealed in the store, through restart, SIGKILL and restore |
+| codegen, deadlines (slow) | `eval`/`new Function`/Wasm compilation refused except for a declaring class or a granting loader; `blockConcurrencyWhile` past 30 s resets the object, and completes under `CELLD_NO_IMPLICIT_DEADLINES=1` |
+| residency (slow) | a residency hold keeps an object past idle eviction, and releasing it lets it go |
+| p2p | two nodes over Iroh: dial, `closed` on a clean end and on a reset, an alarm's stream used by later requests, an inbound stream kept by a handler |
+| dolt, dolt-facets, egress | the examples' own scripts (`demo.sh`, `test.mjs`) run against the binary under test on a free port: Dolt commits, branches, merge, fork and restore; Dolt facets; identity at the egress proxy |
 | pi, opencode | skipped: need a live LLM endpoint (non-deterministic) |
 
 ## Toolchains (bootstrapped into `<scratch>/tools`)

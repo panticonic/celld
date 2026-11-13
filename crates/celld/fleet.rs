@@ -917,11 +917,19 @@ async fn load_worker_at_pointer(
     let vars = worker_vars(&manifest);
     // The values of the secrets the deployment's classes declare. They come
     // from the bucket, sealed, and never travel in the manifest.
+    // The key is read only for a deployment that declares secrets: a node with
+    // a bad or missing key file serves every deployment that has none.
+    let declared_secrets = manifest.celld.class_secrets();
+    let secrets_key = if declared_secrets.is_empty() {
+        None
+    } else {
+        crate::secrets::key_from_environment()?
+    };
     let class_secrets = crate::secrets::open_for_deployment(
         bucket,
-        crate::secrets::key_from_environment()?.as_ref(),
+        secrets_key.as_ref(),
         &manifest.script_name,
-        &manifest.celld.class_secrets(),
+        &declared_secrets,
     )
     .await?;
     let compat = crate::worker_compat(&manifest.raw_metadata);

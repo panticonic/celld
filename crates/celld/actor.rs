@@ -1767,9 +1767,9 @@ impl AppHandle {
             .context("core stopped while opening WebSocket")?;
         anyhow::ensure!(
             held,
-            "outbound WebSocket refused: the cell is leaving this node, or a cell \
-             may hold at most {} and a node may pin at most {}% of its residency \
-             ceiling",
+            "outbound transport (WebSocket or p2p stream) refused: the cell is \
+             leaving this node, or a cell may hold at most {} and a node may pin \
+             at most {}% of its residency ceiling",
             self.max_outbound_websockets,
             celld_logic::pressure::MAX_OUTBOUND_PIN_PERCENT,
         );
@@ -4361,8 +4361,9 @@ impl Actor {
                 // the core it is gone, so the cell is not left believing it
                 // has a socket the node already closed.
                 eprintln!(
-                    "celld refused an outbound WebSocket for {cell}: the cell is \
-                     leaving this node or the node's outbound pin budget is spent"
+                    "celld refused an outbound transport (WebSocket or p2p stream) \
+                     for {cell}: the cell is leaving this node or the node's \
+                     outbound pin budget is spent"
                 );
                 crate::js::ws_unregister(websocket);
                 immediate.push_back(Event::WebSocketClosed { cell, websocket });

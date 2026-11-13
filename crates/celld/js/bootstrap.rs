@@ -1063,6 +1063,11 @@ fn finish_cell_adoption(tc: &mut v8::PinScope, cell: &str, owned: bool) -> Resul
     // it back.
     let source = format!("__celld.__cell.release({cell:?});");
     run_internal_snippet(tc, &source).ok_or_else(|| anyhow!("adopt failed"))?;
+    // A p2p stream is bound to the instance that holds its reader and writer,
+    // and this instance is gone: whatever stream it still held ends here, on
+    // either edge, whether or not the core was told (an abort replaces the
+    // runtime without a stop).
+    crate::p2p::close_object(cell);
     if !owned {
         // A facet of the root's own class lives in this isolate, and nothing
         // else releases it: its realm and connection would outlive the root.

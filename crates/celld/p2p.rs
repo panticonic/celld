@@ -21,11 +21,16 @@
 //!   against the cell it was minted for, so a request that merely imitates the
 //!   URL reaches the application's own `fetch` unchanged.
 //!
-//! Streams are event-scoped exactly like `connect()` TCP sockets: the event
-//! that holds one owns it, and retirement closes it. An open stream therefore
-//! pins its cell the way any in-flight event does, with no extra core state.
-//! (Outbound WebSockets need `WebSocketKind::Outbound` accounting only
-//! because they are pushed events that outlive the request that opened them.)
+//! A stream opened or claimed by a Durable Object belongs to the cell, not to
+//! the event that happened to open it. It lives until both directions have
+//! finished, a side closes or resets it, its connection is lost, or the cell
+//! leaves this node (eviction, handoff, reset, restore, a stopped facet): those
+//! lifecycle events close it with [`CODE_CELL_ENDED`]. While it is open it
+//! pins its cell resident exactly as an outbound WebSocket does: [`adopt`]
+//! registers it with the core as a `WebSocketKind::Outbound` transport, so the
+//! core's own accounting (`is_active`, the per-cell cap and the node's pin
+//! budget) applies and refuses at the budget. A stream opened by a plain Worker
+//! has no cell and stays with its request, like a `connect()` TCP socket.
 //!
 //! The node identity is the node's, not the cell's. Only the node that owns
 //! the accepting cell serves its inbound streams; a stream that arrives at any
@@ -52,8 +57,14 @@ pub const CODE_NOT_OWNER: u32 = 2;
 /// The stream was reset because the accepting handler threw or the cell could
 /// not run it.
 pub const CODE_HANDLER_FAILED: u32 = 3;
-/// The stream was reset because the node is at its stream limit.
+/// The stream was reset because the node is at its stream limit, or the core
+/// would not pin its cell for another transport (the per-cell cap or the
+/// node's pin budget).
 pub const CODE_BUSY: u32 = 4;
+/// The stream was reset because its cell left this node or was reset: an
+/// eviction, a handoff, a generation swap, a restore, a failed durability
+/// proof, or a stopped facet.
+pub const CODE_CELL_ENDED: u32 = 5;
 
 /// The path of the internal request that delivers an inbound stream. The final
 /// segment is the claim token.
@@ -713,9 +724,11 @@ impl Node {
         );
         self.prune_claims();
         let outcome = self.deliver(&target, &scope, &token).await;
-        self.claims.lock().unwrap().remove(&token);
-        // Whatever the handler left open dies with its event; this covers the
-        // paths where the event never started or never claimed the stream.
+        // A claimed stream now belongs to the accepting cell and outlives the
+        // event that delivered it. One whose token is still here was never
+        // claimed (the event did not start, or never reached the handler),
+        // and nobody else can ever take it.
+        let claimed = self.claims.lock().unwrap().remove(&token).is_none();
         let code = match outcome {
             Ok(()) => None,
             Err(error) => {
@@ -728,10 +741,16 @@ impl Node {
             }
         };
         match code {
-            Some(code) => stream.abort(code).await,
-            None => stream.close_graceful().await,
+            Some(code) => {
+                self.remove_stream(id);
+                stream.abort(code).await;
+            }
+            None if !claimed => {
+                self.remove_stream(id);
+                stream.close_graceful().await;
+            }
+            None => {}
         }
-        self.remove_stream(id);
     }
 
     /// Send the accepting cell the internal fetch that carries the claim
@@ -787,12 +806,37 @@ impl Node {
             return None;
         }
         let id = STREAM_ID_BIT | self.next_stream.fetch_add(1, Ordering::Relaxed);
-        streams.insert(id, stream);
+        streams.insert(id, stream.clone());
+        drop(streams);
+        // A peer that vanishes takes the connection with it, and nothing else
+        // would tell a cell-owned stream that nobody is reading it: release
+        // the stream (and the cell it pins) when the connection dies.
+        let connection = stream._connection.clone();
+        let done = stream.closed.clone();
+        self.handle.spawn(async move {
+            crate::asyncrt::select! {
+                _ = done.cancelled() => {}
+                reason = connection.closed() => {
+                    if let Some(stream) = self::stream(id) {
+                        *stream.failure.lock().unwrap() =
+                            Some(format!("connection lost: {reason}"));
+                    }
+                    close(id, None);
+                }
+            }
+        });
         Some(id)
     }
 
+    /// Forget a stream, and tell the core its cell no longer holds the
+    /// transport. Every path that ends a stream comes through here, so the
+    /// pin cannot outlive the stream.
     fn remove_stream(&self, id: u64) -> Option<Arc<Stream>> {
-        self.streams.lock().unwrap().remove(&id)
+        let stream = self.streams.lock().unwrap().remove(&id)?;
+        if let Some(owner) = stream.owner.lock().unwrap().take() {
+            self.app.websocket_closed(owner.cell, id);
+        }
+        Some(stream)
     }
 
     /// Open one bidirectional stream to `remote` on `alpn`, over the node's
@@ -940,6 +984,11 @@ pub fn claim(token: &str, scope: &str) -> Option<Claimed> {
 /// One bidirectional QUIC stream. The halves sit behind separate async locks
 /// so a pending read never blocks a write, as a TCP socket's do.
 pub struct Stream {
+    /// The cell that owns the stream, once it has been adopted.
+    owner: Mutex<Option<Owner>>,
+    /// Why the stream ended when the host ended it, not a side: a read parked
+    /// on a lost connection reports this instead of a clean end-of-stream.
+    failure: Mutex<Option<String>>,
     send: tokio::sync::Mutex<Option<SendStream>>,
     recv: tokio::sync::Mutex<Option<RecvStream>>,
     pub remote: EndpointId,
@@ -955,6 +1004,15 @@ pub fn is_stream_id(id: u64) -> bool {
     id & STREAM_ID_BIT != 0
 }
 
+/// The cell a stream belongs to. `cell` is the root cell the node keeps
+/// resident for it; `scope` is the object that opened it, which differs from
+/// `cell` for a facet.
+#[derive(Clone, Debug)]
+struct Owner {
+    cell: String,
+    scope: String,
+}
+
 impl Stream {
     fn new(
         connection: Connection,
@@ -964,6 +1022,8 @@ impl Stream {
         recv: RecvStream,
     ) -> Self {
         Self {
+            owner: Mutex::new(None),
+            failure: Mutex::new(None),
             send: tokio::sync::Mutex::new(Some(send)),
             recv: tokio::sync::Mutex::new(Some(recv)),
             remote,
@@ -971,6 +1031,15 @@ impl Stream {
             closed: CancellationToken::new(),
             _connection: connection,
         }
+    }
+
+    /// The cell and the object that hold this stream, once adopted.
+    pub fn owner(&self) -> Option<(String, String)> {
+        self.owner
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|owner| (owner.cell.clone(), owner.scope.clone()))
     }
 
     /// Up to one chunk. An empty result is the peer finishing its side.
@@ -981,7 +1050,10 @@ impl Stream {
         };
         let mut buffer = vec![0_u8; READ_CHUNK];
         crate::asyncrt::select! {
-            _ = self.closed.cancelled() => Ok(Vec::new()),
+            _ = self.closed.cancelled() => match self.failure.lock().unwrap().clone() {
+                Some(failure) => Err(failure),
+                None => Ok(Vec::new()),
+            },
             read = recv.read(&mut buffer) => match read {
                 Ok(Some(n)) => {
                     buffer.truncate(n);
@@ -1070,6 +1142,98 @@ pub fn close(id: u64, code: Option<u32>) {
             }
         });
     }
+}
+
+/// Make a stream the cell's: register it with the core as an outbound
+/// transport of `cell`, so it pins the cell and is counted against the same
+/// per-cell cap and node pin budget as an outbound WebSocket. `scope` is the
+/// object that holds it (a facet's own scope, or the cell's).
+///
+/// The owner is recorded before the core is asked, so a lifecycle close that
+/// lands in between still finds the stream. A refusal leaves nothing behind;
+/// the caller closes the stream.
+pub async fn adopt(id: u64, cell: &str, scope: &str) -> anyhow::Result<()> {
+    let node = NODE
+        .get()
+        .ok_or_else(|| anyhow!("the p2p endpoint is not running on this node"))?;
+    let stream = node
+        .streams
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| anyhow!("the p2p stream is closed"))?;
+    {
+        let mut owner = stream.owner.lock().unwrap();
+        ensure!(owner.is_none(), "the p2p stream already has an owner");
+        *owner = Some(Owner {
+            cell: cell.to_string(),
+            scope: scope.to_string(),
+        });
+    }
+    if let Err(error) = node
+        .app
+        .websocket_opened(cell.to_string(), id, celld_logic::WebSocketKind::Outbound)
+        .await
+    {
+        *stream.owner.lock().unwrap() = None;
+        return Err(error);
+    }
+    // The stream may have ended while the core was answering; the core's
+    // entry would then pin the cell for a stream nobody holds.
+    if !node.streams.lock().unwrap().contains_key(&id) {
+        node.app.websocket_closed(cell.to_string(), id);
+        bail!("the p2p stream closed while its cell was adopting it");
+    }
+    Ok(())
+}
+
+/// Reset every stream `cell` owns, because the cell left this node or was
+/// reset (see [`CODE_CELL_ENDED`]). Facets of the cell are included.
+pub fn close_cell(cell: &str) {
+    close_where(|owner| owner.cell == cell);
+}
+
+/// Reset the streams one object opened, because the isolate that held them
+/// gave the object back or took it in again. A stream is bound to the
+/// instance that holds its reader and writer; when that instance is replaced
+/// (an abort, a crash, a reset, a swap) nothing is left to use it.
+pub fn close_object(scope: &str) {
+    close_where(|owner| owner.scope == scope);
+}
+
+fn close_where(matches: impl Fn(&Owner) -> bool) {
+    let Some(node) = NODE.get() else { return };
+    let ids: Vec<u64> = node
+        .streams
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, stream)| stream.owner.lock().unwrap().as_ref().is_some_and(&matches))
+        .map(|(id, _)| *id)
+        .collect();
+    for id in ids {
+        close(id, Some(CODE_CELL_ENDED));
+    }
+}
+
+/// How many streams `cell` owns. For status output and tests.
+pub fn owned_by(cell: &str) -> usize {
+    NODE.get().map_or(0, |node| {
+        node.streams
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|stream| {
+                stream
+                    .owner
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .is_some_and(|owner| owner.cell == cell)
+            })
+            .count()
+    })
 }
 
 /// What `env.<binding>.connect()` asks of the node.

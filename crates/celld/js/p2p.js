@@ -4,8 +4,15 @@
 // A stream is a pair of Web streams over one QUIC bidirectional stream, with
 // the same shape `cloudflare:sockets` gives a TCP socket (`readable`,
 // `writable`, `closed`, `close()`) plus the peer's authenticated node id.
-// Reads and writes go through `__p2p_*` host ops. The event that holds the
-// stream owns it: the host closes it when the event retires.
+// Reads and writes go through `__p2p_*` host ops.
+//
+// Who owns a stream depends on who opened it. A Durable Object's stream (a
+// dial from any of its events, or a stream a peer opened into its
+// `onp2pstream`) belongs to the cell: the host adopts it as an outbound
+// transport of the cell, it pins the cell like an outbound WebSocket, and it
+// lives until it is closed, both directions finish, or the cell leaves the
+// node. A Worker's stream belongs to its request and the host closes it when
+// the request retires.
 (function () {
   const HEX_ID = /^[0-9a-f]{64}$/;
 
@@ -15,6 +22,7 @@
     NOT_OWNER: 2,
     HANDLER_FAILED: 3,
     BUSY: 4,
+    CELL_ENDED: 5,
   });
 
   const toBytes = (chunk) =>
@@ -33,11 +41,23 @@
     constructor(id, remoteNodeId, alpn) {
       this._id = id;
       this._closing = false;
+      // Each direction is done when its end-of-stream has been seen (reads)
+      // or sent (writes); the stream is over when both are.
+      this._readDone = false;
+      this._writeDone = false;
       this.remoteNodeId = remoteNodeId;
       this.alpn = alpn;
       let resolveClosed;
-      this._closed = new Promise((resolve) => { resolveClosed = resolve; });
+      let rejectClosed;
+      this._closed = new Promise((resolve, reject) => {
+        resolveClosed = resolve;
+        rejectClosed = reject;
+      });
+      // A reset rejects `closed`; a caller that never looks at it must not
+      // be charged with an unhandled rejection.
+      this._closed.catch(() => {});
       this._resolveClosed = resolveClosed;
+      this._rejectClosed = rejectClosed;
       const stream = this;
       // highWaterMark 0: never read ahead of the consumer, so a stream that
       // is not being read holds nothing and applies backpressure to the peer.
@@ -51,24 +71,45 @@
           try {
             bytes = await __p2p_read(stream._id);
           } catch (error) {
-            stream._finish();
+            stream._end(error);
             throw error;
           }
-          if (stream._closing || bytes.byteLength === 0) {
+          if (stream._closing) {
             controller.close();
+            return;
+          }
+          if (bytes.byteLength === 0) {
+            // The peer finished its side, cleanly.
+            controller.close();
+            stream._readDone = true;
+            stream._endIfDone();
             return;
           }
           controller.enqueue(bytes);
         },
-        cancel() {},
+        cancel() {
+          // The consumer wants no more. The peer's remaining bytes are
+          // refused when the stream closes.
+          stream._readDone = true;
+          stream._endIfDone();
+        },
       }, { highWaterMark: 0 });
       this._writable = new WritableStream({
         async write(chunk) {
           if (stream._closing) throw new TypeError("This p2p stream is closed.");
-          await __p2p_write(stream._id, toBytes(chunk));
+          try {
+            await __p2p_write(stream._id, toBytes(chunk));
+          } catch (error) {
+            // A peer that reset the stream, or a lost connection, ends it.
+            stream._end(error);
+            throw error;
+          }
         },
         async close() {
-          if (!stream._closing) await __p2p_shutdown(stream._id);
+          if (stream._closing) return;
+          await __p2p_shutdown(stream._id);
+          stream._writeDone = true;
+          stream._endIfDone();
         },
         abort() {
           stream.close(0);
@@ -80,20 +121,35 @@
     get writable() { return this._writable; }
     get closed() { return this._closed; }
 
-    _finish() {
+    // The stream is over. Resolve `closed` when it ended cleanly (both
+    // directions finished) and reject it with the error when the peer reset
+    // it or the connection was lost, then give the host its slot back.
+    _end(error) {
       if (this._closing) return;
       this._closing = true;
-      this._resolveClosed(undefined);
+      if (error === undefined) this._resolveClosed(undefined);
+      else this._rejectClosed(error);
+      __p2p_close(this._id, -1);
+    }
+
+    _endIfDone() {
+      if (this._readDone && this._writeDone) this._end(undefined);
     }
 
     // Close both directions. Without a code the close is orderly: what was
     // written is delivered, then the peer reads end-of-stream. With a code the
-    // stream is reset, and the peer's reads and writes fail with it.
+    // stream is reset, and the peer's reads and writes fail with it. `closed`
+    // resolves: a close the caller asked for is not an error. The returned
+    // promise resolves once the stream is over, however it ended.
     close(code) {
-      if (this._closing) return this._closed;
-      this._finish();
-      __p2p_close(this._id, code === undefined ? -1 : Number(code));
-      return this._closed;
+      if (!this._closing) {
+        this._closing = true;
+        this._resolveClosed(undefined);
+        __p2p_close(this._id, code === undefined ? -1 : Number(code));
+      }
+      // Always resolves, even when the stream had already ended in a reset:
+      // the outcome is `closed`'s to report, and closing is idempotent.
+      return this._closed.then(() => {}, () => {});
     }
   }
 
@@ -124,7 +180,11 @@
             "connect(): nodeId must be a 64-character lowercase hex public key.");
         }
         const { addrs, relay } = parseOptions(options);
-        const raw = await __p2p_connect(JSON.stringify({ alpn, nodeId, addrs, relay }));
+        // The Durable Object the caller runs in, if any: its stream belongs to
+        // that cell. Empty for a Worker.
+        const scope = __celld.__actorScope?.() ?? "";
+        const raw = await __p2p_connect(
+          JSON.stringify({ alpn, nodeId, addrs, relay, scope }));
         const info = JSON.parse(raw);
         return new P2PStream(info.id, info.remoteNodeId, alpn);
       },
@@ -150,15 +210,25 @@
         stream.close(CODES.NO_HANDLER);
         return new Response("this Durable Object has no onp2pstream()", { status: 501 });
       }
+      // The stream is the cell's from here on, so the core has to agree to
+      // hold the cell for it; at the budget the stream is reset and the
+      // handler never sees it.
+      try {
+        await __p2p_adopt(info.id, scope);
+      } catch (error) {
+        stream._closing = true;
+        stream._resolveClosed(undefined);
+        return new Response(String(error?.message ?? error), { status: 503 });
+      }
       try {
         await run(() => inst.onp2pstream(stream));
       } catch (error) {
         stream.close(CODES.HANDLER_FAILED);
         throw error;
       }
-      // The event lasts exactly as long as the handler (and its waitUntil
-      // work); whatever the handler left open ends with it.
-      stream.close();
+      // The stream outlives this event: the handler may have handed it to
+      // code that keeps using it, and it ends when it is closed, both
+      // directions finish, or the cell leaves.
       return new Response(null, { status: 200 });
     })();
   };

@@ -14,7 +14,8 @@ with TLS 1.3, and the peer's key is verified before any stream is looked at.
 
 The [p2p example](../../examples/p2p) runs one deployment on two nodes. Each
 node dials the other, sends lines, and reads replies from the other node's
-Durable Object. The test in `crates/celld/tests/p2p_two_nodes.rs` runs it.
+Durable Object. It dials from a request, and from an alarm whose stream later
+requests keep using. The test in `crates/celld/tests/p2p_two_nodes.rs` runs it.
 
 ## Configuration
 
@@ -126,9 +127,26 @@ to send a hello first.
 the peer's `readable` ends. `close(code)` resets the stream: the peer's reads
 fail with `stream reset by peer (code N)` and its writes with
 `peer closed the stream (code N)`. Closing the `writable` finishes only the send
-half. celld uses codes 1 to 4 (below); applications should use codes of 256 or
+half. celld uses codes 1 to 5 (below); applications should use codes of 256 or
 more. A peer closing is how the other side learns the stream is over, so
-close propagates in both directions.
+close propagates in both directions. `close()` always returns a promise that
+resolves once the stream is over.
+
+### `closed`
+
+`closed` settles when the stream is over, whichever way it ended:
+
+| How it ended | `closed` |
+| --- | --- |
+| Both directions finished: the peer's end-of-stream was read and the `writable` was closed | resolves |
+| `close()` or `close(code)` on this side | resolves (a close you asked for is not an error) |
+| The peer reset the stream (`stream reset by peer (code N)`, `peer closed the stream (code N)`) | rejects with that error |
+| The connection was lost, or the cell left the node | rejects |
+
+Reading to end-of-stream alone does not settle it: a stream the peer has
+finished can still be written to. When both sides have finished, celld releases
+the stream, so a protocol that finishes both ways needs no `close()`. A caller
+that never looks at `closed` is not charged with an unhandled rejection.
 
 ## Accepting streams
 
@@ -140,8 +158,12 @@ export class Node extends DurableObject {
     if (!(await this.allowed(stream.remoteNodeId))) {
       return stream.close(403 + 256);   // refuse
     }
-    for await (const chunk of stream.readable) {
-      /* … */
+    try {
+      for await (const chunk of stream.readable) {
+        /* … */
+      }
+    } finally {
+      await stream.close();             // done with it
     }
   }
 }
@@ -151,10 +173,12 @@ The peer's key is authenticated by the Iroh handshake and arrives as
 `stream.remoteNodeId`; deciding whether that peer may do anything is the
 application's job. The handler runs as an ordinary event in the object, so the
 object's storage input and output gates apply as they do to `fetch`: its writes
-to the stream wait on the output gate, and the stream lives until the promise
-it returns settles (and any `ctx.waitUntil` work finishes), then closes. A handler that wants a
-long session awaits it. A class without `onp2pstream` resets the stream with
-code 1.
+to the stream wait on the output gate. The stream is the object's, not the
+handler's: it stays open when the handler returns (see below), so a handler can
+return at once and leave the stream to later events, which is how a long session
+is held without keeping an event open. A handler that is finished with the
+stream closes it. A handler that throws has the stream reset with code 3. A
+class without `onp2pstream` resets the stream with code 1.
 
 An inbound stream is delivered as an internal `fetch` whose URL carries a
 one-time, unguessable claim token, which the runtime redeems for the stream
@@ -164,25 +188,69 @@ remote node id.
 
 ## Streams, gates and residency
 
-A stream belongs to the event that opened it (`connect()`) or claimed it
-(`onp2pstream`), the way a `connect()` TCP socket does. When the event retires,
-the runtime closes the stream. Consequences:
+**A stream belongs to the Durable Object that opened or accepted it, not to the
+event that happened to do so.** This holds for `connect()` called from any
+event of the object (a request, an alarm, a timer, an RPC call) and for the
+stream handed to `onp2pstream`. It lives until
 
-- **Residency.** A stream pins its cell because its event is in flight, exactly
-  as a long request does; no extra accounting is needed, and the cell cannot be
-  evicted or moved while a handler holds a stream. To keep an outbound stream
-  open after the handler that opened it returns, hold the event with
-  `ctx.waitUntil(session())`. WebSockets need the `Outbound` accounting
-  (`may_pin_outbound`) only because they are pushed events that outlive the
-  request; a stream is not pushed, and is not subject to that budget. It is
-  bounded by `CELLD_P2P_MAX_STREAMS` instead.
+- it is closed, by either side (`close()`, a reset, or both directions
+  finishing: see `closed` above);
+- its connection is lost (the peer's node stopped or the network failed);
+- or the object ends: its cell is evicted, handed to another node, stopped
+  for a drain, a forced generation swap, a restore or a failed durability
+  proof; or its instance is replaced (`ctx.abort()`, a failed
+  `blockConcurrencyWhile`), or its facet stops. celld then resets the stream
+  with code 5 (`CELL_ENDED`), so the peer's reads fail with
+  `stream reset by peer (code 5)`.
+
+What follows from that:
+
+- **Use it from later events.** Keep the stream, or its reader and writer, in
+  the object (`this.session = ...`) and read and write it from any later event,
+  an alarm or a request. Reads and writes are not tied to the event that made
+  the stream. Only one reader and one writer exist per stream, as for any Web
+  stream, so a design in which several events take turns keeps one `Lines`-style
+  wrapper around them (the example does).
+- **An open stream keeps its cell resident, like an outbound WebSocket.** The
+  stream is registered with the core as a `WebSocketKind::Outbound` transport of
+  the cell. That is the accounting an outbound WebSocket uses and nothing new:
+  the cell is not idle-evicted, shed under memory pressure, moved by balancing
+  or evicted by an operator while a stream is open (`POST /evict/...` answers
+  409), because a live transport cannot move with ownership. A drain or a swap
+  ends the stream (code 5) instead of waiting for it.
+- **It is budgeted.** One cell may hold `CELLD_MAX_OUTBOUND_WEBSOCKETS` outbound
+  transports (default 32) and a node may pin at most a quarter of its resident
+  ceiling in cells with outbound transports or residency holds. WebSockets and
+  p2p streams draw on the same two budgets. At the budget `connect()` rejects
+  with `outbound transport (WebSocket or p2p stream) refused: ...`; an inbound
+  stream the cell cannot take is reset with code 4 (`BUSY`) and the handler does
+  not run. A cell that is leaving the node refuses new streams too. The node's
+  own limit, `CELLD_P2P_MAX_STREAMS`, is separate and counts every stream.
+- **Close what you are done with.** A stream pins its cell until it ends, and
+  `onp2pstream` returning does not end it: the handler may have handed the
+  stream to code that keeps using it. A handler that reads to end-of-stream and
+  answers should `await stream.close()` when it is finished (a `finally` block
+  is the place), and a handler that throws has its stream reset with code 3.
+  A peer that finishes and closes its own side does not free ours.
 - **Output gate.** `connect()`, `write` and closing the writable wait until the
-  storage writes the event has made are durable, on the same gate channel raw
-  TCP sockets use. A peer never sees bytes that depend on a write that could
-  still be lost.
+  storage writes the performing event has made are durable, on the same gate
+  channel raw TCP sockets use. A peer never sees bytes that depend on a write
+  that could still be lost. The gate is the performing event's: a later request
+  writing to a stream waits for that request's writes. A write made from a
+  callback whose event has already ended (a timer) has no event to answer for
+  it, and waits for everything the cell has committed so far; that holds for
+  a Durable Object's own stream and not for one a facet opened.
 - **Egress.** `connect()` is outbound network access. It is refused for a worker
   that is denied the network, and for one whose outbound goes through a
   brokering Fetcher, which cannot carry a QUIC connection.
+
+A stream opened by a plain Worker has no cell to own it, and stays with its
+request exactly like a `connect()` TCP socket: it is closed when the request
+retires. Dial from a Durable Object when the stream must outlive a request.
+A Durable Object in a Worker Loader's isolate, which runs several objects, can
+use cell-owned streams from the events that frame them, but a callback that
+outlives its event cannot tell which object it belongs to, so its dials stay
+with the request.
 
 ## Fleets
 
@@ -218,7 +286,13 @@ What this means in practice:
 | peer's stream | reset, code 1 | No deployment on that node accepts the ALPN, or the class lacks `onp2pstream`. |
 | peer's stream | reset, code 2 | The accepting cell is owned by another node. |
 | peer's stream | reset, code 3 | The handler threw, or the cell could not run it. |
-| peer's stream | reset, code 4 | That node is at its stream limit. |
+| peer's stream | reset, code 4 | That node is at its stream limit, or the accepting cell is at its transport budget. |
+| peer's stream | reset, code 5 | The object that held the stream ended: evicted, drained, swapped, restored, reset (`ctx.abort()`), or its facet stopped. |
+| `connect()` | `outbound transport (WebSocket or p2p stream) refused: ...` | The cell is at `CELLD_MAX_OUTBOUND_WEBSOCKETS`, the node's pin budget is spent, or the cell is leaving. |
+
+A stream whose connection dies is released too, and its pending read fails with
+`connection lost`, so a cell that held a stream to a vanished peer does not
+stay pinned.
 
 A peer that restarts without a goodbye (killed, or the machine lost) leaves
 the dialer a pooled connection to a process that no longer exists. The first

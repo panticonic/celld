@@ -3191,6 +3191,8 @@ class DurableObjectState {
     if (this._aborted) return;
     this._aborted = true;
     __storage_cancel_pending_puts(this._scope);
+    // The instance is gone, and so is whoever held its p2p streams.
+    __p2p_close_object(this._scope);
     const instance = __cell.instances[this._scope];
     if (instance && instance.__celldState === this)
       delete __cell.instances[this._scope];
@@ -3205,6 +3207,8 @@ class DurableObjectState {
     if (this._aborted) return;
     this._aborted = true;
     __storage_cancel_pending_puts(this._scope);
+    // The instance is gone, and so is whoever held its p2p streams.
+    __p2p_close_object(this._scope);
     const instance = __cell.instances[this._scope];
     if (instance && instance.__celldState === this)
       delete __cell.instances[this._scope];
@@ -3332,6 +3336,22 @@ const __currentActorEvent = () => {
   return undefined;
 };
 const __currentActorScope = () => __currentActorEvent()?.scope ?? "";
+// The Durable Object a callback belongs to, for I/O that a cell owns across
+// events (a p2p stream). A callback that runs after the event that created it
+// has retired (a timer, a continuation) has no actor event, but a cell's
+// isolate holds exactly one object, so that object is the one it runs for.
+// An isolate with several objects (a Worker Loader's) cannot tell, and says
+// so with an empty scope: the caller then treats the I/O as its event's.
+__celld.__actorScope = () => {
+  const scope = __currentActorScope();
+  if (scope !== "") return scope;
+  let only = "";
+  for (const key in __cell.instances) {
+    if (only !== "") return "";
+    only = key;
+  }
+  return only;
+};
 const __beginActorEvent = (scope) => {
   __rpcSignalRefresh();
   const event = { scope, context: String(__io_context_id()) };
@@ -3403,6 +3423,7 @@ __celld.__retireInputGateContext = (context) => {
     const instance = __cell.instances[scope];
     if (instance !== undefined) instance.__celldState._aborted = true;
     __storage_cancel_pending_puts(scope);
+    __p2p_close_object(scope);
     if (instance !== undefined && __cell.instances[scope] === instance)
       delete __cell.instances[scope];
     for (const record of block.events.values()) {

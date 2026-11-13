@@ -1299,6 +1299,13 @@ pub fn ws_emit_batch(frames: impl Into<WsBatch>) {
 /// cell stays on this node, so its hibernatable sockets and auto-response
 /// pair survive, which `ws_close_scope` would take with it.
 pub fn ws_close(id: u64, code: u16, reason: &str) {
+    // A cell-owned p2p stream is accounted as an outbound transport of its
+    // cell, so the core names it here with the sockets. It is not a WebSocket;
+    // the p2p registry resets it.
+    if crate::p2p::is_stream_id(id) {
+        crate::p2p::close(id, Some(crate::p2p::CODE_CELL_ENDED));
+        return;
+    }
     ws_registry()
         .lock()
         .unwrap()
@@ -1326,6 +1333,8 @@ pub fn ws_close_all(code: u16, reason: &str) {
 /// The sockets of the cell's facets close too. A facet's writes trail the
 /// root cell's gate, and the facet does not outlive its root.
 pub fn ws_close_scope(scope: &str, code: u16, reason: &str) {
+    // The cell's p2p streams are cell-owned transports too.
+    crate::p2p::close_cell(scope);
     let mut scopes = vec![scope.to_string()];
     {
         let registry = ws_registry();
@@ -1363,6 +1372,7 @@ pub fn ws_close_scope(scope: &str, code: u16, reason: &str) {
 /// would accept frames that no handler can receive. 1001 is the code for an
 /// endpoint that is going away.
 pub(crate) fn ws_close_facet(scope: &str, reason: &str) {
+    crate::p2p::close_object(scope);
     ws_auto_responses().lock().unwrap().remove(scope);
     let registry = ws_registry();
     let mut registry = registry.lock().unwrap();

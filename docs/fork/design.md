@@ -30,6 +30,7 @@ has not been run yet.
 | Chronolog `transport-iroh` | done (Chronolog branch `feature/transport-iroh`) | |
 | Chronolog node on the fork | two-node end-to-end test passes (Chronolog branch `feature/celld-host`, `HANDOFF-celld-host.md`); its fork APIs are merged | |
 | Windows port (compile and cross-link; CI workflow for a real Windows run) | merged | `docs/fork/windows.md` |
+| Fork polish: cell-owned P2P streams and `closed`, Ed25519 PKCS#8 v0, configurable node lease, far-future alarms (E5), per-class secrets (G3), e2e scenarios for every fork example | done (branch `feature/fork-polish`) | §3b.10-11, `docs/services/p2p.md`, `docs/fork/class-secrets.md`, `docs/README.md` (node lease) |
 | Vibestudio compatibility audit | done (Vibestudio branch `audit/celld-compat`, `docs/celld-compat-audit.md`) | fork bugs A1 and A2 fixed |
 | Vibestudio runtime cutover | partial, paused (Vibestudio branch `feat/celld-runtime`, `HANDOFF-celld-runtime.md`) | |
 | Vibestudio Dolt redesign | design done, P0 not started (Vibestudio branch `design/dolt-redesign`, `docs/dolt-redesign.md`); questions Q1–Q5 open | |

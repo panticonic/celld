@@ -18,6 +18,7 @@ has not been run yet.
 | Test harness: E2E, fleet fault injection, simulator | merged | `tests/e2e`, `tests/fleet`, `crates/logic-sim` |
 | Dolt cells: storage, replication, `ctx.storage.dolt`, fork | merged | `docs/services/dolt-cells.md` |
 | Deterministic execution: per-connection context patch, executor, `dolt.execute`, engine digest | merged | `crates/dolt-exec`, patch 0002 |
+| Dolt facets, `ctx.facets.fork`, chunk files past 1 GiB | branch `feature/dolt-facets` | §3b.7-8, `docs/services/durable-object-facets.md` |
 | Codegen confinement, `--no-implicit-deadlines` | merged | `docs/fork/codegen.md`, `docs/fork/deadlines.md` |
 | Residency hold | merged | `docs/services/residency.md` |
 | Egress hook | merged | `docs/services/egress.md` |
@@ -200,7 +201,7 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
    restore) is detected by a changed offset-0 manifest or a short file and
    captured whole, which truncates on restore like a VACUUM. Cost: each
    capture re-sends at most one partial page. Limit: the LTX lock page
-   caps a chunk file at 1 GiB; no paged restore for Dolt cells.
+   capped a chunk file at 1 GiB (lifted, item 8); no paged restore for Dolt cells.
 3. **`_cf_*` tables live in the prolly store, unversioned.** One root then
    commits a handler's application rows and celld's rows together, and one
    stream replicates both. `dolt_ignore` (`_cf_%`) keeps them out of every
@@ -225,6 +226,55 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
    triggers (`dolt_schemas`), so reset/merge/checkout could drop the
    `_cf_WAKE` triggers and user commits would carry them; Dolt cells create
    them per connection and re-ensure them after every mutating operation.
+7. **Dolt facets (2026-11-13).** Vibestudio loads its userland objects
+   (agent, GAD workspace, channels) as facets of one root through the
+   Worker Loader, and redeploys nothing, so the engine is a per-facet
+   choice and not a class declaration:
+   `ctx.facets.get(name, () => ({ class, celld: { storage: "dolt" } }))`.
+   The key sits under `celld` (§3a) because workerd's `FacetStartupOptions`
+   is `{ class, id }` and may grow. Decisions:
+   - **Layout.** No new layout was needed. Facets already had a file and a
+     replication stream of their own (`facet_streams.rs`,
+     `<root>/facets/<h>/ltx/e<N>/db.sqlite`; the deserialize+backup path is
+     only the one-time import of legacy `_cf_FACETS` images). A Dolt facet
+     is the same stream opened with `Engine::Dolt`, so its capture is a
+     `DoltStore` and everything downstream (followers, bucket, handoff,
+     restore with the root's `RestoreSpec`, delete of the stream prefix,
+     the output gate's facet proof) is unchanged.
+   - **Engine record and guard.** The file's magic is the record, as for a
+     root cell. `FacetReq::Open` carries the engine the startup options
+     named. A resident or restored file of the other engine is refused at
+     the connection open, and `LtxRepl::activate_with` refuses to put the
+     LTX store over a chunk file, so a wrong-engine start after the local
+     files were deleted fails before anything captures. Rejected: an
+     engine table in the root (a second writer to the root's file from the
+     facet's isolate, and it would be ungated).
+   - `attach_active_branch` became idempotent (a facet opens in two steps,
+     and the second read of the pointer off `main` moved the connection
+     back to `main`). A facet connection disables lookaside before its
+     first statement, because a prolly store keeps slots in use.
+   - **Fork.** `ctx.facets.fork(source, target, { at })` forks a Dolt
+     facet into a new facet of the same parent, through the host loop
+     (`FacetReq::Fork`): activate the target's stream and require it to be
+     empty (nothing restored, no file), read the source file (append-only,
+     so any read is a committed prefix cut at the newest sealed root),
+     `fork_image`, prove the source stream, write the image, prove the
+     target stream (which captures it whole as a new generation). A fork
+     of the root with its facets is not built: the root does not know its
+     facets' names or engines (streams are named by a name hash, and a
+     non-resident facet's engine is known only by restoring it), so it
+     needs a bucket listing below `cells/<root>/facets/` plus an
+     engine-agnostic copy of each chain into the target's prefix at `e1`.
+     That is the next step if Vibestudio forks whole workspaces.
+8. **The 1 GiB cap is lifted.** A chunk file's page `n` is LTX page `n`
+   below SQLite's lock page and `n + 1` from it on (`dolt::ltx_pgno`), so
+   no LTX file ever carries the lock page. Every reader zero-fills it, so an
+   image rebuilt from the bucket has a 4 KiB hole at 1 GiB, which
+   `dolt::unmap_restored_image` removes before the store opens the file.
+   It runs only after a remote restore: a local eviction snapshot or a
+   resumed file is the live file and has no hole. Remaining limits: whole
+   captures and restores hold the file in memory, and DoltLite's GC buffer
+   (§4.7, about 2 GiB).
 
 ## 4. Determinism: fixes over the earlier plans
 

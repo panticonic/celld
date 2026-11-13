@@ -11,6 +11,7 @@ ARG CELLD_PROFILE=release
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY vendor ./vendor
 RUN --mount=type=cache,id=celld-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=celld-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=celld-target-${TARGETARCH},target=/src/target,sharing=locked \

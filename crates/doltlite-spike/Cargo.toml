@@ -1,0 +1,16 @@
+# Phase-0 spike: proves the DoltLite amalgamation behind libsqlite3-sys serves
+# stock-format files (the default for new files) and prolly files (opt-in) from
+# one process. Not shipped.
+[package]
+name = "doltlite-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+rusqlite = { workspace = true, features = ["backup", "bundled", "hooks", "serialize"] }
+sqlite-vec.workspace = true
+tempfile.workspace = true

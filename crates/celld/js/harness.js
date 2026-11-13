@@ -2731,29 +2731,40 @@ class DurableObjectState {
       this._resetAfterConcurrencyFailure(error);
       throw error;
     }
-    const timerId = __timer_alloc();
+    // Cloudflare resets a Durable Object whose blockConcurrencyWhile callback
+    // runs past 30 s. A node started with --no-implicit-deadlines arms no
+    // such watchdog: the block then ends when the callback settles, or by an
+    // explicit event (ctx.abort(), eviction, the node stopping), all of which
+    // reset the object through `abort()` above.
+    const timed = __cell.implicitDeadlines !== false;
+    const timerId = timed ? __timer_alloc() : 0;
     let settled = false;
-    const timeout = __op_timer(
-      timerId,
-      30_000,
-    ).then(() => {
-      if (!settled) {
-        throw new Error(
-          "A call to blockConcurrencyWhile() in a Durable Object waited for " +
-          "too long. The call was canceled and the Durable Object was reset.",
-        );
-      }
-    });
-    return Promise.race([Promise.resolve(result), timeout]).then(
+    const timeout = timed
+      ? __op_timer(
+        timerId,
+        30_000,
+      ).then(() => {
+        if (!settled) {
+          throw new Error(
+            "A call to blockConcurrencyWhile() in a Durable Object waited for " +
+            "too long. The call was canceled and the Durable Object was reset.",
+          );
+        }
+      })
+      : undefined;
+    const raced = timed
+      ? Promise.race([Promise.resolve(result), timeout])
+      : Promise.resolve(result);
+    return raced.then(
       (value) => {
         settled = true;
-        __timer_cancel(timerId);
+        if (timed) __timer_cancel(timerId);
         this._blockDepth--;
         return value;
       },
       (error) => {
         settled = true;
-        __timer_cancel(timerId);
+        if (timed) __timer_cancel(timerId);
         this._blockDepth--;
         this._resetAfterConcurrencyFailure(error);
         throw error;
@@ -9182,6 +9193,11 @@ const __WorkflowCell = (() => {
         // not a durable alarm, on purpose: an eviction or a restart replays
         // run() from the top anyway, so losing the timer loses nothing --
         // the replay re-enters the same stall and re-arms its own grace.
+        // --no-implicit-deadlines arms no grace: the instance stays running
+        // until the wait settles, or an explicit pause, terminate, eviction
+        // or shutdown ends the invocation, and every one of those replays or
+        // fails it through the paths above.
+        if (__cell.implicitDeadlines === false) return;
         if (driver.stallTimer !== undefined) return;
         driver.stallTimer = setTimeout(() => {
           driver.stallTimer = undefined;

@@ -32,6 +32,15 @@ pub(crate) static NEXT_HTTP_STREAM_ID: AtomicU64 = AtomicU64::new(1);
 /// the value cannot match a plausible body.
 pub(crate) const HTTP_STREAM_DONE: &str = "__celld_http_stream_end__";
 pub(crate) const HTTP_STREAM_IDLE_TIMEOUT_MS: u64 = 60_000;
+
+/// When an idle stream expires, or `crate::deadlines::UNBOUNDED_MS` past
+/// `now_ms` when the node runs without implicit deadlines. The idle sweep is a
+/// leak guard for a source nothing can read any more; without it such a
+/// source lives until the cell that owns it stops, which closes every stream
+/// of its owner (`close_locked`), or until it is read to its end or cancelled.
+fn idle_deadline_ms(now_ms: u64) -> u64 {
+    now_ms.saturating_add(crate::deadlines::bound_ms(HTTP_STREAM_IDLE_TIMEOUT_MS))
+}
 pub(crate) const HTTP_STREAM_REGISTRATION_CLOSED: &str = "the HTTP stream service is closed";
 pub(crate) const HTTP_TEE_BRANCH_CAPACITY: usize = 16;
 const RESPONSE_STREAM_CONSUMER_CANCELED: &str = "response stream consumer canceled";
@@ -631,7 +640,7 @@ impl HttpStreamService {
                     &mut drain,
                 );
                 let generation = Self::next_sequence(&mut state.next_generation);
-                let deadline_ms = now_ms.saturating_add(HTTP_STREAM_IDLE_TIMEOUT_MS);
+                let deadline_ms = idle_deadline_ms(now_ms);
                 state.sources.insert(
                     stream_id,
                     HttpStreamEntry::new(generation, deadline_ms, candidate_source.take().unwrap()),
@@ -889,7 +898,7 @@ impl HttpStreamService {
                         if let Some(now_ms) = now_ms {
                             let entry = state.sources.get_mut(&lease.stream_id).unwrap();
                             entry.source = HttpStreamSourceSlot::Available(source.take().unwrap());
-                            entry.deadline_ms = now_ms.saturating_add(HTTP_STREAM_IDLE_TIMEOUT_MS);
+                            entry.deadline_ms = idle_deadline_ms(now_ms);
                             Ok(Some(bytes))
                         } else {
                             Self::close_locked(&mut state, &mut drain);
@@ -971,7 +980,7 @@ impl HttpStreamService {
         let Some(now_ms) = self.owner.get().and_then(|owner| owner.mono_ms().ok()) else {
             return Err(HttpStreamTerminationReason::Cancelled);
         };
-        entry.deadline_ms = now_ms.saturating_add(HTTP_STREAM_IDLE_TIMEOUT_MS);
+        entry.deadline_ms = idle_deadline_ms(now_ms);
         Ok(())
     }
 
@@ -1146,7 +1155,7 @@ impl HttpStreamService {
                     }
                 }
                 if let Some(now_ms) = now_ms {
-                    entry.deadline_ms = now_ms.saturating_add(HTTP_STREAM_IDLE_TIMEOUT_MS);
+                    entry.deadline_ms = idle_deadline_ms(now_ms);
                 }
                 if remove_writer {
                     removed_writer = state.response_writers.remove(&stream_id);
@@ -1253,6 +1262,7 @@ impl HttpStreamService {
                     .values()
                     .filter(|entry| entry.is_expiry_eligible())
                     .map(|entry| entry.deadline_ms)
+                    .filter(|deadline_ms| *deadline_ms < crate::deadlines::UNBOUNDED_MS)
                     .min()
                 {
                     HttpSweepWait::Deadline(deadline_ms)

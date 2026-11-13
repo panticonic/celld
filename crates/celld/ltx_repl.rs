@@ -1499,11 +1499,15 @@ impl LtxRepl {
         let flush_ms = crate::env_vars::with_default("CELLD_LOG_FLUSH_MS", 2000)? as u64;
         // Saturating: an absurd seconds value must clamp, not wrap through
         // `as_millis() as u64` into a short deadline.
-        let durability_timeout_ms = crate::env_vars::positive_or(
+        // An explicit setting always wins. Without one, a node started with
+        // --no-implicit-deadlines waits for the store instead of failing the
+        // write after the default budget (docs/fork/deadlines.md).
+        let durability_timeout_ms = match crate::env_vars::positive::<u64>(
             "CELLD_LTX_DURABILITY_TIMEOUT_SECS",
-            DEFAULT_DURABILITY_TIMEOUT_SECS,
-        )?
-        .saturating_mul(1_000);
+        )? {
+            Some(seconds) => seconds.saturating_mul(1_000),
+            None => crate::deadlines::bound_ms(DEFAULT_DURABILITY_TIMEOUT_SECS * 1_000),
+        };
         Ok(Self::assemble(
             watch,
             store,

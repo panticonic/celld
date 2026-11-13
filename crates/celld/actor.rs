@@ -51,6 +51,18 @@ pub fn operation_deadline_ms() -> anyhow::Result<u64> {
     crate::env_vars::positive_or("CELLD_OPERATION_DEADLINE_MS", DEFAULT_OPERATION_DEADLINE_MS)
 }
 
+/// The deadline the shell and the decision core enforce on an operation, or
+/// `None` under `--no-implicit-deadlines` (docs/fork/deadlines.md). Queue
+/// leases keep reading `operation_deadline_ms`: their settlement budget is a
+/// visibility timeout that consumers observe, not a watchdog.
+#[doc(hidden)]
+pub fn operation_deadline() -> anyhow::Result<Option<u64>> {
+    if crate::deadlines::implicit_deadlines_disabled() {
+        return Ok(None);
+    }
+    operation_deadline_ms().map(Some)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TimerSlot {
     NodeLeaseRenew,
@@ -1342,7 +1354,9 @@ pub struct AppHandle {
     /// The complete retry budget for a contradicted remote ownership
     /// generation. This is the same operation deadline that bounds the
     /// decision core, so a shell retry cannot outlive its core operation.
-    pub operation_deadline_ms: u64,
+    /// `None` when the node runs without implicit deadlines: the retry then
+    /// ends with the client's disconnect, a route change or shutdown.
+    pub operation_deadline_ms: Option<u64>,
 }
 
 impl AppHandle {
@@ -1976,7 +1990,7 @@ pub struct Actor {
     pub ownership: Ownership,
     peer_http: reqwest::Client,
     peer_auth: Arc<PeerAuth>,
-    operation_deadline_ms: u64,
+    operation_deadline_ms: Option<u64>,
     /// The abandon signal of every eviction stop now in flight, by its op.
     ///
     /// Only a bounded eviction has an entry, because only a bounded eviction
@@ -2310,14 +2324,16 @@ impl Actor {
         };
         let ownership = self.ownership.clone();
         let node = self.state.node().to_string();
-        let deadline = std::time::Duration::from_millis(self.operation_deadline_ms);
+        let deadline = self
+            .operation_deadline_ms
+            .map(std::time::Duration::from_millis);
         crate::asyncrt::spawn(async move {
-            match crate::asyncrt::timeout(
-                deadline,
-                crate::js::maintain_wake_entry(&cell, alarm, &host, &ownership, &node),
-            )
-            .await
-            {
+            let maintenance = crate::js::maintain_wake_entry(&cell, alarm, &host, &ownership, &node);
+            let result = match deadline {
+                Some(deadline) => crate::asyncrt::timeout(deadline, maintenance).await,
+                None => Ok(maintenance.await),
+            };
+            match result {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => tracing::warn!(%cell, %error, "wake maintenance deferred"),
                 Err(_) => tracing::warn!(%cell, "wake maintenance timed out; a later scan retries"),
@@ -2474,7 +2490,7 @@ impl Actor {
         // The shell uses this deadline for handoff and stop retries while the
         // core uses the same value to arm operation timers. Installing only
         // the core configuration creates two different clocks in one Actor.
-        actor.operation_deadline_ms = operation_deadline_ms;
+        actor.operation_deadline_ms = Some(operation_deadline_ms);
         actor.state = ActorState::from(State::new(node, config));
         Ok(actor)
     }
@@ -2527,7 +2543,7 @@ impl Actor {
             Ownership::Memory(_) => random_process_generation(),
         };
         let ttl_ms = crate::env_vars::positive_or("CELLD_TTL_MS", 10_000)?;
-        let operation_deadline_ms = operation_deadline_ms()?;
+        let operation_deadline_ms = operation_deadline()?;
         let lease_spec = NodeLeaseSpec {
             // Startup has already resolved the environment and CLI settings
             // into this validated internal address. Reading the environment
@@ -2555,7 +2571,7 @@ impl Actor {
                     alarm_resident_ms: crate::wake::resident_ms().max(0) as u64,
                     require_node_lease: true,
                     peer_protocol: crate::peer_auth::PROTOCOL_VERSION,
-                    operation_deadline_ms: Some(operation_deadline_ms),
+                    operation_deadline_ms,
                     owner_log_recovery_backoff_ms: crate::env_vars::positive_or(
                         "CELLD_RECOVERY_RETRY_MS",
                         DEFAULT_OWNER_LOG_RECOVERY_BACKOFF_MS,
@@ -3463,8 +3479,15 @@ impl Actor {
                 // balancing move has no such end, so it fails after the
                 // operation deadline and the cell stays unowned for the
                 // next request to claim.
-                let deadline =
-                    rebalance.then(|| std::time::Duration::from_millis(self.operation_deadline_ms));
+                let deadline = self
+                    .operation_deadline_ms
+                    .filter(|_| rebalance)
+                    .map(std::time::Duration::from_millis);
+                // Without a deadline a balancing move would hold its core
+                // permit for as long as no peer accepts. It is an optional
+                // optimisation, so it ends on an event instead of a clock:
+                // when one pass over the candidate peers adopts nothing.
+                let single_pass = rebalance && self.operation_deadline_ms.is_none();
                 out.spawn_scoped(async move {
                     let started_mono_ms = crate::asyncrt::mono_ms();
                     let request = HandoffRequest {
@@ -3556,6 +3579,18 @@ impl Actor {
                                     }
                                 }
                             }
+                        }
+                        if single_pass {
+                            tracing::info!(
+                                event = "rebalance_adoption_declined",
+                                %cell,
+                                released_epoch,
+                                "no peer adopted a balanced cell; it stays unowned for the next request"
+                            );
+                            return CompletedEffect::plain(Event::SuccessorAdopted {
+                                op,
+                                result: Err(Failure::Definite),
+                            });
                         }
                         // No peer can accept yet. Retain the core permit and
                         // retry until the process-wide shutdown deadline.
@@ -4062,9 +4097,10 @@ impl Actor {
                         // which uses `asyncrt::blocking`, this work is off the core but
                         // not isolated from other runtime work.
                         let released = cell.clone();
-                        let deadline_mono_ms = bounded.then(|| {
-                            crate::asyncrt::mono_ms().saturating_add(self.operation_deadline_ms)
-                        });
+                        let deadline_mono_ms = self
+                            .operation_deadline_ms
+                            .filter(|_| bounded)
+                            .map(|deadline| crate::asyncrt::mono_ms().saturating_add(deadline));
                         out.spawn_detached(report_stopped_when_released(
                             op,
                             cell,

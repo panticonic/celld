@@ -1272,7 +1272,7 @@ impl RuntimeManager {
         };
 
         let isolates = generation
-            .cell_isolates(&config.script_name)
+            .cell_isolates(&config.pool_key())
             .ok_or_else(|| anyhow!("no cell isolates for script {}", config.script_name))?;
         // Building an isolate compiles the script, so it runs on a blocking
         // thread: the pool builds before taking its lock, but the caller is a

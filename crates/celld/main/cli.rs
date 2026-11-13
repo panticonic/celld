@@ -200,6 +200,7 @@ pub(crate) fn action_from_process() -> anyhow::Result<Action> {
             }
             "--unsafe-public-advertise" => settings.unsafe_public_advertise = true,
             "--trust-forwarded-headers" => settings.trust_forwarded_headers = true,
+            "--no-implicit-deadlines" => celld::deadlines::disable_implicit_deadlines(),
             "--peer" if diagnose => {
                 let peer = args
                     .next()
@@ -315,6 +316,16 @@ OPTIONS:
                          Let X-Forwarded-Host and X-Forwarded-Proto set the
                          scheme and host in request.url. Set this option only
                          when a trusted proxy replaces both headers
+  --no-implicit-deadlines
+                         Arm none of the time-based watchdogs celld adds on its
+                         own: the 15 s operation deadline, the 30 s
+                         blockConcurrencyWhile limit, the 60 s idle HTTP stream
+                         expiry, the workflow stall grace, the 10 s LTX
+                         durability proof budget, the 120 s outbound fetch
+                         timeout and the 300 s handler budget. Work then ends on its own
+                         result, an explicit cancellation, an eviction or
+                         shutdown. Deadlines an application sets (timeouts,
+                         step timeouts, queue visibility) are unchanged
   -h, --help             Show this help
   -V, --version          Show the celld version
 
@@ -333,6 +344,7 @@ ENVIRONMENT:
                                   or restrict CELLD_INTERNAL_ADDR
   CELLD_TRUST_FORWARDED_HEADERS   `1` trusts X-Forwarded-Host and
                                   X-Forwarded-Proto
+  CELLD_NO_IMPLICIT_DEADLINES     `1` is --no-implicit-deadlines
   CELLD_NODE                      Node-session ID (default: generated)
   CELLD_WATCH                     Local SQLite/replication working directory
   CELLD_ESBUILD                   Override esbuild executable path
@@ -342,7 +354,8 @@ ENVIRONMENT:
 
 TUNING:
   CELLD_TTL_MS                    Node lease lifetime (default: 10000)
-  CELLD_OPERATION_DEADLINE_MS     Non-restore operation deadline (default: 15000)
+  CELLD_OPERATION_DEADLINE_MS     Non-restore operation deadline (default: 15000;
+                                  not armed under --no-implicit-deadlines)
   CELLD_SHUTDOWN_TOTAL_MS         Complete process stop bound (default: {shutdown_total_ms})
                                   Internal shutdown waits scale with this bound
   CELLD_READY_FLEET_GATE_MS       First-readiness wait for fleet capacity

@@ -58,6 +58,7 @@ const SUPPORTED_KEYS: &[&str] = &[
     "r2_buckets",
     "worker_loaders",
     "containers",
+    "celld",
     "no_bundle",
     "define",
     "rules",
@@ -1995,6 +1996,9 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
     }
 
     let containers = read_containers(object, &do_classes, &sqlite_classes)?;
+    if let Some(celld) = read_celld_block(object, &do_classes)? {
+        metadata.insert("celld".into(), celld);
+    }
     Ok(Project {
         script_name,
         no_bundle,
@@ -2013,6 +2017,85 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         containers,
         python,
     })
+}
+
+/// The per-class capability keys of a config's `celld.durable_objects` entry.
+/// `codegen` is read by the isolate builder; `residency` is declared here so
+/// the shared contract has one validator, and is honored by the residency
+/// hold.
+const CELLD_CLASS_KEYS: &[&str] = &["codegen", "residency"];
+
+/// The config's top-level `celld` block, the one place the fork's per-class
+/// capabilities are declared (docs/fork/design.md section 3a):
+///
+/// ```jsonc
+/// "celld": { "durable_objects": { "Class": { "codegen": true } } }
+/// ```
+///
+/// A capability is opt-in and every key is a boolean. A name that is not a
+/// user Durable Object class of this Worker, or a key celld does not model,
+/// is refused: a misspelled class would otherwise leave the capability off
+/// and the author believing it on. The block travels verbatim in the
+/// manifest's metadata, so it is part of the deployment's identity.
+fn read_celld_block(
+    object: &Map<String, Value>,
+    do_classes: &[String],
+) -> anyhow::Result<Option<Value>> {
+    let Some(value) = object.get("celld") else {
+        return Ok(None);
+    };
+    let block = value
+        .as_object()
+        .ok_or_else(|| anyhow!("config `celld` must be an object"))?;
+    if let Some(key) = block.keys().find(|key| key.as_str() != "durable_objects") {
+        bail!("config `celld` declares `{key}`, which celld does not model");
+    }
+    let Some(classes) = block.get("durable_objects") else {
+        return Ok(None);
+    };
+    let classes = classes
+        .as_object()
+        .ok_or_else(|| anyhow!("config `celld.durable_objects` must be an object"))?;
+    for (class, declaration) in classes {
+        if is_reserved_class(class) || !do_classes.iter().any(|declared| declared == class) {
+            bail!(
+                "config `celld.durable_objects` names {class:?}, which is not a Durable Object \
+                 class of this Worker; declare it in `durable_objects.bindings`"
+            );
+        }
+        let declaration = declaration
+            .as_object()
+            .ok_or_else(|| anyhow!("config `celld.durable_objects.{class}` must be an object"))?;
+        for (key, flag) in declaration {
+            if !CELLD_CLASS_KEYS.contains(&key.as_str()) {
+                bail!(
+                    "config `celld.durable_objects.{class}` declares `{key}`, which celld does \
+                     not model (known: {})",
+                    CELLD_CLASS_KEYS.join(", ")
+                );
+            }
+            if !flag.is_boolean() {
+                bail!("config `celld.durable_objects.{class}.{key}` must be true or false");
+            }
+        }
+    }
+    Ok(Some(value.clone()))
+}
+
+/// The classes a deployment's metadata declared `codegen: true` for.
+///
+/// Read from the manifest on the node, so a manifest from any producer
+/// (`celld deploy` or the control plane) is judged by the same rule.
+pub fn declared_codegen_classes(raw_metadata: &Value) -> Vec<String> {
+    raw_metadata
+        .get("celld")
+        .and_then(|celld| celld.get("durable_objects"))
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(_, declaration)| declaration.get("codegen") == Some(&Value::Bool(true)))
+        .map(|(class, _)| class.clone())
+        .collect()
 }
 
 /// The config's `define` and `rules`, as esbuild arguments.
@@ -3040,4 +3123,57 @@ fn strip_jsonc(source: &str) -> String {
 #[cfg(all(test, celld_internal_tests))]
 mod deploy_contract {
     include!(env!("CELLD_INTERNAL_DEPLOY_TESTS"));
+}
+
+#[cfg(test)]
+mod celld_block_tests {
+    use super::*;
+
+    fn read(config: Value, classes: &[&str]) -> anyhow::Result<Option<Value>> {
+        let classes: Vec<String> = classes.iter().map(|class| class.to_string()).collect();
+        read_celld_block(config.as_object().unwrap(), &classes)
+    }
+
+    #[test]
+    fn a_declared_class_is_read_back_from_the_manifest_metadata() {
+        let config = json!({ "celld": { "durable_objects": {
+            "Trusted": { "codegen": true },
+            "Plain": { "codegen": false },
+            "Held": { "residency": true },
+        } } });
+        let block = read(config, &["Trusted", "Plain", "Held"]).unwrap().unwrap();
+        let metadata = json!({ "celld": block });
+        assert_eq!(declared_codegen_classes(&metadata), vec!["Trusted".to_string()]);
+    }
+
+    #[test]
+    fn nothing_is_declared_by_default() {
+        assert_eq!(read(json!({}), &["A"]).unwrap(), None);
+        assert!(declared_codegen_classes(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn a_declaration_that_could_silently_do_nothing_is_refused() {
+        let classes = ["A"];
+        for config in [
+            json!({ "celld": [] }),
+            json!({ "celld": { "wat": {} } }),
+            json!({ "celld": { "durable_objects": [] } }),
+            json!({ "celld": { "durable_objects": { "Typo": { "codegen": true } } } }),
+            json!({ "celld": { "durable_objects": { D1_CLASS: { "codegen": true } } } }),
+            json!({ "celld": { "durable_objects": { "A": true } } }),
+            json!({ "celld": { "durable_objects": { "A": { "eval": true } } } }),
+            json!({ "celld": { "durable_objects": { "A": { "codegen": "yes" } } } }),
+        ] {
+            assert!(read(config.clone(), &classes).is_err(), "{config}");
+        }
+    }
+
+    #[test]
+    fn only_a_literal_true_grants_codegen() {
+        let metadata = json!({ "celld": { "durable_objects": {
+            "A": { "codegen": "true" }, "B": { "codegen": 1 }, "C": {},
+        } } });
+        assert!(declared_codegen_classes(&metadata).is_empty());
+    }
 }

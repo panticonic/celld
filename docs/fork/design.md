@@ -142,6 +142,9 @@ their own switches.
 - **Node-level settings** (CLI flag plus env var, documented in `--help`):
   `--egress-proxy URL` with `CELLD_EGRESS_PROXY`, plus the egress HMAC
   secret; `--p2p-key-file` for the Iroh endpoint.
+  `--no-implicit-deadlines` with `CELLD_NO_IMPLICIT_DEADLINES=1` arms none of
+  celld's own watchdogs (docs/fork/deadlines.md). Codegen confinement is in
+  docs/fork/codegen.md.
 - **JS surface**, all on objects that already exist:
   - `ctx.storage.dolt` (Dolt cells only);
   - `ctx.residency.hold()`, which returns a handle with `release()`;

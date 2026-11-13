@@ -1043,6 +1043,19 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
     Ok(())
 }
 
+/// `__cell.implicitDeadlines`: whether the harness arms the time-based
+/// watchdogs it owns (the 30 s `blockConcurrencyWhile` limit and the
+/// workflow stall grace). False under `--no-implicit-deadlines`; see
+/// docs/fork/deadlines.md.
+pub(super) fn inject_deadline_policy(scope: &mut v8::PinScope) -> Result<()> {
+    let source = format!(
+        "__celld.__cell.implicitDeadlines = {};",
+        !crate::deadlines::implicit_deadlines_disabled()
+    );
+    run_internal_snippet(scope, &source).ok_or_else(|| anyhow!("deadline policy install failed"))?;
+    Ok(())
+}
+
 /// `__cell.env`, the bindings object every handler receives as its second
 /// argument.
 ///

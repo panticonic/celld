@@ -23,6 +23,11 @@ supports, one service or API at a time:
 - `rpc/` — Durable Object method calls through JS RPC
 - `dynamic-worker-tails/` — a runtime-loaded Worker with a Tail Worker
 - `facets/` — a Durable Object facet over a class the Worker Loader starts
+- `codegen/` — `eval`, `new Function` and WebAssembly compilation are refused
+  everywhere except a Durable Object class that declares `codegen`; no build
+  step, and `check.sh` asserts the answers
+- `deadlines/` — `blockConcurrencyWhile` keeps its 30 s limit by default and
+  drops it under `--no-implicit-deadlines`; `check.sh` asserts both
 - `container/` — a Durable Object that supervises a container with
   `@cloudflare/containers`; needs `npm install` and a Docker or Podman CLI
 - `sandbox/` — the Cloudflare Sandbox SDK: commands, files, and processes

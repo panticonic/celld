@@ -283,6 +283,7 @@ pub enum ModuleSource {
 
 /// A Workflow binding keeps the three names distinct across deployment
 /// loading, environment construction, and runtime class injection.
+#[derive(Clone)]
 pub struct WorkflowBinding {
     pub environment: String,
     pub workflow: String,
@@ -871,8 +872,11 @@ pub fn admission_wait() -> std::time::Duration {
     std::time::Duration::from_millis(ms)
 }
 
-/// The JavaScript handler budget, `CELLD_HANDLER_BUDGET_S`.
-pub fn handler_budget() -> std::time::Duration {
+/// The JavaScript handler budget, `CELLD_HANDLER_BUDGET_S`, as configured.
+/// A queue consumer's lease is sized from this value whether or not the
+/// budget is enforced, because the lease is a visibility timeout that
+/// consumers observe.
+pub fn configured_handler_budget() -> std::time::Duration {
     static BUDGET: OnceLock<std::time::Duration> = OnceLock::new();
     *BUDGET.get_or_init(|| {
         std::time::Duration::from_secs(
@@ -880,4 +884,17 @@ pub fn handler_budget() -> std::time::Duration {
                 .expect("validated CELLD_HANDLER_BUDGET_S"),
         )
     })
+}
+
+/// The handler budget the runtime enforces: the configured one, or no limit
+/// under `--no-implicit-deadlines`. It bounds the work a handler leaves
+/// running after it answered (`waitUntil`); without it that work ends when it
+/// settles, when nothing can move it any more (`Wake::Idle`), or when the cell
+/// is cancelled, evicted or the node stops.
+pub fn handler_budget() -> std::time::Duration {
+    if crate::deadlines::implicit_deadlines_disabled() {
+        std::time::Duration::from_millis(crate::deadlines::UNBOUNDED_MS)
+    } else {
+        configured_handler_budget()
+    }
 }

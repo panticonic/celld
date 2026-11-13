@@ -559,6 +559,7 @@ impl Generation {
                 crons,
                 containers,
                 fence_image: fence,
+                codegen_classes,
                 ..
             } = deployment;
             all_containers.extend(containers.iter().cloned());
@@ -577,6 +578,11 @@ impl Generation {
                     .with_containers(containers)
                     .with_generation(id),
             );
+            // Stateless handlers never hold codegen. A class that declared it
+            // runs in isolates built from this second configuration, which
+            // `pool_key` keeps in a pool of its own.
+            let codegen_config = (!codegen_classes.is_empty())
+                .then(|| Arc::new(config.as_ref().clone().with_codegen(true)));
             let pool = crate::runtime::StatelessRuntime::start(
                 config.clone(),
                 node.clone(),
@@ -586,7 +592,11 @@ impl Generation {
                 return Err(anyhow!("duplicate co-hosted Worker script {script}"));
             }
             for class in classes {
-                register_cell_class(&mut cell_configs, class, config.clone(), &|class| {
+                let class_config = match &codegen_config {
+                    Some(codegen) if codegen_classes.contains(&class) => codegen.clone(),
+                    _ => config.clone(),
+                };
+                register_cell_class(&mut cell_configs, class, class_config, &|class| {
                     if is_primary {
                         anyhow!("duplicate Durable Object class {class}")
                     } else {
@@ -607,7 +617,7 @@ impl Generation {
             .values()
             .map(|config| {
                 (
-                    config.script_name.clone(),
+                    config.pool_key(),
                     crate::runtime::cell_pool(config.clone()),
                 )
             })

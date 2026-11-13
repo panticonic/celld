@@ -211,6 +211,32 @@ correctness never depends on it.
      latency matches upstream within noise.
    - Also in this phase: a prolly-mode cell opens and commits from JS, SES
      `lockdown()` runs, and WebCrypto Ed25519 works.
+   - *Result (2026-11-13, `b3501e1`)*:
+     - celld builds and runs with DoltLite 0.51.11 as its only SQLite. A
+       vendored `libsqlite3-sys` compiles the sha256-pinned amalgamation and
+       applies `vendor/libsqlite3-sys/doltlite/patches/`.
+     - Patch 0001 makes stock format the default for new files; prolly
+       requires `?doltlite_engine=prolly`. It also keeps `dolt_*` functions
+       off stock connections.
+     - `SQLITE_ENABLE_API_ARMOR` is dropped, because it silently stops
+       `dolt_*` from registering.
+     - 11 examples behave the same on upstream and on the spike, including
+       a restart and an LTX restore. Write latency is unchanged; CPU-bound
+       reads may be 10–40% slower (not yet profiled).
+     - **The gate could not be run: upstream publishes no tests.** There are
+       1,166 `cfg(celld_internal_tests)` sites and no test bodies. The
+       workerd conformance corpus, simulator, TLA+ models and fault
+       injection described in `docs/testing.md` are all private.
+0b. **Test harness (before any change to durability code).**
+   - *E2E*: a differential suite over every example, run through
+     `celld dev`, with golden outputs, restarts and restores.
+   - *Simulation*: a deterministic simulator that drives
+     `logic::on_event` with modelled object store, peers, clocks and
+     crashes. It checks one writer per epoch and no lost acknowledged
+     write, using the `celld_internal_tests` observer hooks.
+   - *Fleet*: Docker fault injection with MinIO plus three nodes: kill the
+     owner, partition a node, lag a follower, tear a write.
+   - The DoltLite spike tests become the engine conformance suite.
 1. **Dolt cells.** `CellStore` trait, `DoltStore`, generations and segments,
    restore, GC, fork, and the `ctx.storage.dolt` API.
    - *Gate*: the simulator and integration tests cover takeover mid-tail,

@@ -22,6 +22,10 @@ pub(crate) struct Settings {
     /// Set only by the `celld dev` supervisor for its child node. No fleet
     /// flag or public environment variable selects the local backend.
     pub(crate) dev_store: Option<std::path::PathBuf>,
+    /// The Iroh endpoint behind the `p2p` binding: `--p2p-*` flags and
+    /// `CELLD_P2P_*` variables. The endpoint starts only when a key file is
+    /// named or a loaded deployment declares a `p2p` binding.
+    pub(crate) p2p: celld::p2p::Settings,
 }
 
 pub(crate) enum Action {
@@ -155,6 +159,7 @@ pub(crate) fn action_from_process() -> anyhow::Result<Action> {
         } else {
             std::env::var_os("CELLD_INTERNAL_DEV_STORE").map(std::path::PathBuf::from)
         },
+        p2p: celld::p2p::Settings::from_environment()?,
     };
     let mut args = arguments.into_iter();
     while let Some(argument) = args.next() {
@@ -197,6 +202,31 @@ pub(crate) fn action_from_process() -> anyhow::Result<Action> {
                     args.next()
                         .ok_or_else(|| anyhow::anyhow!("--advertise requires a value"))?,
                 );
+            }
+            "--p2p-key-file" => {
+                settings.p2p.key_file = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--p2p-key-file requires a value"))?
+                        .into(),
+                );
+            }
+            "--p2p-relay" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--p2p-relay requires a value"))?;
+                settings.p2p.set_relay(&value)?;
+            }
+            "--p2p-discovery" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--p2p-discovery requires a value"))?;
+                settings.p2p.set_discovery(&value)?;
+            }
+            "--p2p-bind" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--p2p-bind requires a value"))?;
+                settings.p2p.set_bind(&value)?;
             }
             "--unsafe-public-advertise" => settings.unsafe_public_advertise = true,
             "--trust-forwarded-headers" => settings.trust_forwarded_headers = true,
@@ -311,6 +341,7 @@ OPTIONS:
                          Peer traffic has no built-in TLS, and operator routes
                          permit unauthenticated work, eviction, state inspection,
                          and shutdown
+{p2p_help}
   --trust-forwarded-headers
                          Let X-Forwarded-Host and X-Forwarded-Proto set the
                          scheme and host in request.url. Set this option only
@@ -333,6 +364,9 @@ ENVIRONMENT:
                                   or restrict CELLD_INTERNAL_ADDR
   CELLD_TRUST_FORWARDED_HEADERS   `1` trusts X-Forwarded-Host and
                                   X-Forwarded-Proto
+  CELLD_P2P_KEY_FILE, CELLD_P2P_RELAY, CELLD_P2P_DISCOVERY, CELLD_P2P_BIND
+                                  Same as the --p2p-* options
+  CELLD_P2P_MAX_STREAMS           Open p2p streams per node (default: 4096)
   CELLD_NODE                      Node-session ID (default: generated)
   CELLD_WATCH                     Local SQLite/replication working directory
   CELLD_ESBUILD                   Override esbuild executable path
@@ -382,6 +416,7 @@ TUNING:
 
 Documentation: https://celld.dev/docs"#,
         shutdown_total_ms = celld::env_vars::DEFAULT_SHUTDOWN_TOTAL_MS,
+        p2p_help = celld::p2p::HELP,
     );
     celld::cli_output::Output::new(celld::cli_output::Format::Text).help(&help)
 }

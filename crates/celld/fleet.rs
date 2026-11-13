@@ -897,6 +897,14 @@ async fn load_worker_at_pointer(
         .filter_map(|binding| binding.get("name")?.as_str().map(str::to_string))
         .collect();
     let services = service_bindings(&manifest);
+    // `p2p` bindings reach the node's one endpoint, so they register with the
+    // node-level table instead of travelling in `WorkerConfigOptions`.
+    crate::p2p::declare(
+        &manifest.script_name,
+        bindings(&manifest, "p2p")
+            .filter_map(crate::p2p::Binding::from_manifest)
+            .collect(),
+    );
     let vars = worker_vars(&manifest);
     let compat = crate::worker_compat(&manifest.raw_metadata);
     let assets = match &manifest.assets {

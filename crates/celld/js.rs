@@ -6742,6 +6742,13 @@ ops! { OP_NAMES, install_op_functions,
         "__tcp_shutdown" => tcp::op_tcp_shutdown,
         "__tcp_close" => tcp::op_tcp_close,
         "__tcp_starttls" => tcp::op_tcp_starttls,
+        "__p2p_node_id" => p2p::op_p2p_node_id,
+        "__p2p_connect" => p2p::op_p2p_connect,
+        "__p2p_claim" => p2p::op_p2p_claim,
+        "__p2p_read" => p2p::op_p2p_read,
+        "__p2p_write" => p2p::op_p2p_write,
+        "__p2p_shutdown" => p2p::op_p2p_shutdown,
+        "__p2p_close" => p2p::op_p2p_close,
         "__container_running" => container::op_container_running,
         "__container_address" => container::op_container_address,
         "__container_start" => container::op_container_start,
@@ -9956,6 +9963,7 @@ fn webcrypto_return_bytes(
 mod container;
 mod crypto;
 mod html_rewriter;
+mod p2p;
 mod tcp;
 #[cfg(celld_internal_tests)]
 pub use tcp::test_extra_tls_root;
@@ -11477,6 +11485,9 @@ impl IoContext {
         }
         let tcp: Vec<u64> = self.tcp_sockets.lock().unwrap().drain(..).collect();
         for id in tcp {
+            // Stream ids carry a bit TCP ids never reach, so each id is freed
+            // by the one registry that holds it.
+            p2p::free(id);
             tcp::free(id);
         }
     }

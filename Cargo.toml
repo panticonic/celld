@@ -77,6 +77,15 @@ hyper = { version = "1", features = ["client", "server", "http1"] }
 httpdate = "1"
 lol_html = "3.0"
 hyper-util = { version = "0.1", features = ["tokio"] }
+# Peer-to-peer transport for the `p2p` binding (docs/services/p2p.md): QUIC
+# connections dialed by public key, with hole punching and relay fallback.
+# 1.x is wire-compatible with the 1.0.2 core inside Vibestudio's
+# `@number0/iroh` binding. `tls-ring` matches the rustls provider the rest of
+# the workspace already uses; the default `portmapper` (UPnP/NAT-PMP),
+# `metrics` and Apple datapath features are left off.
+iroh = { version = "1.4", default-features = false, features = ["tls-ring"] }
+# mDNS address lookup for peers on the same LAN. A separate crate upstream.
+iroh-mdns-address-lookup = "0.6"
 libc = "0.2"
 lz4_flex = { version = "0.11", features = ["frame"] }
 md-5 = "0.10"

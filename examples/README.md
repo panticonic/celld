@@ -17,6 +17,7 @@ supports, one service or API at a time:
 - `router/` — Worker-to-Durable-Object routing
 - `wsecho/` — WebSocket echo with hibernation
 - `wsclient/` — outbound WebSocket client from a Durable Object
+- `p2p/` — two nodes exchanging streams over Iroh, dialed by node id
 - `alarm/` — a Durable Object alarm handler
 - `cron/` — a cron trigger that logs each tick
 - `workflow/` — a Workflow that builds a report in one durable step

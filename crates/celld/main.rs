@@ -2881,6 +2881,14 @@ async fn handle_internal(
         "/peer/handoff" => internal_handoff(request, app).await,
         _ if path.starts_with("/peer/log/") => internal_log(request, app, path.clone()).await,
         "/state" => response(StatusCode::OK, app.snapshot().await),
+        // The p2p endpoint's node id, addresses and accepted ALPNs.
+        "/p2p" => match celld::p2p::status() {
+            Some(status) => response(
+                StatusCode::OK,
+                serde_json::to_string(&status).unwrap_or_default(),
+            ),
+            None => response(StatusCode::NOT_FOUND, "{\"error\":\"p2p_not_running\"}"),
+        },
         "/reload" if request.method() != hyper::Method::POST => {
             response(StatusCode::METHOD_NOT_ALLOWED, "method not allowed")
         }
@@ -3383,6 +3391,7 @@ fn shutdown_accept_failure_test_action() -> Action {
         unsafe_public_advertise: false,
         trust_forwarded_headers: false,
         dev_store: None,
+        p2p: Default::default(),
     })
 }
 
@@ -4703,6 +4712,10 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
         });
     }
 
+    // The p2p endpoint starts here, once the first deployment has declared its
+    // bindings and the app can route an inbound stream to its cell. It prints
+    // its own node-id line.
+    celld::p2p::install(app.clone(), settings.p2p.clone()).await?;
     celld::cli_output::Output::new(celld::cli_output::Format::Text).line(format_args!(
         "celld listening on {} (ownership={ownership_name})",
         listener.local_addr()?
@@ -5586,6 +5599,11 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
         shutdown_accept_failure_test_active,
         "final log flush reached",
     );
+    // Close the p2p endpoint so peers see an orderly close and redial at once
+    // instead of waiting out the idle timeout.
+    if let Some(node) = celld::p2p::node() {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), node.shutdown()).await;
+    }
     exit_flushed(0);
 }
 

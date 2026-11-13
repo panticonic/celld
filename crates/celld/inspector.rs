@@ -110,8 +110,29 @@ pub enum TargetKind {
 struct TargetInfo {
     kind: TargetKind,
     script: String,
+    /// The id the loading code gave this Worker in `env.LOADER.get(id, ...)`,
+    /// for a dynamic Worker that was loaded by name.
+    loader: Option<String>,
     classes: Vec<String>,
     cells: BTreeSet<String>,
+}
+
+/// The longest loader id a target shows. An id is the loading code's own
+/// string, so the listing bounds it.
+const LOADER_ID_LIMIT: usize = 200;
+
+/// Escape `value` for a URL path segment: everything but unreserved
+/// characters, so an id such as `do-code:abc/1` stays one segment.
+fn url_segment(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }
 
 /// One protocol message headed for an isolate's inspector.
@@ -270,6 +291,7 @@ impl Target {
             info: Mutex::new(TargetInfo {
                 kind,
                 script: script.to_string(),
+                loader: None,
                 classes: classes.to_vec(),
                 cells: BTreeSet::new(),
             }),
@@ -286,6 +308,15 @@ impl Target {
 
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Name the Worker by the id its loader gave it (`env.LOADER.get(id, ...)`),
+    /// so tooling can find the isolate of a Worker by that name. The id is
+    /// shown in the title and the url, after the prefix both already have.
+    pub fn set_loader_id(&self, id: &str) {
+        let id: String = id.chars().take(LOADER_ID_LIMIT).collect();
+        self.info.lock().expect("inspector target poisoned").loader =
+            (!id.is_empty()).then_some(id);
     }
 
     /// Give the target the slot that runs its turns and list it.
@@ -340,6 +371,9 @@ impl Target {
             TargetKind::Pool => format!("{} (celld isolate", info.script),
             TargetKind::Dynamic => format!("{} (celld dynamic worker isolate", info.script),
         };
+        if let Some(loader) = &info.loader {
+            title.push_str(&format!("; loader id {loader}"));
+        }
         if !info.classes.is_empty() {
             title.push_str(&format!("; classes {}", info.classes.join(", ")));
         }
@@ -377,12 +411,14 @@ impl Target {
             .to_string()
     }
 
-    fn script(&self) -> String {
-        self.info
-            .lock()
-            .expect("inspector target poisoned")
-            .script
-            .clone()
+    /// The `url` of the target: the script, and for a Worker loaded by name
+    /// the loader id as a further path segment.
+    fn url(&self) -> String {
+        let info = self.info.lock().expect("inspector target poisoned");
+        match &info.loader {
+            Some(loader) => format!("file:///{}/{}", info.script, url_segment(loader)),
+            None => format!("file:///{}", info.script),
+        }
     }
 
     /// The thread this isolate's turns must run on, while a profile records.
@@ -582,7 +618,7 @@ fn list_json(host: &str) -> serde_json::Value {
                     "id": target.id(),
                     "title": target.title(),
                     "type": "node",
-                    "url": format!("file:///{}", target.script()),
+                    "url": target.url(),
                     "webSocketDebuggerUrl": format!("ws://{host}/{}", target.id()),
                 })
             })
@@ -780,5 +816,26 @@ mod tests {
         assert!(title.contains("Counter:a"), "{title}");
         target.cell_adopted("Counter:a", false);
         assert!(target.title().contains("shared by 1 cell:"));
+    }
+
+    #[test]
+    fn a_worker_loaded_by_name_shows_its_loader_id() {
+        let target = Target::new(TargetKind::Dynamic, "__loader:7", &[]);
+        assert_eq!(target.title(), "__loader:7 (celld dynamic worker isolate)");
+        assert_eq!(target.url(), "file:///__loader:7");
+        target.set_loader_id("do-code:abc/1 x");
+        // The prefix stays; the id follows it, raw in the title and escaped as
+        // one path segment in the url.
+        assert_eq!(
+            target.title(),
+            "__loader:7 (celld dynamic worker isolate; loader id do-code:abc/1 x)"
+        );
+        assert_eq!(target.url(), "file:///__loader:7/do-code%3Aabc%2F1%20x");
+        // An empty id is no id, and a long one is cut.
+        target.set_loader_id("");
+        assert_eq!(target.url(), "file:///__loader:7");
+        target.set_loader_id(&"x".repeat(1000));
+        assert!(target.title().contains(&format!("loader id {}", "x".repeat(200))));
+        assert!(!target.title().contains(&"x".repeat(201)));
     }
 }

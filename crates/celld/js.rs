@@ -2006,6 +2006,9 @@ pub struct WorkerConfig {
     resource_limits: Option<ResourceLimits>,
     /// Whether a Dynamic Worker can receive a tail report sender on a fetch.
     tail_reporting: bool,
+    /// The id a Dynamic Worker was loaded under, `env.LOADER.get(id, ...)`,
+    /// which the inspector shows beside the isolate's own name.
+    loader_name: Option<String>,
     /// Whether the isolates built from this configuration may generate code
     /// from strings (`eval`, `new Function`) and compile WebAssembly from
     /// bytes. Off unless the deployment declared it for the class these
@@ -2179,6 +2182,7 @@ impl WorkerConfig {
             loader_env: None,
             resource_limits: None,
             tail_reporting: false,
+            loader_name: None,
             codegen: false,
             crons: Vec::new(),
             containers: Vec::new(),
@@ -2294,6 +2298,11 @@ impl WorkerConfig {
 
     fn with_tail_reporting(mut self, enabled: bool) -> Self {
         self.tail_reporting = enabled;
+        self
+    }
+
+    fn with_loader_name(mut self, name: Option<String>) -> Self {
+        self.loader_name = name;
         self
     }
     /// Every `ModuleSource::EsModule` sibling with its name, its source and
@@ -6244,10 +6253,11 @@ impl Worker {
             } else {
                 crate::inspector::TargetKind::Pool
             };
-            inspector::IsolateInspector::attach(
-                &mut isolate,
-                crate::inspector::Target::new(kind, script_name, do_classes),
-            )
+            let target = crate::inspector::Target::new(kind, script_name, do_classes);
+            if let Some(name) = &config.loader_name {
+                target.set_loader_id(name);
+            }
+            inspector::IsolateInspector::attach(&mut isolate, target)
         });
         let (context, fetch) = {
             v8::scope!(let hs, &mut isolate);
@@ -7212,6 +7222,7 @@ ops! { OP_NAMES, install_op_functions,
         "__dolt_op" => storage_ops::op_dolt_op,
         "__dolt_blob_op" => storage_ops::op_dolt_blob_op,
         "__object_export" => object_ops::op_object_export,
+        "__object_delete_unfinished" => object_ops::op_object_delete_unfinished,
         "__object_quiesced" => object_ops::op_object_quiesced,
         "__object_restore_begin" => object_ops::op_object_restore_begin,
         "__object_restore_pending" => object_ops::op_object_restore_pending,
@@ -7222,7 +7233,6 @@ ops! { OP_NAMES, install_op_functions,
         "__object_stop" => object_ops::op_object_stop,
         "__d1_run" => storage_ops::op_d1_run,
         "__storage_transaction_control" => storage_ops::op_storage_transaction_control,
-        "__object_delete_unfinished" => object_ops::op_object_delete_unfinished,
         "__log" => op_log,
         "__storage_put" => storage_ops::op_storage_put,
         "__storage_put_many" => storage_ops::op_storage_put_many,
@@ -7872,7 +7882,7 @@ async fn loaded_worker_slot(
 }
 
 /// `__loader_load(codeJson, wasm, outbound, outboundProps, envSc, envRoutes,
-/// tailReporting)` -> stub id. Builds a WorkerConfig from the supplied modules
+/// tailReporting, name)` -> stub id. Builds a WorkerConfig from the supplied modules
 /// and registers its asynchronous load state. Compilation runs on Tokio's
 /// blocking pool. Calls wait for that result and use the normal turn driver.
 /// A Worker Loader's `celld: { ... }` option: capabilities granted to the
@@ -7921,6 +7931,12 @@ fn op_loader_load(
         None => None,
     };
     let tail_reporting = args.get(6).boolean_value(scope);
+    // The id the loading code gave this Worker (`env.LOADER.get(id, ...)`),
+    // empty for `load(code)`. Only the inspector shows it.
+    let loader_name = {
+        let name = args.get(7).to_rust_string_lossy(scope);
+        (!name.is_empty() && !args.get(7).is_undefined()).then_some(name)
+    };
     // `celld: { codegen, residency, egressIdentity }`. The harness already
     // vetted it against the caller's own capabilities; each feature reads only
     // its own field, and an unknown key is refused here too.
@@ -8191,6 +8207,7 @@ fn op_loader_load(
         .with_resource_limits(limits)
         .with_residency_grant(celld.residency == Some(true))
         .with_tail_reporting(tail_reporting)
+        .with_loader_name(loader_name)
         .with_codegen(codegen)
         .with_loader_env(loader_env),
     );

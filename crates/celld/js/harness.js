@@ -4387,7 +4387,7 @@ __celld.__makeLoader = () => {
   };
   // getCode is deferred into a microtask so a throw (or async getCode)
   // surfaces as a rejection when the worker is first used, not at get()/load().
-  const loadFrom = (getCode) => {
+  const loadFrom = (getCode, name) => {
     // The object calling the loader, read now: `getCode` runs in a later turn.
     const caller = __actorEventStack.length === 0 ? undefined
       : __actorEventStack[__actorEventStack.length - 1].scope;
@@ -4398,7 +4398,9 @@ __celld.__makeLoader = () => {
         } = encodeModules(c, caller);
         const id = __loader_load(
           JSON.stringify(config), wasm, outbound, outboundProps, env,
-          envRoutes, tails.length !== 0);
+          envRoutes, tails.length !== 0,
+          // The id given to `get`, for the inspector's listing of isolates.
+          name === undefined ? undefined : String(name));
         return { id, tails };
       });
   };
@@ -4408,7 +4410,7 @@ __celld.__makeLoader = () => {
       let ref = byName.get(name);
       let loadPromise = ref?.deref();
       if (loadPromise === undefined) {
-        loadPromise = loadFrom(getCode);
+        loadPromise = loadFrom(getCode, name);
         ref = new WeakRef(loadPromise);
         byName.set(name, ref);
         track(loadPromise, name, ref);
@@ -6113,8 +6115,6 @@ class DurableObjectNamespace {
     }
     return JSON.parse(text);
   }
-  getByName(name, options) {
-    return this.get(this.idFromName(name), options);
   // celld fork: delete the leftovers of a fork, restore or import of `id` that
   // stopped before it completed (its publication never finished, so nothing
   // ever activated it). Resolves to `{ deleted }`, the number of stored objects
@@ -6129,6 +6129,8 @@ class DurableObjectNamespace {
       throw __codedError(String(error && error.message || error), "deleteUnfinished: ");
     }
   }
+  getByName(name, options) {
+    return this.get(this.idFromName(name), options);
   }
   get(id) {
     const className = this._className;
@@ -6335,13 +6337,13 @@ const __forkOptions = (options, where = "fork options") => {
     if (typeof options.at !== "string") throw new TypeError(where + ".at must be a string.");
     out.at = options.at;
   }
-  if (options.facets !== undefined) {
-    if (options.facets === null || typeof options.facets !== "object")
   if (options.replaceUnfinished !== undefined) {
     if (typeof options.replaceUnfinished !== "boolean")
       throw new TypeError(where + ".replaceUnfinished must be a boolean.");
     out.replaceUnfinished = options.replaceUnfinished;
   }
+  if (options.facets !== undefined) {
+    if (options.facets === null || typeof options.facets !== "object")
       throw new TypeError(where + ".facets must be an object.");
     out.facets = {};
     for (const [name, value] of Object.entries(options.facets))
@@ -6349,8 +6351,6 @@ const __forkOptions = (options, where = "fork options") => {
   }
   return out;
 };
-const __objectExport = async (namespace, sourceId, targetId, options, what = "fork") => {
-  const params = new URLSearchParams({ to: targetId._scope(), options: JSON.stringify(options) });
 // A failure of a fork, restore or import arrives as `CODE: message` when the
 // host gave it a stable code (docs/services/object-fork.md, "Errors"): the
 // error keeps the message text and carries the code as `code`.
@@ -6360,6 +6360,8 @@ const __codedError = (text, what) => {
   if (match !== null) error.code = match[1];
   return error;
 };
+const __objectExport = async (namespace, sourceId, targetId, options, what = "fork") => {
+  const params = new URLSearchParams({ to: targetId._scope(), options: JSON.stringify(options) });
   const response = await namespace.get(sourceId).fetch(
     "https://celld.internal" + __OBJECT_EXPORT_PATH + "?" + params, { method: "POST" },
   );

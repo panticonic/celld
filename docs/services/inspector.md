@@ -76,7 +76,12 @@ There is one target per live V8 isolate, and no others.
   hosts the Durable Object cells placed in it, or serves the script's
   stateless requests, or both.
 - `core:dynamic:<script>:isolate-<n>`: the isolate of one dynamic Worker (a
-  Worker Loader's `LOADER.get(...)`). It hosts exactly that Worker.
+  Worker Loader's `LOADER.get(...)`). It hosts exactly that Worker. A Worker
+  loaded by name (`LOADER.get(id, ...)`) says so: its title is
+  `__loader:<n> (celld dynamic worker isolate; loader id <id>; ...)` and its
+  `url` is `file:///__loader:<n>/<id>` (the id percent-encoded, cut at 200
+  characters), so tooling can find a Worker's isolate by the id its loader gave
+  it. A Worker from `LOADER.load(code)` has no id.
 
 Targets appear when an isolate is created and disappear when it is retired.
 Pools build isolates lazily, so a node that has served nothing lists nothing,

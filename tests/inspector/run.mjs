@@ -193,6 +193,13 @@ try {
       const url = new URL(target.webSocketDebuggerUrl);
       assert(url.pathname.slice(1) === target.id, `webSocketDebuggerUrl does not end in the id: ${target.webSocketDebuggerUrl}`);
     }
+    // A Worker loaded by name carries the id its loader gave it, after the
+    // prefix every dynamic target has, so tooling can find its isolate by name.
+    const dynamicTarget = targets.find((t) => t.id.startsWith("core:dynamic:"));
+    assert(/^__loader:\d+ \(celld dynamic worker isolate; loader id inspector-dyn-v1[;)]/.test(dynamicTarget.title),
+      `the dynamic worker's title does not carry its loader id: ${dynamicTarget.title}`);
+    assert(/^file:\/\/\/__loader:\d+\/inspector-dyn-v1$/.test(dynamicTarget.url),
+      `the dynamic worker's url does not carry its loader id: ${dynamicTarget.url}`);
     cellTarget = targets.find((t) => /shared by \d+ cell/.test(t.title));
     console.log(`     targets: ${targets.map((t) => `\n       ${t.id}  ${t.title}`).join("")}`);
     assert(/isolate/.test(cellTarget.title) && /Counter/.test(cellTarget.title), cellTarget.title);

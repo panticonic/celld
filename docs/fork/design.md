@@ -742,6 +742,11 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       ("Errors"). These are gaps of the fork's own features, not upstream
       defects.
 
+    - **Inspector titles for loaded Workers.** A Worker loaded by name
+      (`env.LOADER.get(id, ...)`) shows the id in its CDP target: title
+      `__loader:<n> (celld dynamic worker isolate; loader id <id>; ...)`, url
+      `file:///__loader:<n>/<id>`. `docs/services/inspector.md`.
+
 ## 4. Determinism: fixes over the earlier plans
 
 Things the workerd reconstruction plan and the current Chronolog patch get

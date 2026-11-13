@@ -132,31 +132,36 @@ The inspector follows that:
 - A protocol message queues for the isolate and schedules one **turn** on it.
   That turn takes the same permit any request would, so a message waits its
   turn behind requests already running in that isolate, and the isolate sees
-  the debugger as one more turn. Other isolates are unaffected.
+  the debugger as one more turn. Other isolates are unaffected. After the
+  messages are dispatched the turn runs the microtask checkpoint and drains
+  V8's foreground task queue: V8 answers `HeapProfiler.takeHeapSnapshot` and
+  `collectGarbage` from a task it posts there, and an idle isolate runs no
+  other turn that would.
 - **Pausing.** A breakpoint stops JavaScript inside a running turn. V8 asks the
-  embedder for a nested message loop, and celld runs it on the worker that is
-  executing the turn. That worker blocks, and the turn keeps the isolate's
-  permit, so **the whole isolate is frozen, with every cell in it** (their
-  requests queue behind the permit) until the debugger resumes. This is the
-  same as stopping a shared process under a debugger, and is why a target's
-  title lists its cells.
+  embedder for a nested message loop, and celld runs it on the thread that is
+  executing the turn. That turn keeps the isolate's permit, so **the whole
+  isolate is frozen, with every cell in it** (their requests queue behind the
+  permit) until the debugger resumes. This is the same as stopping a shared
+  process under a debugger, and is why a target's title lists its cells.
   - Other isolates keep serving. Their cells, stateless requests and dynamic
-    Workers take their own permits; the inspector's own HTTP and WebSocket
-    handling runs as ordinary tasks, so `/json/list`, other sessions and other
+    Workers take their own permits, and `/json/list`, other sessions and other
     isolates' debuggers work while one isolate is paused.
   - The pause loop dispatches this isolate's inspector messages itself, so
     `Debugger.resume`, `stepOver`, `evaluateOnCallFrame` and `Runtime.evaluate`
     reach a paused isolate.
-  - **At most workers - 1 isolates may be paused at once**, where workers is the
-    Tokio worker count (`CELLD_TOKIO_THREADS`, default: the CPU count). One
-    worker must stay free to run the listener and socket tasks, or a paused
-    debugger could not be reached. A pause beyond that is *declined*: celld
-    logs `inspector_pause_declined` and execution continues as if the debugger
-    had resumed. With one Tokio worker no pause is possible.
+  - The loop blocks its thread, so it runs inside `tokio::task::block_in_place`:
+    the worker hands its queued tasks to another thread first. (Blocking a
+    worker outright strands the tasks in its LIFO slot, which no other worker
+    can steal, and the node stops answering. The first version of the loop did
+    exactly that.) Each pause holds one thread, so **at most 16 isolates may be
+    paused at once**; a pause beyond that is *declined*: celld logs
+    `inspector_pause_declined` and execution continues as if the debugger had
+    resumed.
   - **If the last debugger session on a paused isolate disconnects, the pause
     ends** and the isolate resumes, so a client that crashed cannot wedge it.
-  - `Debugger.pause` on an idle isolate takes effect when the isolate next runs
-    JavaScript, since there is no thread to interrupt.
+  - `Debugger.pause` on an idle isolate is best effort: there is no thread to
+    interrupt, so it takes effect only if JavaScript runs while it is armed.
+    Set a breakpoint instead.
 - **Wall-clock deadlines keep running while paused.** The paused turn
   stays inside one request, and celld's timers for it do not know about the
   debugger: the 300 s handler budget, the 15 s operation deadline and an
@@ -166,28 +171,36 @@ The inspector follows that:
   and do not advance while paused.
 - A **heap snapshot** holds the isolate's lock for as long as V8 takes to walk
   the heap (seconds for a heap near the 128 MiB default limit), so that
-  isolate serves nothing meanwhile. The same holds for `Profiler.stop` on a long
-  profile, but briefly.
+  isolate serves nothing meanwhile. Chunks stream as `addHeapSnapshotChunk`
+  notifications (field `chunk`), about 1 MiB each.
 
 ### CPU profiles and thread migration
 
-V8 samples an isolate by signalling the thread that started the profile. celld
-may run consecutive turns of one isolate on different Tokio workers, and a
-sample taken while the isolate is on another thread is lost. A profile of a busy
-isolate on a many-worker node can therefore have fewer samples than the
-isolate's real CPU use, and shows the work in proportion rather than in
-absolute time. For a complete profile set `CELLD_TOKIO_THREADS=1` (with
-`celld dev`, in the environment) so the isolate never migrates; heap snapshots
-are unaffected.
+V8 samples an isolate by signalling the thread that started the profile, and a
+sample is taken only while that thread is running the isolate. celld moves an
+isolate's turns between Tokio workers, so on a stock node a profile would miss
+nearly everything the isolate does on other threads (an early version produced
+profiles of `(program)` only).
+
+The inspector therefore pins: from the moment a session sends
+`Profiler.start` until its `Profiler.stop` (or until it disconnects), every turn
+of that isolate runs on one dedicated thread (`celld-inspector-profile`), and
+the calling worker waits for it, which is the time it would have spent running
+the turn. Turns that arrive on other workers are handed over; nothing about
+scheduling or fairness changes, and other isolates are unaffected. A second
+session that starts a profile shares the same thread. The cost is one extra
+thread hop per turn of the profiled isolate while it records.
 
 ## Vibestudio
 
 Vibestudio's `WorkerdInspectorBridge` lists `/json/list`, takes each row's `id`,
 `title` and `type`, derives the path from `webSocketDebuggerUrl`, and proxies a
 WebSocket to `<base>/<path>`. That works as is with `--inspector-addr` in place
-of workerd's: ids are URL-path safe, and the relay needs no changes. The
-profiling testkit's CPU profile (`Profiler.start`/`stop`) and heap snapshot
-(`HeapProfiler.takeHeapSnapshot`) go straight through.
+of workerd's: ids are URL-path safe (`core:user:<script>:isolate-<n>`, the
+shape of workerd's `core:user:<worker>` names), and the relay needs no changes.
+The profiling flow (`Profiler.start`/`stop`, `HeapProfiler.takeHeapSnapshot`)
+goes straight through. A relay should expect a target to vanish when its
+isolate is retired and to appear under a new id when one is built.
 
 ## Testing
 
@@ -210,5 +223,8 @@ check and target naming.
 - One `V8Inspector` per isolate costs a little memory on every isolate, so
   the node creates them only when the inspector is configured.
 - A session cannot be attached to a cell. A cell has no isolate of its own.
+- `Debugger.paused` while the isolate's other cells wait is the whole point of
+  a debugger, but a long pause is visible to their callers as a stalled
+  request.
 - Python Workers (Pyodide) run in a V8 isolate and are targets too, but their
   Python frames are not debuggable through CDP.

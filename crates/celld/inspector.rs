@@ -185,7 +185,7 @@ impl PinnedThread {
             .as_ref()
             .map(|jobs| jobs.send(call).is_ok());
         assert_eq!(sent, Some(true), "the profiling thread is gone");
-        match result.recv().expect("the profiling thread dropped a job") {
+        match blocking(|| result.recv()).expect("the profiling thread dropped a job") {
             Ok(value) => value,
             Err(panic) => std::panic::resume_unwind(panic),
         }
@@ -215,12 +215,17 @@ pub struct Target {
     pinned: Mutex<Option<Arc<PinnedThread>>>,
 }
 
-static HOST_WORKERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-/// How many Tokio workers the node runs, as measured when the listener
-/// started. Zero when the inspector is not running.
-pub fn host_workers() -> usize {
-    HOST_WORKERS.load(Ordering::Relaxed)
+/// Run `f`, which blocks its thread, without starving the Tokio runtime: on a
+/// worker, `block_in_place` hands the worker's queue (including the task parked
+/// in its LIFO slot, which no other worker can steal) to another thread first.
+/// Elsewhere, or on a current-thread runtime, it just runs `f`.
+pub fn blocking<T>(f: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(f)
+        }
+        _ => f(),
+    }
 }
 
 static NEXT_TARGET: AtomicU64 = AtomicU64::new(1);
@@ -505,10 +510,6 @@ pub async fn start_if_configured() -> Result<Option<SocketAddr>> {
         .await
         .with_context(|| format!("bind the inspector listener {}", config.addr))?;
     let bound = listener.local_addr()?;
-    HOST_WORKERS.store(
-        tokio::runtime::Handle::current().metrics().num_workers(),
-        Ordering::Relaxed,
-    );
     tracing::warn!(
         event = "inspector_listening",
         address = %bound,

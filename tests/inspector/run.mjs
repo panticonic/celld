@@ -244,7 +244,7 @@ try {
   await step("HeapProfiler.takeHeapSnapshot streams a parseable snapshot", async () => {
     await cdp.send("HeapProfiler.enable");
     const chunks = [];
-    const collect = ({ data }) => chunks.push(data);
+    const collect = ({ chunk }) => chunks.push(chunk);
     const onChunk = (event) => {
       if (event.method === "HeapProfiler.addHeapSnapshotChunk") collect(event.params);
     };

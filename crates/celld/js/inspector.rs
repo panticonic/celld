@@ -13,7 +13,7 @@
 //!
 //! **Pausing.** V8 calls `run_message_loop_on_pause` from inside a turn, on
 //! its thread, and expects the call not to return until the debugger resumes.
-//! That blocks one Tokio worker and keeps the isolate's turn permit, so the
+//! That blocks a thread and keeps the isolate's turn permit, so the
 //! whole isolate is frozen: every cell it hosts queues behind the permit,
 //! exactly as when a debugger stops a shared process. The loop pumps this
 //! isolate's own inbox, so resume and evaluation requests reach it without
@@ -21,10 +21,11 @@
 //!
 //! - Only the paused isolate stops. Other isolates take their own permit, so
 //!   cells in them keep serving.
-//! - Every Tokio worker but one may block in a pause at a time. The listener
-//!   and the socket tasks need a worker to run on; a pause that would take the
-//!   last one is declined (the loop returns at once, so execution continues,
-//!   and a warning says why).
+//! - The loop runs inside `block_in_place`, so the worker hands its queued
+//!   tasks (the socket task that delivers `Debugger.paused` among them) to
+//!   another thread first. At most `MAX_PAUSED_ISOLATES` pauses may hold a
+//!   thread; one beyond that is declined (the loop returns at once, so
+//!   execution continues, and a warning says why).
 //! - A pause ends when the last debugger session disconnects, so a vanished
 //!   client cannot wedge the isolate.
 //!
@@ -44,8 +45,11 @@ use v8::inspector::{
 /// The one context group an isolate has: every cell shares its realm.
 const CONTEXT_GROUP: i32 = 1;
 
-/// Pauses in flight across the node; see the module comment.
+/// Pauses in flight across the node, and the most that are allowed. Each one
+/// holds a thread (see `crate::inspector::blocking`), so the count is bounded
+/// even though no pause takes a Tokio worker for good.
 static PAUSED_ISOLATES: AtomicUsize = AtomicUsize::new(0);
+const MAX_PAUSED_ISOLATES: usize = 16;
 
 /// How often a paused loop re-checks that a debugger is still attached.
 const PAUSE_POLL: Duration = Duration::from_millis(250);
@@ -142,11 +146,9 @@ struct Client {
 }
 
 impl Client {
-    /// Whether this pause may block a Tokio worker. See the module comment.
+    /// Whether this pause may take another thread. See the module comment.
     fn pause_allowed() -> bool {
-        let workers = crate::inspector::host_workers();
-        let paused = PAUSED_ISOLATES.fetch_add(1, Ordering::AcqRel);
-        if paused + 2 > workers {
+        if PAUSED_ISOLATES.fetch_add(1, Ordering::AcqRel) >= MAX_PAUSED_ISOLATES {
             PAUSED_ISOLATES.fetch_sub(1, Ordering::AcqRel);
             return false;
         }
@@ -161,9 +163,8 @@ impl V8InspectorClientImpl for Client {
             tracing::warn!(
                 event = "inspector_pause_declined",
                 target = shared.target.id(),
-                "the debugger paused an isolate, but pausing would block every Tokio worker \
-                 that serves the listener; execution continues. Raise CELLD_TOKIO_THREADS to \
-                 debug with breakpoints"
+                "the debugger paused an isolate, but too many isolates are already paused; \
+                 execution continues"
             );
             return;
         }
@@ -171,12 +172,18 @@ impl V8InspectorClientImpl for Client {
         shared.target.set_paused(true);
         // A debugger that stops answering is a disconnect: the socket task
         // pushes `Disconnect`, and the check below sees no session left.
-        while !shared.quit.get() && !shared.sessions.borrow().is_empty() {
-            match shared.target.pop_wait(PAUSE_POLL) {
-                Some(message) => shared.process(message),
-                None => {}
+        // The loop blocks this thread for as long as the debugger holds the
+        // pause. `blocking` first hands the worker's other tasks (the socket
+        // task that will deliver `Debugger.paused`, among them) to another
+        // thread; blocking a worker outright would strand whatever it had
+        // queued.
+        crate::inspector::blocking(|| {
+            while !shared.quit.get() && !shared.sessions.borrow().is_empty() {
+                if let Some(message) = shared.target.pop_wait(PAUSE_POLL) {
+                    shared.process(message);
+                }
             }
-        }
+        });
         shared.target.set_paused(false);
         PAUSED_ISOLATES.fetch_sub(1, Ordering::AcqRel);
     }
@@ -331,6 +338,18 @@ impl Worker {
         // `awaitPromise` settle: an idle isolate runs none of its own.
         if inspector.drain() {
             hs.perform_microtask_checkpoint();
+            // V8 finishes some commands (`HeapProfiler.takeHeapSnapshot`,
+            // `HeapProfiler.collectGarbage`) in a task it posts to the
+            // isolate's foreground queue, and answers only then. celld pumps
+            // that queue once per event turn, so an idle isolate would never
+            // answer; run it dry here, bounded so a task that reposts itself
+            // cannot hold the turn.
+            for _ in 0..1024 {
+                if !v8::Platform::pump_message_loop(&v8::V8::get_current_platform(), hs, false) {
+                    break;
+                }
+                hs.perform_microtask_checkpoint();
+            }
         }
     }
 }

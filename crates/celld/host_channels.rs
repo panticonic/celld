@@ -72,6 +72,39 @@ pub fn set_gate_tx(tx: tokio::sync::mpsc::UnboundedSender<GateReq>) {
     let _ = GATE_TX.set(tx);
 }
 
+/// A residency hold, asked for or given back by the isolate that runs the
+/// cell. The core decides (`celld_logic::State::hold_verdict`); the host loop
+/// owns the actor handle, so the isolate reaches it through this channel the way
+/// a facet reaches its stream.
+pub enum HoldReq {
+    /// Take a hold on the root cell `cell`, observed resident at `epoch`.
+    Acquire {
+        cell: String,
+        hold: celld_logic::HoldId,
+        epoch: u64,
+        reply: tokio::sync::oneshot::Sender<std::result::Result<(), HoldDenied>>,
+    },
+    /// Give a hold back. Idempotent; a hold the core no longer knows is
+    /// ignored, which is how a handle outlives its cell harmlessly.
+    Release {
+        cell: String,
+        hold: celld_logic::HoldId,
+    },
+}
+
+/// Why a hold was refused: a stable code for `error.code` and a message
+/// that says what to do about it.
+#[derive(Debug)]
+pub struct HoldDenied {
+    pub code: &'static str,
+    pub message: String,
+}
+
+pub(crate) static HOLD_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<HoldReq>> = OnceLock::new();
+pub fn set_hold_tx(tx: tokio::sync::mpsc::UnboundedSender<HoldReq>) {
+    let _ = HOLD_TX.set(tx);
+}
+
 /// A service-binding call: `env.NAME.fetch()`. Unlike a Durable Object call
 /// there is no identity to resolve — any isolate running `script` will do — so
 /// the runtime hands this straight to that script's stateless isolate pool.

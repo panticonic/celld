@@ -558,6 +558,7 @@ impl Generation {
                 services,
                 crons,
                 containers,
+                residency_classes,
                 fence_image: fence,
                 ..
             } = deployment;
@@ -575,6 +576,7 @@ impl Generation {
                     .with_queue_consumers(queue_catalog.clone())
                     .with_crons(if is_primary { crons } else { Vec::new() })
                     .with_containers(containers)
+                    .with_residency_classes(residency_classes)
                     .with_generation(id),
             );
             let pool = crate::runtime::StatelessRuntime::start(

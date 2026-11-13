@@ -78,6 +78,7 @@ pub(crate) use crate::host_channels::outbound_ws_tx;
 pub use crate::host_channels::set_asset_call_tx;
 pub use crate::host_channels::set_facet_tx;
 pub use crate::host_channels::set_gate_tx;
+pub use crate::host_channels::set_hold_tx;
 pub use crate::host_channels::set_kv_blob_store;
 pub use crate::host_channels::set_outbound_ws_tx;
 pub use crate::host_channels::set_queue_dispatch_tx;
@@ -87,6 +88,8 @@ pub use crate::host_channels::set_svc_rpc_tx;
 pub use crate::host_channels::AssetCallReq;
 pub use crate::host_channels::FacetReq;
 pub use crate::host_channels::GateReq;
+pub use crate::host_channels::HoldDenied;
+pub use crate::host_channels::HoldReq;
 pub use crate::host_channels::QueueDispatchReq;
 pub use crate::host_channels::QueueLeaseRef;
 pub use crate::host_channels::RpcCallReq;
@@ -97,6 +100,7 @@ pub use crate::host_channels::TestOutboundWsConnector;
 pub(crate) use crate::host_channels::ASSET_CALL_TX;
 pub(crate) use crate::host_channels::FACET_TX;
 pub(crate) use crate::host_channels::GATE_TX;
+pub(crate) use crate::host_channels::HOLD_TX;
 pub(crate) use crate::host_channels::QUEUE_DISPATCH_TX;
 pub(crate) use crate::host_channels::RPC_CALL_TX;
 pub(crate) use crate::host_channels::SVC_CALL_TX;
@@ -649,6 +653,15 @@ pub enum CellJob {
         reply:
             tokio::sync::oneshot::Sender<Result<(celld_logic::wake::AlarmSnapshot, Option<u64>)>>,
     },
+    /// The core revoked residency holds on this cell (a drain, a forced swap or
+    /// an operator). Runs each handle's `onrevoked` handlers and finishes when
+    /// they have settled, which is what lets the core drop the hold early.
+    HoldsRevoked {
+        scope: String,
+        holds: Vec<u64>,
+        reason: String,
+        reply: tokio::sync::oneshot::Sender<Result<Option<u64>>>,
+    },
     #[cfg(celld_internal_tests)]
     SyncErrorForTest {
         scope: String,
@@ -668,6 +681,7 @@ impl CellJob {
             | CellJob::WsOpen { scope, .. }
             | CellJob::WsMessage { scope, .. }
             | CellJob::WsClosed { scope, .. }
+            | CellJob::HoldsRevoked { scope, .. }
             | CellJob::Alarm { scope, .. } => scope,
             #[cfg(celld_internal_tests)]
             CellJob::SyncErrorForTest { scope, .. } => scope,
@@ -708,6 +722,7 @@ impl CellJob {
             CellJob::WsOpen { reply, .. } => drop(reply.send(Err(error))),
             CellJob::WsMessage { reply, .. } => drop(reply.send(Err(error))),
             CellJob::WsClosed { reply, .. } => drop(reply.send(Err(error))),
+            CellJob::HoldsRevoked { reply, .. } => drop(reply.send(Err(error))),
             CellJob::Alarm { reply, .. } => drop(reply.send(Err(error))),
             #[cfg(celld_internal_tests)]
             CellJob::SyncErrorForTest { reply, .. } => drop(reply.send(Err(error))),
@@ -1934,6 +1949,16 @@ pub struct WorkerConfig {
     /// `containers` from the deployment: the classes whose `ctx.container`
     /// exists. Empty for a loaded worker.
     pub containers: Vec<crate::container::ContainerSpec>,
+    /// The Durable Object classes the deployment declared
+    /// `"celld": { "durable_objects": { "Class": { "residency": true } } }`
+    /// for: the classes whose cells may `ctx.residency.hold()`. Empty for a
+    /// loaded worker.
+    pub residency_classes: Vec<String>,
+    /// What a Worker Loader's `celld: { residency }` granted this loaded
+    /// worker. `None` for a deployment's own Worker, whose classes are
+    /// governed by `residency_classes`. A loaded worker never holds more than
+    /// the root cell it runs under (the host checks the root's class as well).
+    pub residency_grant: Option<bool>,
     /// The application generation this configuration belongs to. Every
     /// isolate built from it carries the value as a slot, so its host calls
     /// resolve against the deployment graph it was built with.
@@ -2070,6 +2095,8 @@ impl WorkerConfig {
             tail_reporting: false,
             crons: Vec::new(),
             containers: Vec::new(),
+            residency_classes: Vec::new(),
+            residency_grant: None,
             generation: 0,
             main_imports,
             module_imports,
@@ -2079,6 +2106,25 @@ impl WorkerConfig {
     pub fn with_containers(mut self, containers: Vec<crate::container::ContainerSpec>) -> Self {
         self.containers = containers;
         self
+    }
+
+    pub fn with_residency_classes(mut self, classes: Vec<String>) -> Self {
+        self.residency_classes = classes;
+        self
+    }
+
+    /// Grant (or refuse) residency to a loaded worker, per the loader's
+    /// `celld: { residency }`.
+    pub fn with_residency_grant(mut self, grant: bool) -> Self {
+        self.residency_grant = Some(grant);
+        self
+    }
+
+    /// Whether the deployment declared `residency` for cells of `class`.
+    pub fn residency_class(&self, class: &str) -> bool {
+        self.residency_classes
+            .iter()
+            .any(|declared| declared == class)
     }
 
     /// Whether cells of `class` supervise a container.
@@ -2447,6 +2493,8 @@ struct ActorRuntimeState {
     egress: EgressPolicy,
     resource_limits: Option<ResourceLimits>,
     tail_reporting: bool,
+    /// `WorkerConfig::residency_grant`, for a loaded worker.
+    residency_grant: Option<bool>,
     script_name: String,
     event_hooks: OnceLock<EventHooks>,
     /// See [`internals`].
@@ -5418,6 +5466,23 @@ fn begin_cell(tc: &mut v8::PinScope, job: CellJob, event_time: i64) -> Begun {
                     .ok_or_else(|| anyhow!("wsClosed threw"))
             })
         }
+        CellJob::HoldsRevoked {
+            scope,
+            holds,
+            reason,
+            reply,
+        } => start_cell_event(tc, &scope, Answer::Ack(reply), None, None, false, |tc| {
+            let f = internal_function(tc, "__residencyRevoked")?;
+            let ids = serde_json::to_string(&holds).unwrap_or_else(|_| "[]".into());
+            let arguments = [
+                v8::String::new(tc, &scope).unwrap().into(),
+                v8::String::new(tc, &ids).unwrap().into(),
+                v8::String::new(tc, &reason).unwrap().into(),
+            ];
+            let recv = v8::undefined(tc).into();
+            f.call(tc, recv, &arguments)
+                .ok_or_else(|| anyhow!("residency revocation threw"))
+        }),
         CellJob::Alarm {
             request_id,
             scope,
@@ -5827,6 +5892,7 @@ impl Worker {
             egress: config.egress.clone(),
             resource_limits: config.resource_limits,
             tail_reporting: config.tail_reporting,
+            residency_grant: config.residency_grant,
             script_name: script_name.to_string(),
             ..Default::default()
         });
@@ -5943,6 +6009,7 @@ impl Worker {
             inject_crons(scope, &config.crons)?;
             inject_workflows(scope, script_name, &config.workflow_bindings)?;
             inject_containers(scope, &config.containers)?;
+            inject_residency(scope, &config)?;
             inject_kv_limits(scope)?;
             inject_queue_config(scope, &config)?;
             populate_cf_exports(scope, ns, do_classes)?;
@@ -6796,6 +6863,8 @@ ops! { OP_NAMES, install_op_functions,
         "$$textDecoderDecodeOnce" => op_text_decoder_decode_once,
         "$$textDecoderFree" => op_text_decoder_free,
         "__alarm_set" => op_alarm_set,
+        "__residency_hold" => residency::op_residency_hold,
+        "__residency_release" => residency::op_residency_release,
         "__queue_alarm_set_wait" => op_queue_alarm_set_wait,
         "__alarm_get" => op_alarm_get,
         "__alarm_delete" => op_alarm_delete,
@@ -7412,6 +7481,19 @@ async fn loaded_worker_slot(
 /// tailReporting)` -> stub id. Builds a WorkerConfig from the supplied modules
 /// and registers its asynchronous load state. Compilation runs on Tokio's
 /// blocking pool. Calls wait for that result and use the normal turn driver.
+/// A Worker Loader's `celld: { ... }` option: capabilities granted to the
+/// loaded worker. One optional field per feature, so features that share the
+/// option never read each other's keys.
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct LoaderCelld {
+    residency: Option<bool>,
+    #[allow(dead_code)]
+    codegen: Option<bool>,
+    #[allow(dead_code)]
+    egress_identity: Option<bool>,
+}
+
 fn op_loader_load(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -7444,6 +7526,18 @@ fn op_loader_load(
         None => None,
     };
     let tail_reporting = args.get(6).boolean_value(scope);
+    // `celld: { codegen, residency, egressIdentity }`. The harness already
+    // vetted it against the caller's own capabilities; each feature reads only
+    // its own field, and an unknown key is refused here too.
+    let celld = match code.get("celld") {
+        Some(value) => match serde_json::from_value::<LoaderCelld>(value.clone()) {
+            Ok(celld) => celld,
+            Err(error) => {
+                return loader_throw(scope, &format!("worker loader: invalid celld: {error}"));
+            }
+        },
+        None => LoaderCelld::default(),
+    };
     let Some(main) = code.get("mainModule").and_then(|v| v.as_str()) else {
         return loader_throw(scope, "worker loader: missing mainModule");
     };
@@ -7684,6 +7778,7 @@ fn op_loader_load(
         .with_generation(generation)
         .with_egress(egress)
         .with_resource_limits(limits)
+        .with_residency_grant(celld.residency == Some(true))
         .with_tail_reporting(tail_reporting)
         .with_loader_env(loader_env),
     );
@@ -9956,6 +10051,7 @@ fn webcrypto_return_bytes(
 mod container;
 mod crypto;
 mod html_rewriter;
+mod residency;
 mod tcp;
 #[cfg(celld_internal_tests)]
 pub use tcp::test_extra_tls_root;
@@ -12483,9 +12579,10 @@ mod v8_strings;
 use bootstrap::{
     adopt_cell, adopt_embedded_cell, begin_event_context, build_env, end_event_context,
     harness_env, inject_compatibility_flags, inject_containers, inject_crons, inject_kv_limits,
-    inject_namespace_keys, inject_queue_config, inject_routing, inject_storage_compatibility,
-    inject_workflows, install_harness, install_prelude, populate_cf_exports, register_class,
-    register_entrypoints, validate_workflow_classes, EmbeddedStartup,
+    inject_namespace_keys, inject_queue_config, inject_residency, inject_routing,
+    inject_storage_compatibility, inject_workflows, install_harness, install_prelude,
+    populate_cf_exports, register_class, register_entrypoints, validate_workflow_classes,
+    EmbeddedStartup,
 };
 use modules::{
     compile_module, host_import_module_dynamically, install_lazy_globals, op_builtin_module,

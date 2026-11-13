@@ -6,8 +6,9 @@ use crate::cell_host::CellHost;
 use crate::js::{HttpResponse, WsBatch};
 use crate::machine::{
     ownership_on_evict_from_environment, pressure_config_from_environment,
-    random_process_generation, DEFAULT_MAX_OUTBOUND_WEBSOCKETS,
-    DEFAULT_OWNER_LOG_RECOVERY_ATTEMPTS, DEFAULT_OWNER_LOG_RECOVERY_BACKOFF_MS,
+    random_process_generation, DEFAULT_HOLD_GRACE_MS, DEFAULT_MAX_HOLDS_PER_CELL,
+    DEFAULT_MAX_OUTBOUND_WEBSOCKETS, DEFAULT_OWNER_LOG_RECOVERY_ATTEMPTS,
+    DEFAULT_OWNER_LOG_RECOVERY_BACKOFF_MS,
 };
 use crate::ownership_store::{now_ms, BucketOwnership, LeaseCasError};
 use crate::peer_auth::{self, PeerAuth};
@@ -69,6 +70,9 @@ pub enum TimerSlot {
     /// Keyed like `QueuedActivation`: one pending retry per cell, and a
     /// newer episode's arming supersedes a stale one.
     OwnerLogRecoveryRetry(String, u64),
+    /// Keyed like `QueuedActivation`: each revocation has its own grace
+    /// period, and a later one must not disarm an earlier one.
+    HoldRevokeGrace(String, u64),
 }
 
 impl TimerSlot {
@@ -83,6 +87,9 @@ impl TimerSlot {
             }
             Timer::OwnerLogRecoveryRetry { cell, generation } => {
                 Self::OwnerLogRecoveryRetry(cell.clone(), *generation)
+            }
+            Timer::HoldRevokeGrace { cell, generation } => {
+                Self::HoldRevokeGrace(cell.clone(), *generation)
             }
         }
     }
@@ -579,6 +586,23 @@ pub enum Message {
         cell: String,
         reply: EvictionReply,
     },
+    /// A cell's application asked to stay resident (`ctx.residency.hold()`).
+    /// The reply is the core's verdict: refusal is synchronous and final.
+    Hold {
+        cell: String,
+        hold: u64,
+        epoch: u64,
+        reply: oneshot::Sender<Result<(), celld_logic::HoldRefusal>>,
+    },
+    /// Holds the application gave back, or whose `onrevoked` handlers settled.
+    HoldsReleased {
+        cell: String,
+        holds: Vec<u64>,
+    },
+    /// An operator or owner asks for every hold on the cell to end.
+    RevokeHolds {
+        cell: String,
+    },
     InvalidateRemote {
         cell: String,
         node: String,
@@ -679,6 +703,11 @@ pub struct DrainStatus {
     /// Released cells waiting for a successor's ownership acknowledgement.
     /// These hold the shutdown pacing permits.
     pub adopting: usize,
+    /// Cells told their residency holds are revoked that have not yet
+    /// finished winding down. A clean-reload drain waits for zero, so a
+    /// holder's `onrevoked` handlers run before the process goes; the core
+    /// bounds the wait by `hold_grace_ms`.
+    pub revoking_holds: usize,
     /// Monotonic ownership acknowledgements. A progressing handoff can
     /// take longer than one stall interval when the node owns many cells.
     pub handed_off: u64,
@@ -1745,6 +1774,43 @@ impl AppHandle {
             .map_err(|_| EvictError::Failed(EvictFailure::ReplyLost))?
     }
 
+    /// Ask the core to keep `cell` resident until `release_hold`. `Err` says
+    /// why the node refused; a refusal retains nothing.
+    pub async fn hold(
+        &self,
+        cell: String,
+        hold: u64,
+        epoch: u64,
+    ) -> Result<(), celld_logic::HoldRefusal> {
+        let (reply, receive) = oneshot::channel();
+        self.tx
+            .send(Message::Hold {
+                cell,
+                hold,
+                epoch,
+                reply,
+            })
+            .map_err(|_| celld_logic::HoldRefusal::NodeUnavailable)?;
+        receive
+            .await
+            .map_err(|_| celld_logic::HoldRefusal::NodeUnavailable)?
+    }
+
+    /// Give a hold back. Idempotent, and harmless for a cell that is gone.
+    pub fn release_hold(&self, cell: String, hold: u64) {
+        let _ = self.tx.send(Message::HoldsReleased {
+            cell,
+            holds: vec![hold],
+        });
+    }
+
+    /// End every residency hold on `cell`: the application is told and the
+    /// holds drop when its handlers settle or `CELLD_HOLD_GRACE_MS` passes. The
+    /// cell stays resident until something else evicts it.
+    pub fn revoke_holds(&self, cell: String) {
+        let _ = self.tx.send(Message::RevokeHolds { cell });
+    }
+
     pub async fn invalidate_remote(&self, cell: String, node: String, epoch: u64) {
         let (reply, receive) = oneshot::channel();
         if self
@@ -2566,6 +2632,14 @@ impl Actor {
                     )?,
                     idle_evict_ms: crate::env_vars::positive::<u64>("CELLD_IDLE_EVICT_S")?
                         .map(|seconds| seconds.saturating_mul(1_000)),
+                    hold_grace_ms: crate::env_vars::positive_or(
+                        "CELLD_HOLD_GRACE_MS",
+                        DEFAULT_HOLD_GRACE_MS,
+                    )?,
+                    max_holds_per_cell: crate::env_vars::positive_or(
+                        "CELLD_MAX_HOLDS_PER_CELL",
+                        DEFAULT_MAX_HOLDS_PER_CELL,
+                    )?,
                     pressure: pressure_config_from_environment()?,
                     max_outbound_websockets: crate::env_vars::positive_or(
                         "CELLD_MAX_OUTBOUND_WEBSOCKETS",
@@ -2868,6 +2942,7 @@ impl Actor {
                     evicting: self.state.evicting(),
                     releasing: self.state.releasing(),
                     adopting: self.state.adopting(),
+                    revoking_holds: self.state.revoking_holds(),
                     handed_off: self.state.handed_off(),
                 });
             }
@@ -3051,6 +3126,26 @@ impl Actor {
                     out,
                 );
             }
+            Message::Hold {
+                cell,
+                hold,
+                epoch,
+                reply,
+            } => {
+                self.drive(
+                    Event::HoldAcquired {
+                        cell: cell.clone(),
+                        hold,
+                        epoch,
+                    },
+                    out,
+                );
+                let _ = reply.send(self.state.hold_verdict(&cell, hold, epoch));
+            }
+            Message::HoldsReleased { cell, holds } => {
+                self.drive(Event::HoldsReleased { cell, holds }, out)
+            }
+            Message::RevokeHolds { cell } => self.drive(Event::RevokeHolds { cell }, out),
             Message::Evict { reply, .. } if self.preserving => {
                 let _ = reply.send(Err(EvictError::Refused(EvictRefusal::NodeUnavailable)));
             }
@@ -4188,6 +4283,36 @@ impl Actor {
                     if reply.send(WorkerRouted { request, route }).is_err() && reserved {
                         immediate.push_back(Event::ActivityFinished { request });
                     }
+                }
+            }
+            Effect::RevokeHolds {
+                cell,
+                holds,
+                reason,
+            } => {
+                // Tell the application, wait for its handlers, then report the
+                // holds released. The core already armed the grace timer, so
+                // an application that never answers costs at most that.
+                tracing::info!(
+                    event = "residency_revoked",
+                    cell = %cell,
+                    holds = holds.len(),
+                    reason = reason.reason(),
+                    "residency holds revoked"
+                );
+                match self.host.clone() {
+                    Some(runtime) => {
+                        out.spawn_scoped(async move {
+                            if let Err(error) = runtime
+                                .holds_revoked(cell.clone(), holds.clone(), reason.reason())
+                                .await
+                            {
+                                eprintln!("celld residency revocation failed: {error:#}");
+                            }
+                            CompletedEffect::plain(Event::HoldsReleased { cell, holds })
+                        });
+                    }
+                    None => immediate.push_back(Event::HoldsReleased { cell, holds }),
                 }
             }
             Effect::CloseWebSocket { cell, websocket } => {

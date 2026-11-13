@@ -493,6 +493,33 @@ pub(super) fn inject_containers(
     Ok(())
 }
 
+/// `__cell.residency`: the classes whose objects may `ctx.residency.hold()`.
+///
+/// A deployment's Worker lists its declared classes. A loaded Worker carries
+/// one `"*"` entry that says whether its loader's `celld: { residency }`
+/// granted it. This is only the harness's own early answer -- the host refuses
+/// again in `op_residency_hold` and in the host loop, against the deployment.
+pub(super) fn inject_residency(
+    scope: &mut v8::PinScope,
+    config: &super::WorkerConfig,
+) -> Result<()> {
+    let cell = cell_state(scope)?;
+    let map = v8::Object::new(scope);
+    let value = v8::Boolean::new(scope, true);
+    for class in &config.residency_classes {
+        let key = v8::String::new(scope, class).ok_or_else(|| anyhow!("residency class"))?;
+        map.set(scope, key.into(), value.into());
+    }
+    if let Some(grant) = config.residency_grant {
+        let key = v8::String::new(scope, "*").unwrap();
+        let value = v8::Boolean::new(scope, grant);
+        map.set(scope, key.into(), value.into());
+    }
+    let key = v8::String::new(scope, "residency").unwrap();
+    cell.set(scope, key.into(), map.into());
+    Ok(())
+}
+
 /// Register the workflow cell class under its script-scoped name.
 ///
 /// `harness.js` registers `__WorkflowCell` under the bare `__Workflow` at

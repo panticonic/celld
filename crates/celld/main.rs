@@ -600,6 +600,61 @@ impl WebSocketRouteTiming {
     }
 }
 
+/// A residency hold request from the isolate that runs the cell.
+///
+/// The deployment's declaration is checked here, against the root cell's class,
+/// and only then does the core decide whether the node can afford the hold.
+async fn dispatch_hold(app: AppHandle, req: celld::js::HoldReq) {
+    use celld::js::{HoldDenied, HoldReq};
+    match req {
+        HoldReq::Release { cell, hold } => app.release_hold(cell, hold),
+        HoldReq::Acquire {
+            cell,
+            hold,
+            epoch,
+            reply,
+        } => {
+            let declared = app
+                .runtime
+                .as_ref()
+                .is_some_and(|runtime| runtime.residency_declared(&cell));
+            let verdict = if !declared {
+                let class = cell
+                    .split_once(':')
+                    .map_or(cell.as_str(), |(class, _)| class);
+                Err(HoldDenied {
+                    code: "ERR_RESIDENCY_NOT_DECLARED",
+                    message: format!(
+                        "class {class} did not declare residency: add \
+                         \"celld\": {{ \"durable_objects\": {{ \"{class}\": {{ \"residency\": true }} }} }} \
+                         to the deployment config"
+                    ),
+                })
+            } else {
+                app.hold(cell, hold, epoch)
+                    .await
+                    .map_err(|refusal| HoldDenied {
+                        code: match refusal {
+                            celld_logic::HoldRefusal::NodeBudget { .. } => "ERR_RESIDENCY_BUDGET",
+                            celld_logic::HoldRefusal::CellLimit { .. } => {
+                                "ERR_RESIDENCY_CELL_LIMIT"
+                            }
+                            celld_logic::HoldRefusal::CellLeaving => "ERR_RESIDENCY_LEAVING",
+                            celld_logic::HoldRefusal::CellNotResident => {
+                                "ERR_RESIDENCY_NOT_RESIDENT"
+                            }
+                            celld_logic::HoldRefusal::NodeUnavailable => {
+                                "ERR_RESIDENCY_UNAVAILABLE"
+                            }
+                        },
+                        message: refusal.to_string(),
+                    })
+            };
+            let _ = reply.send(verdict);
+        }
+    }
+}
+
 /// A facet stream request from the isolate that runs the facet.
 async fn dispatch_facet(app: AppHandle, req: celld::js::FacetReq) {
     use celld::js::FacetReq;
@@ -2876,6 +2931,7 @@ async fn handle_internal(
     let do_scope = path.strip_prefix("/do/");
     let cell_scope = path.strip_prefix("/cell/");
     let evict_scope = path.strip_prefix("/evict/");
+    let revoke_scope = path.strip_prefix("/revoke-holds/");
     let result = match path.as_str() {
         "/peer/probe" => internal_probe(request, app).await,
         "/peer/handoff" => internal_handoff(request, app).await,
@@ -3081,6 +3137,21 @@ async fn handle_internal(
                         format!("{{\"error\":\"{error:?}\"}}"),
                     ),
                 }
+            }
+        }
+        // Operator action: end every residency hold on a cell. The cell's
+        // application is told and its holds drop when its handlers settle or
+        // CELLD_HOLD_GRACE_MS passes; the cell then evicts like any idle cell.
+        _ if revoke_scope.is_some() && request.method() != hyper::Method::POST => {
+            response(StatusCode::METHOD_NOT_ALLOWED, "method not allowed")
+        }
+        _ if revoke_scope.is_some() => {
+            let cell = revoke_scope.expect("checked prefix");
+            if !celld_logic::cell::valid_cell_scope(cell) {
+                malformed_scope()
+            } else {
+                app.revoke_holds(cell.to_string());
+                response(StatusCode::ACCEPTED, r#"{"ok":true}"#)
             }
         }
         _ if evict_scope.is_some() => {
@@ -4057,6 +4128,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                     services: Vec::new(),
                     crons,
                     containers: Vec::new(),
+                    residency_classes: Vec::new(),
                     fence_image: None,
                 }),
                 GenerationOptions {
@@ -4337,6 +4409,16 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
         tokio::spawn(async move {
             while let Some(req) = facet_rx.recv().await {
                 tokio::spawn(dispatch_facet(app.clone(), req));
+            }
+        });
+    }
+    let (hold_tx, mut hold_rx) = mpsc::unbounded_channel();
+    celld::js::set_hold_tx(hold_tx);
+    {
+        let app = app.clone();
+        tokio::spawn(async move {
+            while let Some(req) = hold_rx.recv().await {
+                tokio::spawn(dispatch_hold(app.clone(), req));
             }
         });
     }
@@ -5238,7 +5320,9 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                         && status.releasing == 0
                         && status.adopting == 0
                 }
-                ShutdownMode::Preserve => status.activating == 0 && status.evicting == 0,
+                ShutdownMode::Preserve => {
+                    status.activating == 0 && status.evicting == 0 && status.revoking_holds == 0
+                }
             });
             let completely_drained = match shutdown_mode {
                 ShutdownMode::Handoff => core_drained,

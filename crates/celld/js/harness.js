@@ -2579,6 +2579,114 @@ class Container {
     return Promise.reject(new Error("interceptOutboundTcp() is not implemented in celld"));
   }
 }
+// ---- explicit residency: ctx.residency.hold() ----
+//
+// A hold keeps the cell's runtime in memory until the holder releases it, so
+// state that cannot be rebuilt (a live JS heap, an open parser, a warm model)
+// survives idle eviction and memory-pressure shedding. Nothing here decides
+// anything: the core grants or refuses (`celld_logic::State`), and a refusal
+// rejects `hold()` itself. The handles live in one per-isolate registry so the
+// host can reach them when the core revokes a hold.
+const __residencyHolds = new Map();
+const __RESIDENCY_ERRORS = new Set([
+  "ERR_RESIDENCY_NOT_DECLARED", "ERR_RESIDENCY_NOT_GRANTED",
+  "ERR_RESIDENCY_BUDGET", "ERR_RESIDENCY_CELL_LIMIT", "ERR_RESIDENCY_LEAVING",
+  "ERR_RESIDENCY_NOT_RESIDENT", "ERR_RESIDENCY_UNAVAILABLE",
+  "ERR_RESIDENCY_NO_CELL",
+]);
+// The host reports a refusal as `ERR_RESIDENCY_X: message`; surface the code.
+const __residencyError = (error) => {
+  const text = String(error?.message ?? error);
+  const colon = text.indexOf(": ");
+  const code = colon < 0 ? "" : text.slice(0, colon);
+  if (!__RESIDENCY_ERRORS.has(code)) return error;
+  const out = new Error(text.slice(colon + 2));
+  out.name = "ResidencyError";
+  out.code = code;
+  return out;
+};
+class ResidencyHold {
+  constructor(cell, id) {
+    this._cell = cell;
+    this._id = id;
+    this._done = false;
+    this._reason = undefined;
+    this.onrevoked = null;
+    // Resolves once the hold has ended, for any reason: the holder released
+    // it, or the node revoked it ("drain", "swap", "operator") and the
+    // `onrevoked` handler finished.
+    this.released = new Promise((resolve) => { this._resolve = resolve; });
+  }
+  // Whether this hold has ended.
+  get isReleased() { return this._done; }
+  // Why the node revoked this hold, or undefined for a hold still standing or
+  // one the holder released itself.
+  get revokedReason() { return this._reason; }
+  // Give the hold back. Idempotent. After the last hold of a cell ends the
+  // cell is an ordinary idle cell again: the node may evict it on its usual
+  // terms, and it does not stop being usable for requests.
+  release() {
+    if (this._done) return;
+    this._done = true;
+    __residencyHolds.delete(this._id);
+    __residency_release(this._cell, this._id);
+    this._resolve({ reason: "released" });
+  }
+  [Symbol.dispose]() { this.release(); }
+  async _revoke(reason) {
+    if (this._done) return;
+    this._reason = reason;
+    try {
+      if (typeof this.onrevoked === "function")
+        await this.onrevoked({ reason });
+    } catch (error) {
+      // A failing handler must not keep the node waiting for the full grace.
+      console.error("ctx.residency onrevoked handler failed:", error);
+    } finally {
+      this._done = true;
+      __residencyHolds.delete(this._id);
+      this._resolve({ reason });
+    }
+  }
+}
+class DurableObjectResidency {
+  constructor(state, enabled) {
+    this._state = state;
+    // The harness's own early answer; the host authorizes again.
+    this.enabled = enabled;
+  }
+  // Keep this object resident until the returned handle is released.
+  //
+  // Resolves to a handle with `release()`, `released` and `onrevoked`, or
+  // rejects with a `ResidencyError` whose `code` says why the node refused:
+  // ERR_RESIDENCY_NOT_DECLARED, ERR_RESIDENCY_BUDGET, ERR_RESIDENCY_CELL_LIMIT,
+  // ERR_RESIDENCY_LEAVING and so on. A refusal retains nothing, and an accepted
+  // hold is never silently taken back for want of budget; it ends when the
+  // holder releases it, when the node is draining or swapping generations
+  // (`onrevoked` runs first), or when the object's isolate stops.
+  async hold() {
+    if (!this.enabled) {
+      // A loaded worker's table has one "*" entry, true or false.
+      if (Object.prototype.hasOwnProperty.call(__cell.residency, "*"))
+        throw __residencyError(new Error(
+          "ERR_RESIDENCY_NOT_GRANTED: the Worker Loader did not grant this " +
+          "worker `celld: { residency: true }`."));
+      throw __residencyError(new Error(
+        "ERR_RESIDENCY_NOT_DECLARED: this Durable Object class did not declare " +
+        "residency. Add \"celld\": { \"durable_objects\": { \"<Class>\": " +
+        "{ \"residency\": true } } } to the deployment config."));
+    }
+    let granted;
+    try {
+      granted = JSON.parse(await __residency_hold(this._state._scope));
+    } catch (error) {
+      throw __residencyError(error);
+    }
+    const hold = new ResidencyHold(granted.cell, granted.hold);
+    __residencyHolds.set(granted.hold, hold);
+    return hold;
+  }
+}
 class DurableObjectState {
   constructor(scope) {
     this._scope = scope;
@@ -2597,6 +2705,10 @@ class DurableObjectState {
         __cell.idNames[scope])
       : typeof facet.id === "string" ? facet.id : new DurableObjectId(...facet.id);
     this.props = facet?.props;
+    this.residency = new DurableObjectResidency(
+      this,
+      __cell.residency[className] === true ||
+        (facet !== undefined && __cell.residency["*"] === true));
     // A class outside `containers` has no `ctx.container`, which is what
     // the `@cloudflare/containers` constructor checks.
     if (__cell.containers[className]) this.container = new Container(scope);
@@ -3413,10 +3525,43 @@ __celld.__makeLoader = () => {
     };
     return { env: __sc_encode(project(value)), envRoutes };
   };
-  const encodeModules = (c) => {
+  // `celld: { codegen, residency, egressIdentity }`: celld-only capabilities
+  // the loaded worker is granted. A loader can never grant more than it holds,
+  // so `residency: true` needs the Durable Object that calls the loader to have
+  // declared residency itself (or to be a loaded worker that was granted it).
+  // The host refuses again when a held cell's class did not declare it.
+  const validateCelld = (celld, caller) => {
+    if (celld === null || typeof celld !== "object" || Array.isArray(celld))
+      throw new TypeError("celld must be an object.");
+    const known = ["codegen", "residency", "egressIdentity"];
+    for (const key of Object.keys(celld)) {
+      if (!known.includes(key))
+        throw new TypeError(
+          `Unknown celld option ${JSON.stringify(key)}; celld accepts ` +
+          `${known.join(", ")}.`);
+      if (typeof celld[key] !== "boolean")
+        throw new TypeError(`celld.${key} must be a boolean.`);
+    }
+    if (celld.residency === true) {
+      const colon = caller === undefined ? -1 : caller.indexOf(":");
+      const className = caller === undefined ? undefined
+        : colon < 0 ? caller : caller.slice(0, colon);
+      const held = (className !== undefined &&
+        __cell.residency[className] === true) ||
+        __cell.residency["*"] === true;
+      if (!held)
+        throw new TypeError(
+          "celld.residency cannot be granted: the Durable Object that calls " +
+          "this loader did not declare residency itself, and a loader cannot " +
+          "grant a capability it does not hold.");
+    }
+  };
+  const encodeModules = (c, caller) => {
     if (c === null || typeof c !== "object" || c.modules === null
         || typeof c.modules !== "object")
       return { config: c, wasm: [], outbound: undefined, tails: [] };
+    if (Object.prototype.hasOwnProperty.call(c, "celld") && c.celld !== undefined)
+      validateCelld(c.celld, caller);
     // workerd requires the date, and names the missing value as it does.
     if (typeof c.compatibilityDate !== "string")
       throw new Error(`Invalid compatibility date: ${c.compatibilityDate}`);
@@ -3496,17 +3641,21 @@ __celld.__makeLoader = () => {
   };
   // getCode is deferred into a microtask so a throw (or async getCode)
   // surfaces as a rejection when the worker is first used, not at get()/load().
-  const loadFrom = (getCode) =>
-    Promise.resolve().then(getCode)
+  const loadFrom = (getCode) => {
+    // The object calling the loader, read now: `getCode` runs in a later turn.
+    const caller = __actorEventStack.length === 0 ? undefined
+      : __actorEventStack[__actorEventStack.length - 1].scope;
+    return Promise.resolve().then(getCode)
       .then((c) => {
         const {
           config, wasm, outbound, outboundProps, env, envRoutes, tails,
-        } = encodeModules(c);
+        } = encodeModules(c, caller);
         const id = __loader_load(
           JSON.stringify(config), wasm, outbound, outboundProps, env,
           envRoutes, tails.length !== 0);
         return { id, tails };
       });
+  };
   return {
     load(code) { return makeStub(track(loadFrom(() => code))); },
     get(name, getCode) {
@@ -3965,6 +4114,15 @@ const __cellRelease = (scope) => {
   delete __cell.idNames[scope];
   delete __cell.facetConfigs[scope];
   __brokenActors.delete(scope);
+  // A residency hold dies with the runtime that took it (a crash, a reset, a
+  // swap, an eviction): the core has already cleared its side, so this settles
+  // the handle and drops the registry entry that would otherwise leak.
+  for (const hold of [...__residencyHolds.values()]) {
+    if (hold._cell !== scope) continue;
+    hold._done = true;
+    __residencyHolds.delete(hold._id);
+    hold._resolve({ reason: "stopped" });
+  }
   // An abandoned block can never run `__blockLeave`. A normal eviction
   // cannot abandon a block because its event keeps the cell in flight. A
   // stop that waits for nobody can, so the release drops every block record
@@ -5850,6 +6008,19 @@ __celld.__wsClosed = async (scope, wsId, code, reason, wasClean) => {
     __endActorEvent(actorEvent);
   }
 };
+// The core revoked residency holds on this cell: a drain, a forced generation
+// swap, or an operator. Run each handle's `onrevoked` handler and finish when
+// they have all settled, which is what lets the node drop the holds early
+// rather than wait out its grace period.
+__celld.__residencyRevoked = async (scope, idsJson, reason) => {
+  const actorEvent = __beginActorEvent(scope);
+  try {
+    const ids = JSON.parse(idsJson);
+    await Promise.all(ids.map((id) => __residencyHolds.get(id)?._revoke(reason)));
+  } finally {
+    __endActorEvent(actorEvent);
+  }
+};
 // called by celld's scheduler when an alarm is due. Returns a promise.
 __celld.__fireAlarm = async (scope, scheduledTime, retryCount) => {
   const actorEvent = __beginActorEvent(scope);
@@ -5984,6 +6155,7 @@ const __cell = __celld.__cell = {
   crons: [],
   workflows: {},
   containers: {},
+  residency: {},
   instances: {},
   facetConfigs: {},
   env: {},

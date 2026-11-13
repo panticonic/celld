@@ -19,7 +19,7 @@ use crate::protocol::{
     ModuleKind, ModuleRef, QueueConsumerAttachment, QueueConsumerConfig, QueueConsumerDeployment,
     Rollout, RunWorkerFirst, FEATURE_ASSETS_V1, FEATURE_CONTAINERS_V1, FEATURE_CRON_V1,
     FEATURE_D1_V1, FEATURE_KV_V1, FEATURE_PYTHON_WORKERS_V1, FEATURE_QUEUES_V1, FEATURE_R2_V1,
-    FEATURE_SQLITE_VEC_V1, FEATURE_WASM_V1, FEATURE_WORKFLOWS_V1,
+    FEATURE_RESIDENCY_V1, FEATURE_SQLITE_VEC_V1, FEATURE_WASM_V1, FEATURE_WORKFLOWS_V1,
     QUEUE_CONSUMER_ATTACHMENT_SCHEMA_VERSION,
 };
 use anyhow::{anyhow, bail, Context};
@@ -35,7 +35,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+pub mod celld_block;
 mod python;
+pub use celld_block::{CelldDeclaration, ClassCapabilities};
 
 /// Config keys we understand. Anything else is an error: refusing is
 /// compat-safe, guessing produces confusing activation failures later.
@@ -58,6 +60,7 @@ const SUPPORTED_KEYS: &[&str] = &[
     "r2_buckets",
     "worker_loaders",
     "containers",
+    "celld",
     "no_bundle",
     "define",
     "rules",
@@ -319,6 +322,8 @@ struct Project {
     has_queues: bool,
     has_r2: bool,
     containers: Vec<ContainerDecl>,
+    /// The config's `celld` block.
+    celld: CelldDeclaration,
     /// Set when `main` is a `.py` file: the Python behavior its
     /// compatibility date and flags select.
     python: Option<python::PythonCompat>,
@@ -700,6 +705,7 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
         crons: project.crons.clone(),
         containers: container_specs.clone(),
         fence_image: fence_image.clone(),
+        celld: project.celld.clone(),
         queue_consumers: project.queue_consumers,
         // Each capability the manifest depends on is named here, so a node
         // that predates it rejects the deployment up front instead of
@@ -738,6 +744,9 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
             }
             if python_runtime {
                 features.push(FEATURE_PYTHON_WORKERS_V1.to_string());
+            }
+            if !project.celld.residency_classes().is_empty() {
+                features.push(FEATURE_RESIDENCY_V1.to_string());
             }
             features
         },
@@ -1995,6 +2004,12 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
     }
 
     let containers = read_containers(object, &do_classes, &sqlite_classes)?;
+    let celld = celld_block::read(object, &do_classes)?;
+    if !celld.is_empty() {
+        // Part of the deployment's identity: granting a capability is a new
+        // deployment, the way a new binding is.
+        metadata.insert("celld".into(), json!(celld));
+    }
     Ok(Project {
         script_name,
         no_bundle,
@@ -2011,6 +2026,7 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         queue_consumers,
         has_r2: !r2_buckets.is_empty(),
         containers,
+        celld,
         python,
     })
 }

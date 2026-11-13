@@ -723,6 +723,8 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       facet with the abort reason, ends the facet's fetches in flight, and a root
       handler settled by another event's turn answers although an operation of
       its own never ends. Detail in `docs/fork/upstream-findings.md` (E7).
+    - **Streaming `Response.clone()` (E8).** Tees the body, as `Request.clone()`
+      did; a body that was already read still refuses.
 
 ## 4. Determinism: fixes over the earlier plans
 

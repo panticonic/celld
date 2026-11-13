@@ -25,6 +25,8 @@ supports, one service or API at a time:
 - `kv/` — key reads, writes, and deletes in a KV namespace
 - `queues/` — a producer and a consumer, with retries and a dead-letter queue
 - `async/` — a timer and asynchronous Durable Object storage
+- `clone-stream/` — `clone()` of a response or request whose body is a stream tees
+  it; driven by `tests/e2e/scenarios/compat-clone-stream.mjs`
 - `body/` — request and response bodies
 - `router/` — Worker-to-Durable-Object routing
 - `wsecho/` — WebSocket echo with hibernation

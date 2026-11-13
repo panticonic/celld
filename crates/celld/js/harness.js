@@ -368,10 +368,17 @@ globalThis.Response = class Response {
   }
   clone() {
     if (this.bodyUsed) throw new TypeError("Body has already been consumed");
-    if (this._bodyBytes === null)
-      throw new TypeError("Cannot clone a streaming response before consumption");
+    let body = this.body === null ? null : this._bodyBytes;
+    if (this._bodyBytes === null) {
+      // A streaming body is teed, as workerd does: this response keeps one
+      // branch and the clone gets the other, and either can be read without
+      // the other having been read first.
+      const [left, right] = this.body.tee();
+      this.body = left;
+      body = right;
+    }
     const response = new Response(
-      this.body === null ? null : this._bodyBytes,
+      body,
       {
         status: this.status, statusText: this.statusText, headers: this.headers,
         webSocket: this.webSocket, __wsTarget: this._wsTarget, cf: this.cf,

@@ -1,6 +1,9 @@
 //! `engine_digest()`: the hash of everything that decides what a replicated
 //! program computes. Chronolog's `digestNativeEngineManifest`, for this engine.
 
+// Test code: the workspace clippy.toml restrictions are for the celld runtime.
+#![allow(clippy::disallowed_macros, clippy::disallowed_methods, clippy::excessive_precision)]
+
 use celld_dolt_exec::{engine_digest, engine_digest_hex, engine_manifest, EngineManifest};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;

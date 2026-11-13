@@ -8,6 +8,9 @@
 //! `db.setDeterministicContext(1700000000000n, <seed>, null)` and
 //! `SELECT CAST(random() AS TEXT), hex(randomblob(70)), CAST(random() AS TEXT), hex(randomblob(1))`.
 
+// Test code: the workspace clippy.toml restrictions are for the celld runtime.
+#![allow(clippy::disallowed_macros, clippy::disallowed_methods, clippy::excessive_precision)]
+
 mod common;
 
 use celld_dolt_exec::pin_clock;

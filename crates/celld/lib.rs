@@ -22,6 +22,7 @@ mod conformance_facet_failure_tests {
     include!(env!("CELLD_CONFORMANCE_FACET_FAILURE_TESTS"));
 }
 pub mod assets;
+pub mod dolt_exec;
 #[cfg(not(celld_internal_tests))]
 pub mod asyncrt;
 // The internal test flag alone selects the simulated asyncrt, so an external

@@ -16,9 +16,6 @@ build = "build.rs"
 [lib]
 path = "lib.rs"
 
-[lints.clippy]
-disallowed_macros = "forbid"
-
 [dependencies]
 # A direct dependency on the vendored libsqlite3-sys (the DoltLite build) is
 # what lets build.rs read the DEP_SQLITE3_* build metadata it publishes.

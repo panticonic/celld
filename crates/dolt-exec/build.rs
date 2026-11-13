@@ -5,6 +5,10 @@
 //! changed patch or a changed amalgamation changes the digest even if nobody
 //! remembers to bump a version string.
 
+// A build script talks to cargo over stdout and reads the source tree directly;
+// the workspace clippy.toml's celld-runtime restrictions do not apply to it.
+#![allow(clippy::disallowed_macros, clippy::disallowed_methods)]
+
 use sha2::{Digest, Sha256};
 use std::{env, fs, path::PathBuf};
 

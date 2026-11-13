@@ -3,6 +3,9 @@
 //! (`sql-materializer.integration.test.ts`) and a differential corpus, run
 //! through `celld_dolt_exec::execute` on Dolt (prolly) stores.
 
+// Test code: the workspace clippy.toml restrictions are for the celld runtime.
+#![allow(clippy::disallowed_macros, clippy::disallowed_methods, clippy::excessive_precision)]
+
 mod common;
 
 use celld_dolt_exec::{

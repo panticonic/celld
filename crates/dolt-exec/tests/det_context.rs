@@ -2,6 +2,9 @@
 //! public Rust surface: the clock, the PRNG, localtime, the counters, Dolt
 //! timestamps, genesis, and concurrency.
 
+// Test code: the workspace clippy.toml restrictions are for the celld runtime.
+#![allow(clippy::disallowed_macros, clippy::disallowed_methods, clippy::excessive_precision)]
+
 mod common;
 
 use celld_dolt_exec::{pin_clock, Genesis};

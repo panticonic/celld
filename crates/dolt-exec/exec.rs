@@ -294,7 +294,7 @@ fn run(conn: &Connection, program: &Program, ctx: &ExecContext, own: bool) -> Re
     if own {
         exec_sql(db, "BEGIN IMMEDIATE")?;
     }
-    match run_inner(db, program, ctx, own, &state) {
+    match run_inner(db, program, ctx, own, state) {
         Ok(outcome) => Ok(outcome),
         Err(error) => {
             if own && unsafe { sys::sqlite3_get_autocommit(db) } == 0 {

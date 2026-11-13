@@ -34,10 +34,13 @@
 //! root on its last page. [`DoltStore::open`] truncates them before the
 //! application opens the file, so DoltLite never sees them as a torn tail.
 //!
-//! Limit: the LTX format skips SQLite's lock page (the 4 KiB page at 1 GiB),
-//! so a chunk file at or past 1 GiB cannot be captured; such a capture fails
-//! loudly (the output gate then refuses to acknowledge) rather than drop
-//! bytes. Run `dolt_gc` to compact, or see the design notes.
+//! The LTX format never carries SQLite's lock page (the 4 KiB page at
+//! 1 GiB, [`lock_pgno`]): every reader zero-fills it. A chunk file has no
+//! such page, so its pages map onto LTX page numbers that skip it: file page
+//! `n` is LTX page `n` below the lock page and `n + 1` from it on
+//! ([`ltx_pgno`]). An image rebuilt from LTX pages then has a 4 KiB hole at
+//! 1 GiB, which [`unmap_restored_image`] removes before the store opens it.
+//! A chunk file can therefore grow past 1 GiB.
 
 use std::path::{Path, PathBuf};
 
@@ -46,6 +49,66 @@ use crate::db::{CheckpointMode, SyncTiming};
 use crate::error::{Error, Result};
 use crate::ltx::{self, lock_pgno};
 use crate::{Pos, TXID};
+
+/// The LTX page number of the chunk file's page `file_page` (1-based): the
+/// LTX lock page is skipped. See the module documentation.
+pub fn ltx_pgno(file_page: u32) -> Option<u32> {
+    ltx_pgno_with_lock(file_page, lock_pgno(DOLT_PAGE_SIZE))
+}
+
+fn ltx_pgno_with_lock(file_page: u32, lock: u32) -> Option<u32> {
+    if file_page >= lock {
+        file_page.checked_add(1)
+    } else {
+        Some(file_page)
+    }
+}
+
+/// Remove the lock-page hole from a chunk file rebuilt from LTX pages (see
+/// the module documentation). A file that does not reach the lock page is
+/// left alone. Runs before anything opens the restored file.
+pub fn unmap_restored_image(path: &Path) -> Result<()> {
+    let page = DOLT_PAGE_SIZE as u64;
+    unmap_hole(path, (lock_pgno(DOLT_PAGE_SIZE) as u64 - 1) * page, page)
+}
+
+fn unmap_hole(path: &Path, hole: u64, page: u64) -> Result<()> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let len = match std::fs::metadata(path) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if len <= hole {
+        return Ok(());
+    }
+    if len < hole + page {
+        return Err(Error::Other(
+            format!("a restored Dolt image of {len} bytes ends inside the LTX lock page").into(),
+        ));
+    }
+    let mut file = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
+    let mut buf = vec![0u8; 8 << 20];
+    let mut from = hole + page;
+    let mut to = hole;
+    while from < len {
+        let n = ((len - from) as usize).min(buf.len());
+        file.seek(SeekFrom::Start(from))?;
+        file.read_exact(&mut buf[..n])?;
+        file.seek(SeekFrom::Start(to))?;
+        file.write_all(&buf[..n])?;
+        from += n as u64;
+        to += n as u64;
+    }
+    file.set_len(len - page)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+/// The LTX pages (and page count) of a whole chunk-file image.
+pub fn image_pages(image: &[u8]) -> Result<(u32, Vec<(u32, Vec<u8>)>)> {
+    DoltStore::pages(image, 0, image.len() as u64)
+}
 
 /// The page size of a Dolt cell's LTX frames.
 pub const DOLT_PAGE_SIZE: u32 = 4096;
@@ -366,32 +429,33 @@ impl DoltStore {
         result
     }
 
-    /// The pages covering `[first_page_offset, cut)` of the file, from a
-    /// buffer that starts at `first_page_offset`.
+    /// The LTX pages covering `[first_page_offset, cut)` of the file, from
+    /// a buffer that starts at `first_page_offset`, numbered by [`ltx_pgno`],
+    /// and the LTX page count of the cut.
     fn pages(buf: &[u8], first_page_offset: u64, cut: u64) -> Result<(u32, Vec<(u32, Vec<u8>)>)> {
+        Self::pages_with_lock(buf, first_page_offset, cut, lock_pgno(DOLT_PAGE_SIZE))
+    }
+
+    fn pages_with_lock(
+        buf: &[u8],
+        first_page_offset: u64,
+        cut: u64,
+        lock: u32,
+    ) -> Result<(u32, Vec<(u32, Vec<u8>)>)> {
         let page_size = DOLT_PAGE_SIZE as u64;
-        let commit = cut.div_ceil(page_size);
-        let commit = u32::try_from(commit)
-            .map_err(|_| Error::Other("dolt chunk file too large to capture".into()))?;
-        if commit >= lock_pgno(DOLT_PAGE_SIZE) {
-            return Err(Error::Other(
-                format!(
-                    "dolt chunk file reached {cut} bytes; captures stop below 1 GiB \
-                     (the LTX lock page); compact the cell with dolt gc"
-                )
-                .into(),
-            ));
-        }
+        let too_large = || Error::Other("dolt chunk file too large to capture".into());
+        let last = u32::try_from(cut.div_ceil(page_size)).map_err(|_| too_large())?;
+        let commit = ltx_pgno_with_lock(last, lock).ok_or_else(too_large)?;
         let first = (first_page_offset / page_size) as u32 + 1;
-        let mut pages = Vec::with_capacity((commit + 1).saturating_sub(first) as usize);
-        for pgno in first..=commit {
-            let start = (pgno as u64 - 1) * page_size;
+        let mut pages = Vec::with_capacity((last + 1).saturating_sub(first) as usize);
+        for file_page in first..=last {
+            let start = (file_page as u64 - 1) * page_size;
             let end = (start + page_size).min(cut);
             let mut data = vec![0u8; page_size as usize];
             let from = (start - first_page_offset) as usize;
             let to = (end - first_page_offset) as usize;
             data[..to - from].copy_from_slice(&buf[from..to]);
-            pages.push((pgno, data));
+            pages.push((ltx_pgno_with_lock(file_page, lock).ok_or_else(too_large)?, data));
         }
         Ok((commit, pages))
     }
@@ -821,6 +885,49 @@ mod tests {
         let r = Connection::open(&restored).unwrap();
         let n: i64 = r.query_row("SELECT count(*) FROM t", [], |row| row.get(0)).unwrap();
         assert_eq!(n, 1);
+    }
+
+    /// The lock-page mapping round-trips, with a lock page small enough to
+    /// test: capture skips it, the rebuilt image has a hole there, and the
+    /// unmap removes it.
+    #[test]
+    fn pages_skip_the_lock_page_and_unmap_restores_the_file() {
+        let page = DOLT_PAGE_SIZE as usize;
+        let lock = 3u32;
+        let original: Vec<u8> = (0..(5 * page + 1000)).map(|i| (i % 251) as u8 + 1).collect();
+        let cut = original.len() as u64;
+        let (commit, pages) = DoltStore::pages_with_lock(&original, 0, cut, lock).unwrap();
+        let pgnos: Vec<u32> = pages.iter().map(|(pgno, _)| *pgno).collect();
+        assert_eq!(pgnos, vec![1, 2, 4, 5, 6, 7]);
+        assert_eq!(commit, 7);
+        // An incremental capture from inside page 4 keeps the mapping.
+        let from = 3 * page as u64;
+        let (_, tail) =
+            DoltStore::pages_with_lock(&original[from as usize..], from, cut, lock).unwrap();
+        assert_eq!(tail.iter().map(|(p, _)| *p).collect::<Vec<_>>(), vec![5, 6, 7]);
+        // Rebuild as a reader does: LTX page p at (p-1)*page, lock page zero.
+        let mut image = vec![0u8; commit as usize * page];
+        for (pgno, data) in &pages {
+            let at = (*pgno as usize - 1) * page;
+            image[at..at + page].copy_from_slice(data);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("image");
+        std::fs::write(&path, &image).unwrap();
+        unmap_hole(&path, (lock as u64 - 1) * page as u64, page as u64).unwrap();
+        let restored = std::fs::read(&path).unwrap();
+        assert_eq!(restored.len(), 6 * page);
+        assert_eq!(&restored[..original.len()], &original[..]);
+        assert!(restored[original.len()..].iter().all(|b| *b == 0));
+        // Below the lock page nothing moves.
+        let small = dir.path().join("small");
+        std::fs::write(&small, &original[..page]).unwrap();
+        unmap_hole(&small, (lock as u64 - 1) * page as u64, page as u64).unwrap();
+        assert_eq!(std::fs::read(&small).unwrap(), &original[..page]);
+        // The real lock page: page 262144 is LTX 262144, page 262145 is 262146.
+        let real = lock_pgno(DOLT_PAGE_SIZE);
+        assert_eq!(ltx_pgno(real - 1), Some(real - 1));
+        assert_eq!(ltx_pgno(real), Some(real + 1));
     }
 
     #[test]

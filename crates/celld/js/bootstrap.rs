@@ -525,6 +525,30 @@ pub(super) fn inject_residency(
     Ok(())
 }
 
+/// `__cell.classSecrets`: for each class that declares secrets, the values it
+/// alone sees. Built with V8 values, not source text, so a secret is in no
+/// script the isolate compiles or the inspector lists.
+pub(super) fn inject_class_secrets(
+    scope: &mut v8::PinScope,
+    config: &super::WorkerConfig,
+) -> Result<()> {
+    let cell = cell_state(scope)?;
+    let map = v8::Object::new(scope);
+    for class in config.class_secrets.classes() {
+        let secrets = v8::Object::new(scope);
+        for (name, value) in config.class_secrets.for_class(class) {
+            let name = v8::String::new(scope, name).ok_or_else(|| anyhow!("secret name"))?;
+            let value = v8::String::new(scope, value).ok_or_else(|| anyhow!("secret value"))?;
+            secrets.set(scope, name.into(), value.into());
+        }
+        let key = v8::String::new(scope, class).ok_or_else(|| anyhow!("secret class"))?;
+        map.set(scope, key.into(), secrets.into());
+    }
+    let key = v8::String::new(scope, "classSecrets").unwrap();
+    cell.set(scope, key.into(), map.into());
+    Ok(())
+}
+
 /// Register the workflow cell class under its script-scoped name.
 ///
 /// `harness.js` registers `__WorkflowCell` under the bare `__Workflow` at

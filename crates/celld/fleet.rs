@@ -604,6 +604,15 @@ pub async fn run_deploy(arguments: Vec<String>) -> anyhow::Result<()> {
     let store = bucket_client(&bucket, options.endpoint.as_deref(), &region)?;
     validate_bucket(&store).await?;
     crate::wake_format::ensure_ready(&store).await?;
+    // A class secret has no value in the deployment; the bucket holds it
+    // (`celld secret put`). Refuse to publish a deployment whose nodes could
+    // not load it.
+    crate::secrets::require_present(
+        &store,
+        &built.script_name,
+        &built.manifest.celld.class_secrets(),
+    )
+    .await?;
     let started = std::time::Instant::now();
     deploy::write(&store, &built).await?;
     let location = format!(
@@ -906,6 +915,15 @@ async fn load_worker_at_pointer(
             .collect(),
     );
     let vars = worker_vars(&manifest);
+    // The values of the secrets the deployment's classes declare. They come
+    // from the bucket, sealed, and never travel in the manifest.
+    let class_secrets = crate::secrets::open_for_deployment(
+        bucket,
+        crate::secrets::key_from_environment()?.as_ref(),
+        &manifest.script_name,
+        &manifest.celld.class_secrets(),
+    )
+    .await?;
     let compat = crate::worker_compat(&manifest.raw_metadata);
     let assets = match &manifest.assets {
         Some(reference) => Some(
@@ -968,6 +986,7 @@ async fn load_worker_at_pointer(
         crons,
         containers,
         residency_classes,
+        class_secrets,
         fence_image,
         codegen_classes,
     })
@@ -992,6 +1011,9 @@ pub struct LoadedDeployment {
     pub containers: Vec<crate::container::ContainerSpec>,
     /// The classes the manifest's `celld` block grants `residency`.
     pub residency_classes: Vec<String>,
+    /// The opened secrets of the classes that declare any; `Debug` shows
+    /// their names only.
+    pub class_secrets: crate::secrets::ClassSecrets,
     /// See `Manifest::fence_image`.
     pub fence_image: Option<String>,
     /// Classes the deployment declared `celld.durable_objects.<Class>.codegen`

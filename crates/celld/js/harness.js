@@ -3298,6 +3298,37 @@ class DurableObjectState {
     __registerWaitUntil(promise);
   }
 }
+// The `env` a Durable Object class's constructor receives. A class that
+// declared secrets (`celld.durable_objects.<Class>.secrets`) gets the Worker's
+// env plus those values; no other `env` has them: not the Worker's `fetch`,
+// not another class, not `cloudflare:workers`. The overlay reads through to
+// the Worker's env, so a binding added to it later is still seen.
+const __classEnvs = new Map();
+const __classEnv = (className) => {
+  const secrets = __cell.classSecrets[className];
+  if (secrets === undefined) return __cell.env;
+  let env = __classEnvs.get(className);
+  if (env === undefined) {
+    const own = (key) => typeof key === "string" && Object.hasOwn(secrets, key);
+    env = new Proxy(__cell.env, {
+      get: (target, key, receiver) =>
+        own(key) ? secrets[key] : Reflect.get(target, key, receiver),
+      has: (target, key) => own(key) || Reflect.has(target, key),
+      set: (target, key, value) => {
+        if (own(key)) return false;
+        return Reflect.set(target, key, value);
+      },
+      deleteProperty: (target, key) =>
+        own(key) ? false : Reflect.deleteProperty(target, key),
+      ownKeys: (target) => [...new Set([...Reflect.ownKeys(target), ...Object.keys(secrets)])],
+      getOwnPropertyDescriptor: (target, key) => own(key)
+        ? { value: secrets[key], enumerable: true, configurable: true, writable: false }
+        : Reflect.getOwnPropertyDescriptor(target, key),
+    });
+    __classEnvs.set(className, env);
+  }
+  return env;
+};
 function _instance(scope) {
   let inst = __cell.instances[scope];
   if (!inst) {
@@ -3305,7 +3336,7 @@ function _instance(scope) {
     const cls = __cell.classes[className];
     if (!cls) throw new Error("no DO class " + className);
     const state = new DurableObjectState(scope);
-    inst = new cls(state, __cell.env);
+    inst = new cls(state, __classEnv(className));
     Object.defineProperty(inst, "__celldState", { value: state });
     // Workerd worker-rpc.c++ getTargetInfo(): RPC needs `extends
     // DurableObject` unless the js_rpc compat flag is on. Decided
@@ -6747,6 +6778,8 @@ const __cell = __celld.__cell = {
   workflows: {},
   containers: {},
   residency: {},
+  // Class name -> { NAME: value }, from the deployment's `celld` block.
+  classSecrets: {},
   instances: {},
   facetConfigs: {},
   env: {},

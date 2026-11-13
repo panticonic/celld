@@ -3648,6 +3648,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
         Action::Kv(arguments) => return celld::kv_cli::run(arguments).await,
         Action::Queue(arguments) => return celld::queue_cli::run(arguments).await,
         Action::R2(arguments) => return celld::r2_cli::run(arguments).await,
+        Action::Secret(arguments) => return celld::secret_cli::run(arguments).await,
         Action::Connect(arguments) => {
             return celld::control_plane::handle_connect_command(arguments).await
         }
@@ -4194,6 +4195,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                     crons,
                     containers: Vec::new(),
                     residency_classes: Vec::new(),
+                    class_secrets: Default::default(),
                     fence_image: None,
                     // The local-script equivalent of `celld.durable_objects`.
                     codegen_classes: std::env::var("CELLD_TEST_CODEGEN_CLASSES")

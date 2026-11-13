@@ -48,12 +48,22 @@ has not been run yet.
      `celld cell import SCRIPT CLASS NAME --file ROOT [--facet NAME=FILE[:ENGINE]]...
      (--bucket B | --dev PROJECT)`, the library call `celld::object_image::import`
      for a control plane;
-   - G3: per-class secrets.
-4. Fork gaps from Chronolog:
-   - P2P streams owned by the cell, not by the event that opened them;
-   - `closed` does not resolve on a clean end of stream;
-   - Ed25519 PKCS#8 v1 versus v2;
-   - configurable dev lease.
+   - ~~G3: per-class secrets~~ done (§3b.10, `docs/fork/class-secrets.md`):
+     `celld.durable_objects.<Class>.secrets: ["NAME"]` declares the names;
+     `celld secret put SCRIPT NAME` stores each value sealed (AES-256-GCM,
+     operator-held key) outside every deployment; the declaring class's `env`
+     alone has it.
+4. ~~Fork gaps from Chronolog~~ done (branch `feature/fork-polish`):
+   - ~~P2P streams owned by the cell, not by the event that opened them~~
+     (§3b.11, `docs/services/p2p.md`);
+   - ~~`closed` does not resolve on a clean end of stream~~ (same change);
+   - ~~Ed25519 PKCS#8 v1 versus v2~~: generated and imported Ed25519 private keys
+     are version 0, as Node writes them; both versions still import;
+   - ~~configurable dev lease~~: `--lease-ttl-ms` / `CELLD_TTL_MS` and
+     `--lease-renew-ms` / `CELLD_LEASE_RENEW_MS`, validated, on `celld` and
+     `celld dev` (docs/README.md, "Node lease timing");
+   - E5, found on the way: a far-future alarm panicked the node; fixed
+     (`docs/fork/upstream-findings.md`).
 5. Fork requests from the Dolt redesign, F1–F6:
    - F1: merge with an in-transaction resolver;
    - F2: commit at the end of a transaction;
@@ -195,7 +205,7 @@ their own switches.
   ```jsonc
   "celld": {
     "durable_objects": {
-      "Class": { "codegen": true, "residency": true }
+      "Class": { "codegen": true, "residency": true, "secrets": ["NAME"] }
     }
   }
   ```
@@ -208,7 +218,10 @@ their own switches.
   secret; `--p2p-key-file` for the Iroh endpoint.
   `--no-implicit-deadlines` with `CELLD_NO_IMPLICIT_DEADLINES=1` arms none of
   celld's own watchdogs (docs/fork/deadlines.md). Codegen confinement is in
-  docs/fork/codegen.md.
+  docs/fork/codegen.md. `--secrets-key-file` with `CELLD_SECRETS_KEY_FILE` and
+  `CELLD_SECRETS_KEY` opens per-class secrets (docs/fork/class-secrets.md);
+  `--lease-ttl-ms` / `CELLD_TTL_MS` and `--lease-renew-ms` /
+  `CELLD_LEASE_RENEW_MS` set the node lease (docs/README.md).
 - **JS surface**, all on objects that already exist:
   - `ctx.storage.dolt` (Dolt cells only);
   - `ctx.residency.hold()`, which returns a handle with `release()`;
@@ -398,6 +411,53 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
    - Limits: images are whole files in memory; no storage is shared with
      the source; `stop` cannot close a facet of the root's own script; an
      import creates direct facets only.
+
+10. **Per-class secrets (G3; 2026-11-13).** User-facing contract:
+    `docs/fork/class-secrets.md`. Decisions:
+    - **Names in the manifest, values in the bucket.** The `celld` block's
+      `secrets` is a list of names, so the manifest (and the bucket index) holds
+      no value. Values are objects `secrets/<script>/<NAME>`, sealed with
+      AES-256-GCM, associated data the script and name. Reuses what celld has:
+      the `celld` block's per-class declaration (so the same validation,
+      unknown-key refusal and manifest round trip as `residency`), the bucket
+      client and the fleet CLI flags, and the `aes-gcm` crate already linked
+      for the Web Crypto ops.
+    - **The key is operator-held, not stored.** `CELLD_SECRETS_KEY(_FILE)` /
+      `--secrets-key-file`. Rejected: a key derived from the fleet secret
+      (a bucket reader with the fleet secret would open every value), and a
+      per-node generated key (nodes could not share a value).
+    - **Opened at deployment load, fail closed.** A node that cannot open a
+      declared secret does not load the deployment. `celld deploy` refuses to
+      publish one whose secrets are not stored (presence only, no key). Rotation
+      takes effect at the next load. Rejected: reading on each class
+      construction (a bucket round trip on every cold activation, and a value
+      that changes under a running generation).
+    - **Per class, in the constructor's `env`.** `__cell.classSecrets` is set
+      with V8 values, not source text; `_instance` passes a Proxy over the
+      Worker's env that adds the class's secrets (read-through, so bindings added
+      later show). Not in the Worker's `fetch`, other classes, or
+      `cloudflare:workers`.
+    - **`celld dev`**: a declared name is read from `.dev.vars`/`.env`, kept
+      out of `vars`, sealed into the dev store with a key in `.celld/dev`.
+    - `class-secrets-v1` keeps older nodes from loading a manifest that declares
+      secrets.
+
+11. **P2P streams owned by the cell (2026-11-13).** User-facing contract:
+    `docs/services/p2p.md`. A Durable Object's stream is registered with the core
+    as a `WebSocketKind::Outbound` transport (`p2p::adopt`), so it uses the
+    outbound WebSocket accounting as it is: `is_active` (pins the cell against
+    idle, pressure, balancing and operator eviction), the per-cell cap
+    (`CELLD_MAX_OUTBOUND_WEBSOCKETS`) and the node pin budget, refusing at the
+    budget. The core's own lifecycle effects name these ids
+    (`CancelCellActivity`), and `ws_close`, `ws_close_scope` and `ws_close_facet`
+    route a stream id or scope to `p2p::close`, so eviction, handoff, a swap, a
+    restore, a reset and a stopped facet reset it with code 5. Two ends the core
+    does not see are covered in the isolate: an instance replaced in place
+    (`ctx.abort()`, a failed critical section) closes the object's streams
+    (`__p2p_close_object`), and a connection that dies releases its streams.
+    The JS side of a Worker, which has no cell, keeps request-scoped streams.
+    The scope of a callback after its event ended (a timer) comes from the cell's
+    isolate holding one object.
 
 ## 4. Determinism: fixes over the earlier plans
 

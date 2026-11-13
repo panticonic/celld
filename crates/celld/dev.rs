@@ -596,7 +596,39 @@ fn quoted_lines(value: &str, lines: &mut std::str::Lines<'_>) -> Option<String> 
     None
 }
 
-async fn deploy_project(config: &Path, store: &Store, logs: bool) -> anyhow::Result<()> {
+/// The key `celld dev` seals this project's class secrets with. It lives in the
+/// project's local state, beside the store it protects, and the node is given
+/// it by file: the same path a fleet uses, with a key nobody has to manage.
+#[allow(clippy::disallowed_methods)] // The key file is operator-host state, like the project.
+fn dev_secrets_key(state: &Path) -> anyhow::Result<crate::secrets::SecretsKey> {
+    let path = state.join("secrets.key");
+    if path.exists() {
+        return crate::secrets::SecretsKey::from_file(&path);
+    }
+    let key = crate::secrets::SecretsKey::generate();
+    std::fs::create_dir_all(state)
+        .with_context(|| format!("create {}", state.display()))?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    use std::io::Write as _;
+    options
+        .open(&path)
+        .and_then(|mut file| writeln!(file, "{}", key.to_base64()))
+        .with_context(|| format!("write {}", path.display()))?;
+    Ok(key)
+}
+
+async fn deploy_project(
+    config: &Path,
+    state: &Path,
+    store: &Store,
+    logs: bool,
+) -> anyhow::Result<()> {
     let bucket = open_local_bucket(&store.database)?;
     let built = deploy::build(&deploy::Options {
         config: Some(config.to_path_buf()),
@@ -612,6 +644,23 @@ async fn deploy_project(config: &Path, store: &Store, logs: bool) -> anyhow::Res
         built.report();
     }
     crate::wake_format::ensure_ready(&bucket).await?;
+    // Class secrets take their values from the local variables (`.dev.vars`,
+    // `.env`), as Wrangler's secrets do in development, and are stored sealed
+    // as `celld secret put` would, so the node reads them the way a fleet's does.
+    let declared = built.manifest.celld.class_secrets();
+    if !declared.is_empty() {
+        let key = dev_secrets_key(state)?;
+        for name in declared.values().flatten() {
+            let value = built.dev_secrets.get(name).with_context(|| {
+                format!(
+                    "class secret {name} has no value: add `{name}=...` to .dev.vars (or .env) \
+                     beside the config"
+                )
+            })?;
+            crate::secrets::put(&bucket, &key, &built.script_name, name, value.as_bytes())
+                .await?;
+        }
+    }
     deploy::write(&bucket, &built).await
 }
 
@@ -637,7 +686,7 @@ async fn run_stack(
         .transpose()?;
 
     console.progress("building the application");
-    deploy_project(config, store, options.logs).await?;
+    deploy_project(config, state, store, options.logs).await?;
     let mut running = start_node(
         state,
         options.listener,
@@ -664,7 +713,7 @@ async fn run_stack(
             }
             NodeEvent::Reload => {
                 console.progress("change detected; rebuilding the application");
-                if let Err(error) = deploy_project(config, store, options.logs).await {
+                if let Err(error) = deploy_project(config, state, store, options.logs).await {
                     console.failure(&format!("reload failed: {error:#}"));
                     continue;
                 }
@@ -741,6 +790,9 @@ async fn start_node(
         .args(forwarded)
         .env("CELLD_INTERNAL_DEV_STORE", &store.database)
         .env("CELLD_WATCH", state.join("runtime"))
+        // Opens the project's class secrets; an operator's own key is not used
+        // for a store the supervisor sealed itself.
+        .env(crate::secrets::KEY_FILE_ENV, state.join("secrets.key"))
         .env("CELLD_NODE", format!("dev-{}", &project_hash[..12]))
         // A stable p2p node id for the project, so peers can keep dialing the
         // same id across `celld dev` restarts. An operator's own

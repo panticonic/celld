@@ -18,7 +18,7 @@ use crate::protocol::{
     asset_blob_key, AssetConfig, AssetEntry, AssetIndex, AssetManifestRef, DeployPointer, Manifest,
     ModuleKind, ModuleRef, QueueConsumerAttachment, QueueConsumerConfig, QueueConsumerDeployment,
     Rollout, RunWorkerFirst, FEATURE_ASSETS_V1, FEATURE_CONTAINERS_V1, FEATURE_CRON_V1,
-    FEATURE_D1_V1, FEATURE_DOLT_CELLS_V1, FEATURE_KV_V1, FEATURE_P2P_V1,
+    FEATURE_CLASS_SECRETS_V1, FEATURE_D1_V1, FEATURE_DOLT_CELLS_V1, FEATURE_KV_V1, FEATURE_P2P_V1,
     FEATURE_PYTHON_WORKERS_V1, FEATURE_QUEUES_V1, FEATURE_R2_V1, FEATURE_RESIDENCY_V1,
     FEATURE_SQLITE_VEC_V1, FEATURE_WASM_V1, FEATURE_WORKFLOWS_V1,
     QUEUE_CONSUMER_ATTACHMENT_SCHEMA_VERSION,
@@ -329,6 +329,11 @@ struct Project {
     containers: Vec<ContainerDecl>,
     /// The config's `celld` block.
     celld: CelldDeclaration,
+    /// Values for declared class secrets that `celld dev` found among the
+    /// local variables (`.dev.vars`, `.env`). They are not vars: they never
+    /// enter the deployment, and `celld dev` stores them, sealed, as
+    /// `celld secret put` would.
+    dev_secrets: BTreeMap<String, String>,
     /// Set when `main` is a `.py` file: the Python behavior its
     /// compatibility date and flags select.
     python: Option<python::PythonCompat>,
@@ -442,6 +447,8 @@ pub struct Built {
     /// See `Manifest::fence_image`; saved beside `images`, reported apart.
     pub fence_image: Option<String>,
     pub upload_images: bool,
+    /// See `Project::dev_secrets`. Empty for `celld deploy`.
+    pub dev_secrets: BTreeMap<String, String>,
 }
 
 impl Built {
@@ -770,6 +777,9 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
             if !project.celld.residency_classes().is_empty() {
                 features.push(FEATURE_RESIDENCY_V1.to_string());
             }
+            if !project.celld.class_secrets().is_empty() {
+                features.push(FEATURE_CLASS_SECRETS_V1.to_string());
+            }
             features
         },
         raw_metadata: project.metadata,
@@ -785,6 +795,7 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
         images,
         fence_image,
         upload_images: !options.local_images,
+        dev_secrets: project.dev_secrets,
     })
 }
 
@@ -1907,6 +1918,15 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
             "name": binding,
         }));
     }
+    // Declared before the variables because a class secret is not one: the
+    // name leaves the local variables below, and may not also be a binding.
+    let celld = celld_block::read(object, &do_classes)?;
+    let secret_names: BTreeSet<String> = celld
+        .class_secrets()
+        .into_values()
+        .flatten()
+        .collect();
+    let mut dev_secrets = BTreeMap::new();
     let mut vars = BTreeMap::new();
     // Wrangler's `vars` take any JSON value; a non-string one becomes a
     // `json` binding the Worker sees parsed.
@@ -1928,6 +1948,20 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         }
         Some(_) => bail!("config `vars` must be an object"),
     }
+    // A secret named like a var or a binding would be two things at once: one
+    // the whole Worker sees in the manifest, and one only its class sees.
+    for name in &secret_names {
+        let in_bindings = bindings
+            .iter()
+            .any(|binding| binding.get("name").and_then(Value::as_str) == Some(name.as_str()));
+        if in_bindings || vars.contains_key(name.as_str()) || json_vars.contains_key(name.as_str())
+        {
+            bail!(
+                "{name:?} is declared as a class secret in `celld.durable_objects` and is also \
+                 a var or a binding; a secret has no value in the config"
+            );
+        }
+    }
     // An asset-only project has no Worker to hand a variable to, so a
     // `.dev.vars` or `.env` beside it is residue, not a binding the guard below
     // should refuse in the config's name.
@@ -1935,11 +1969,15 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
     if main.is_some() {
         match overrides {
             VarOverrides::None => {}
-            VarOverrides::DevVars(entries) => vars.extend(
-                entries
-                    .iter()
-                    .map(|(name, value)| (name.as_str(), value.as_str())),
-            ),
+            VarOverrides::DevVars(entries) => {
+                for (name, value) in entries {
+                    if secret_names.contains(name) {
+                        dev_secrets.insert(name.clone(), value.clone());
+                    } else {
+                        vars.insert(name.as_str(), value.as_str());
+                    }
+                }
+            }
             VarOverrides::DotEnv(entries) => {
                 // A config var of the same name is the override the entry
                 // exists for; every other binding owns its name.
@@ -1953,7 +1991,9 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
                     )
                     .collect::<BTreeSet<_>>();
                 for (name, value) in entries {
-                    if !valid_binding(name) {
+                    if secret_names.contains(name) {
+                        dev_secrets.insert(name.clone(), value.clone());
+                    } else if !valid_binding(name) {
                         note!("warning: skipped the dotenv entry {name:?}, which is not a valid binding name");
                     } else if taken.contains(name.as_str()) {
                         note!("warning: skipped the dotenv entry {name:?}, whose name another binding uses");
@@ -2059,7 +2099,6 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
     }
 
     let containers = read_containers(object, &do_classes, &sqlite_classes)?;
-    let celld = celld_block::read(object, &do_classes)?;
     if !celld.is_empty() {
         // Part of the deployment's identity: granting a capability is a new
         // deployment, the way a new binding is.
@@ -2084,6 +2123,7 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         has_r2: !r2_buckets.is_empty(),
         containers,
         celld,
+        dev_secrets,
         python,
     })
 }

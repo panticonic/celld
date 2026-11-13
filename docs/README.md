@@ -354,6 +354,11 @@ object that another tool writes into the prefix is also readable, without
 `--after KEY` that continues the listing on stderr. Pass `--all` for every
 key and `--json` for one JSON object per key.
 
+`celld secret put|list|delete` stores the values of the secrets one Durable
+Object class declares in its `celld` block, sealed in the fleet bucket under a
+key held outside it. Only that class sees them; see
+[per-class secrets](fork/class-secrets.md).
+
 Every celld command writes data to stdout and messages to stderr. A closed
 stdout pipe is a successful stop.
 
@@ -705,6 +710,7 @@ unset variable selects its default. A Boolean variable accepts only `0` or
 | `CELLD_WATCH` | The local work directory for SQLite and replication |
 | `CELLD_ESBUILD` | The path of the esbuild executable |
 | `CELLD_ACTIVATIONS` | Concurrent cold-cell activations (default: 8 per CPU, at least 16, at most 128) |
+| `CELLD_SECRETS_KEY_FILE`, `--secrets-key-file`, `CELLD_SECRETS_KEY` | The key that opens per-class secrets (`docs/fork/class-secrets.md`). A node needs it only when a loaded deployment declares secrets |
 | `CELLD_TTL_MS`, `--lease-ttl-ms` | The node lease lifetime in ms (default: 10000; 1000 to 3600000) |
 | `CELLD_LEASE_RENEW_MS`, `--lease-renew-ms` | The node lease renewal interval in ms (default: a third of the lifetime; 100 up to a third of it) |
 | `CELLD_DEPLOY_POLL_S` | The deployment pointer poll interval in seconds (default: 30) |

@@ -1988,6 +1988,10 @@ pub struct WorkerConfig {
     /// for: the classes whose cells may `ctx.residency.hold()`. Empty for a
     /// loaded worker.
     pub residency_classes: Vec<String>,
+    /// The opened secrets of the classes that declared
+    /// `"celld": { "durable_objects": { "Class": { "secrets": [...] } } }`.
+    /// Empty for a loaded worker.
+    pub class_secrets: crate::secrets::ClassSecrets,
     /// What a Worker Loader's `celld: { residency }` granted this loaded
     /// worker. `None` for a deployment's own Worker, whose classes are
     /// governed by `residency_classes`. A loaded worker never holds more than
@@ -2135,6 +2139,7 @@ impl WorkerConfig {
             crons: Vec::new(),
             containers: Vec::new(),
             residency_classes: Vec::new(),
+            class_secrets: Default::default(),
             residency_grant: None,
             generation: 0,
             main_imports,
@@ -2166,6 +2171,13 @@ impl WorkerConfig {
 
     pub fn with_residency_classes(mut self, classes: Vec<String>) -> Self {
         self.residency_classes = classes;
+        self
+    }
+
+    /// The secrets each declaring class sees (`crate::secrets`). They reach
+    /// the isolate as the `env` of that class's constructor and nowhere else.
+    pub fn with_class_secrets(mut self, secrets: crate::secrets::ClassSecrets) -> Self {
+        self.class_secrets = secrets;
         self
     }
 
@@ -6161,6 +6173,7 @@ impl Worker {
             inject_workflows(scope, script_name, &config.workflow_bindings)?;
             inject_containers(scope, &config.containers)?;
             inject_residency(scope, &config)?;
+            inject_class_secrets(scope, &config)?;
             inject_kv_limits(scope)?;
             bootstrap::inject_deadline_policy(scope)?;
             inject_queue_config(scope, &config)?;
@@ -12993,7 +13006,8 @@ mod v8_strings;
 use bootstrap::{
     adopt_cell, adopt_embedded_cell, begin_event_context, build_env, end_event_context,
     harness_env, inject_compatibility_flags, inject_containers, inject_crons, inject_kv_limits,
-    inject_namespace_keys, inject_queue_config, inject_residency, inject_routing,
+    inject_class_secrets, inject_namespace_keys, inject_queue_config, inject_residency,
+    inject_routing,
     inject_storage_compatibility, inject_workflows, install_harness, install_prelude,
     populate_cf_exports, register_class, register_entrypoints, validate_workflow_classes,
     EmbeddedStartup,

@@ -49,6 +49,7 @@ pub(crate) enum Action {
     Kv(Vec<String>),
     Queue(Vec<String>),
     R2(Vec<String>),
+    Secret(Vec<String>),
     Connect(Vec<String>),
     Credentials(Vec<String>),
     Token(Vec<String>),
@@ -86,6 +87,7 @@ pub(crate) fn action_from_process() -> anyhow::Result<Action> {
             "kv" => return Ok(Action::Kv(arguments)),
             "queue" => return Ok(Action::Queue(arguments)),
             "r2" => return Ok(Action::R2(arguments)),
+            "secret" => return Ok(Action::Secret(arguments)),
             "connect" => return Ok(Action::Connect(arguments)),
             "credentials" => return Ok(Action::Credentials(arguments)),
             "token" => return Ok(Action::Token(arguments)),
@@ -242,6 +244,13 @@ pub(crate) fn action_from_process() -> anyhow::Result<Action> {
                     .ok_or_else(|| anyhow::anyhow!("--p2p-bind requires a value"))?;
                 settings.p2p.set_bind(&value)?;
             }
+            "--secrets-key-file" => {
+                celld::secrets::set_key_file_flag(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--secrets-key-file requires a value"))?
+                        .into(),
+                );
+            }
             "--lease-ttl-ms" => {
                 let value = args
                     .next()
@@ -366,6 +375,7 @@ USAGE:
   celld kv get|put|delete|list|info NAMESPACE --bucket [s3://|gs://|az://]NAME[/PREFIX]
   celld queue info|peek|purge|pause|resume|redrive QUEUE --bucket [s3://|gs://|az://]NAME[/PREFIX]
   celld r2 get|head|put|delete|list BUCKET [KEY] --bucket [s3://|gs://|az://]NAME[/PREFIX]
+  celld secret keygen|put|list|delete [SCRIPT] [NAME] --bucket [s3://|gs://|az://]NAME[/PREFIX]
   celld diagnose --bucket [s3://|gs://|az://]NAME[/PREFIX] [OPTIONS] [--peer NODE_ID]...
 
 Production install: celld --bucket s3://NAME [OPTIONS]
@@ -408,6 +418,10 @@ OPTIONS:
                          Let X-Forwarded-Host and X-Forwarded-Proto set the
                          scheme and host in request.url. Set this option only
                          when a trusted proxy replaces both headers
+  --secrets-key-file PATH
+                         The key that opens per-class secrets (or
+                         CELLD_SECRETS_KEY_FILE, CELLD_SECRETS_KEY); see
+                         docs/fork/class-secrets.md
   --lease-ttl-ms MS      Node lease lifetime, same as CELLD_TTL_MS (default:
                          10000; 1000 to 3600000). See TUNING
   --lease-renew-ms MS    Node lease renewal interval, same as

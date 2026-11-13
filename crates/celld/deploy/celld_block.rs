@@ -4,7 +4,7 @@
 //! ```jsonc
 //! "celld": {
 //!   "durable_objects": {
-//!     "Kernel": { "residency": true }
+//!     "Kernel": { "residency": true, "secrets": ["API_TOKEN"] }
 //!   }
 //! }
 //! ```
@@ -33,6 +33,11 @@ pub struct ClassCapabilities {
     /// here so a config that sets both parses, and carried through unread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codegen: Option<bool>,
+    /// Names of secrets only this class sees (`docs/fork/class-secrets.md`).
+    /// The values are not in the config or the manifest; `celld secret put`
+    /// stores them, sealed, apart from every deployment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secrets: Option<Vec<String>>,
 }
 
 impl ClassCapabilities {
@@ -52,6 +57,18 @@ pub struct CelldDeclaration {
 impl CelldDeclaration {
     pub fn is_empty(&self) -> bool {
         self.durable_objects.is_empty()
+    }
+
+    /// The secrets each class declares, by class, for the classes that declare
+    /// any. A name appears under one class only.
+    pub fn class_secrets(&self) -> BTreeMap<String, Vec<String>> {
+        self.durable_objects
+            .iter()
+            .filter_map(|(class, caps)| {
+                let names = caps.secrets.as_ref().filter(|names| !names.is_empty())?;
+                Some((class.clone(), names.clone()))
+            })
+            .collect()
     }
 
     /// The classes declared `residency: true`, in name order.
@@ -80,7 +97,7 @@ pub fn read(
         .map_err(|error| anyhow!("{error}"))
         .context(
             "config `celld` is invalid (known: `durable_objects`, whose classes take \
-             `residency` and `codegen`)",
+             `residency`, `codegen` and `secrets`)",
         )?;
     for (class, caps) in &declaration.durable_objects {
         if crate::deploy::is_reserved_class(class) {
@@ -94,7 +111,32 @@ pub fn read(
         }
         // Serde accepts any JSON for a `bool`-typed field only when it is a
         // boolean, so a string or number has already failed above.
-        let _ = caps;
+        for name in caps.secrets.iter().flatten() {
+            if !crate::secrets::valid_name(name) {
+                bail!(
+                    "config `celld.durable_objects.{class}.secrets` names {name:?}, which is \
+                     not a valid binding name"
+                );
+            }
+        }
+    }
+    // A secret is one class's. The same name under two classes would be two
+    // values behind one stored object, and says nothing about which was meant.
+    let mut owner: BTreeMap<&str, &str> = BTreeMap::new();
+    for (class, caps) in &declaration.durable_objects {
+        for name in caps.secrets.iter().flatten() {
+            if let Some(first) = owner.insert(name, class) {
+                if first == class.as_str() {
+                    bail!(
+                        "config `celld.durable_objects.{class}.secrets` lists {name:?} twice"
+                    );
+                }
+                bail!(
+                    "secret {name:?} is declared for both {first} and {class}; a secret belongs \
+                     to one class"
+                );
+            }
+        }
     }
     Ok(declaration)
 }
@@ -136,6 +178,62 @@ mod tests {
             serde_json::from_value::<CelldDeclaration>(json).unwrap(),
             declaration
         );
+    }
+
+    #[test]
+    fn class_secrets_are_declared_by_name_for_one_class() {
+        let declaration = parse(
+            json!({ "celld": { "durable_objects": {
+                "Vault": { "secrets": ["API_TOKEN", "DB_URL"] },
+                "Plain": {},
+                "Empty": { "secrets": [] }
+            } } }),
+            &["Vault", "Plain", "Empty"],
+        )
+        .unwrap();
+        assert_eq!(
+            declaration.class_secrets(),
+            BTreeMap::from([(
+                "Vault".to_string(),
+                vec!["API_TOKEN".to_string(), "DB_URL".to_string()]
+            )])
+        );
+        // Names round-trip through the manifest; values are never in it.
+        let json = serde_json::to_value(&declaration).unwrap();
+        assert_eq!(json["durable_objects"]["Vault"]["secrets"][0], "API_TOKEN");
+        assert_eq!(
+            serde_json::from_value::<CelldDeclaration>(json).unwrap(),
+            declaration
+        );
+    }
+
+    #[test]
+    fn a_secret_belongs_to_one_class_and_has_a_valid_name() {
+        let both = parse(
+            json!({ "celld": { "durable_objects": {
+                "A": { "secrets": ["TOKEN"] }, "B": { "secrets": ["TOKEN"] }
+            } } }),
+            &["A", "B"],
+        )
+        .unwrap_err();
+        assert!(format!("{both:#}").contains("belongs to one class"), "{both:#}");
+        let twice = parse(
+            json!({ "celld": { "durable_objects": { "A": { "secrets": ["TOKEN", "TOKEN"] } } } }),
+            &["A"],
+        )
+        .unwrap_err();
+        assert!(format!("{twice:#}").contains("twice"), "{twice:#}");
+        let bad = parse(
+            json!({ "celld": { "durable_objects": { "A": { "secrets": ["not a name"] } } } }),
+            &["A"],
+        )
+        .unwrap_err();
+        assert!(format!("{bad:#}").contains("valid binding name"), "{bad:#}");
+        let wrong_type = parse(
+            json!({ "celld": { "durable_objects": { "A": { "secrets": "TOKEN" } } } }),
+            &["A"],
+        );
+        assert!(wrong_type.is_err());
     }
 
     #[test]

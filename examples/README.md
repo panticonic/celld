@@ -23,7 +23,9 @@ supports, one service or API at a time:
 - `wsecho/` — WebSocket echo with hibernation
 - `wsclient/` — outbound WebSocket client from a Durable Object
 - `p2p/` — two nodes exchanging streams over Iroh, dialed by node id
-- `alarm/` — a Durable Object alarm handler
+- `alarm/` — a Durable Object alarm handler, including one set for the year 2100
+- `secrets/` — a secret that one Durable Object class sees and nothing else does,
+  from `celld.durable_objects.<Class>.secrets` (fork-only feature)
 - `cron/` — a cron trigger that logs each tick
 - `workflow/` — a Workflow that builds a report in one durable step
 - `rpc/` — Durable Object method calls through JS RPC

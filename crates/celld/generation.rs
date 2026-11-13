@@ -559,6 +559,7 @@ impl Generation {
                 crons,
                 containers,
                 residency_classes,
+                dolt_local,
                 class_secrets,
                 fence_image: fence,
                 codegen_classes,
@@ -579,6 +580,7 @@ impl Generation {
                     .with_crons(if is_primary { crons } else { Vec::new() })
                     .with_containers(containers)
                     .with_residency_classes(residency_classes)
+                    .with_dolt_local(dolt_local)
                     .with_class_secrets(class_secrets)
                     .with_deployment(&version)
                     .with_generation(id),

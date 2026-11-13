@@ -964,6 +964,7 @@ async fn load_worker_at_pointer(
     let crons = manifest.crons.clone();
     let containers = manifest.containers.clone();
     let residency_classes = manifest.celld.residency_classes();
+    let dolt_local = manifest.celld.dolt_local();
     let fence_image = manifest.fence_image.clone();
     let codegen_classes = crate::deploy::declared_codegen_classes(&manifest.raw_metadata);
     Ok(LoadedDeployment {
@@ -994,6 +995,7 @@ async fn load_worker_at_pointer(
         crons,
         containers,
         residency_classes,
+        dolt_local,
         class_secrets,
         fence_image,
         codegen_classes,
@@ -1019,6 +1021,8 @@ pub struct LoadedDeployment {
     pub containers: Vec<crate::container::ContainerSpec>,
     /// The classes the manifest's `celld` block grants `residency`.
     pub residency_classes: Vec<String>,
+    /// The local table patterns each Dolt class declares (`doltLocal`).
+    pub dolt_local: std::collections::BTreeMap<String, Vec<String>>,
     /// The opened secrets of the classes that declare any; `Debug` shows
     /// their names only.
     pub class_secrets: crate::secrets::ClassSecrets,

@@ -421,10 +421,12 @@ impl CellRuntime {
             let target = target.to_string();
             let (image, children) = asyncrt::blocking(move || {
                 crate::object_image::rewrite(engine, &image, &scratch, |c| {
+                    // Before the reset: a reset to an older commit can drop the
+                    // rules that name the local tables.
+                    crate::object_image::strip_identity(c, &target)?;
                     if let Some(at) = &at {
                         crate::dolt_cell::reset_hard(c, at)?;
                     }
-                    crate::object_image::strip_identity(c, &target)?;
                     crate::object_image::read_index(c)
                 })
             })

@@ -171,6 +171,42 @@ check "keepOurs"                    "$(get "/merge-resolve?repo=mg4&name=other&m
 check "merge up to date"            "$(get "/merge-resolve?repo=mg4&name=other&mode=ours")" \
   '.result.upToDate == true and .seen == null'
 
+echo "-- F4/F5: class-declared local tables (doltLocal: outbox_%)"
+L="repo=lo"
+get "/add?$L&body=n1" >/dev/null
+LC=$(get "/commit?$L&message=base&date=1700000000000" | jq -r .hash)
+check "local rows stay out of status" "$(get "/outbox?$L&add=o1")"       '(.outbox | length) == 1 and .status == []'
+check "a local table is not a change" "$(get "/diff?$L&from=$LC")" \
+  '([.summary[] | .toTable // .fromTable] | index("outbox_msgs")) == null and (.patch | map(.table) | index("outbox_msgs")) == null'
+get "/add?repo=lo2&body=n1" >/dev/null
+get "/outbox?repo=lo2&add=x1" >/dev/null; get "/outbox?repo=lo2&add=x2" >/dev/null
+check "commit hash ignores local rows" "$(get "/commit?repo=lo2&message=base&date=1700000000000")" ".hash == \"$LC\""
+get "/branch?$L&name=f1" >/dev/null
+check "local rows move with checkout" "$(get "/checkout?$L&name=f1")"   '.branch == "f1"'
+check "local rows on the new branch" "$(get "/outbox?$L&add=o2")"        '(.outbox | map(.body)) == ["o1","o2"] and .branch == "f1"'
+get "/add?$L&body=on-f1" >/dev/null && get "/commit?$L&message=f1" >/dev/null
+check "back on main, with the new local rows" "$(get "/checkout?$L&name=main")" '.branch == "main" and (.notes | length) == 1'
+check "local rows follow the active branch" "$(get "/outbox?$L")"      '(.outbox | map(.body)) == ["o1","o2"] and .status == []'
+check "reset keeps local rows"      "$(get "/reset?$L&hard=1&to=$LC")"   '.head == "'"$LC"'"'
+check "local rows after reset"      "$(get "/outbox?$L")"               '(.outbox | map(.body)) == ["o1","o2"]'
+check "merge keeps local rows"      "$(get "/merge?$L&name=f1")"        '.hash != null and (.conflicts | length) == 0'
+check "local rows after merge"      "$(get "/outbox?$L&add=o3")"        '(.outbox | map(.body)) == ["o1","o2","o3"] and .status == [] and .branch == "main"'
+# Checkout does not copy local rows: a thousand of them are carried by
+# catalog entry, and each branch sees the live ones.
+check "fill the local table"        "$(get "/outbox-fill?$L&n=3000")"   '.count == 3003'
+for _ in 1 2 3 4; do get "/checkout?$L&name=f1" >/dev/null; get "/checkout?$L&name=main" >/dev/null; done
+check "local rows survive checkouts" "$(get "/outbox-count?$L")"        '.count == 3003 and .branch == "main"'
+FORK=$(get "/fork?$L")
+FORK_LOCAL=$(echo "$FORK" | jq -r .id)
+check "a fork has the notes"        "$FORK"                             '(.fork.notes | length) == 2'
+check "a fork starts with no local rows" "$(get "/byid/$FORK_LOCAL/outbox")" '.outbox == [] and .status == []'
+check "the source keeps its local rows" "$(get "/outbox-count?$L")"     '.count == 3003'
+check "a fork's local table works"  "$(get "/byid/$FORK_LOCAL/outbox?add=fresh")" '(.outbox | map(.body)) == ["fresh"]'
+# Leave `lo` on a branch other than main, so the restart below proves the
+# local tables follow the pointer.
+get "/checkout?$L&name=f1" >/dev/null
+check "ready for restart"           "$(get "/outbox-count?$L")"         '.count == 3003 and .branch == "f1"'
+
 echo "-- restart (local resume)"
 stop
 start
@@ -178,6 +214,8 @@ check "branch after restart" "$(get "/engine?$R")"                        '.bran
 check "kv after restart"     "$(get "/kv?$R")"                            '.kv == "runtime-state"'
 check "head after restart"   "$(get "/hash?$R&ref=main")"                 ".hash == \"$C2\""
 check "fork after restart"   "$(get "/byid/$FORK_ID/notes")"              '(.notes | length) == 1'
+check "local rows after restart" "$(get "/outbox-count?$L")"              '.count == 3003 and .branch == "f1"'
+check "fork local rows after restart" "$(get "/byid/$FORK_LOCAL/outbox")"  '(.outbox | map(.body)) == ["fresh"]'
 
 echo "-- restore from replication (node cell files deleted)"
 stop
@@ -190,6 +228,8 @@ check "restored branch"      "$(get "/engine?$R")"                        '.bran
 check "restored kv"          "$(get "/kv?$R")"                            '.kv == "runtime-state"'
 check "restored main"        "$(get "/hash?$R&ref=main")"                 ".hash == \"$C2\""
 check "restored fork"        "$(get "/byid/$FORK_ID/notes")"              '(.notes | length) == 1'
+check "restored local rows"  "$(get "/outbox-count?$L")"                  '.count == 3003 and .branch == "f1"'
+check "restored fork local rows" "$(get "/byid/$FORK_LOCAL/outbox")"      '(.outbox | map(.body)) == ["fresh"]'
 check "restored tx commit"   "$(get "/log?repo=tx&limit=10")"             'map(.message) | (index("one step") != null and index("3 notes") != null)'
 check "restored tx rows"     "$(get "/notes?repo=tx")"                    '(.notes | length) == 4'
 check "restored merge commit" "$(get "/log?repo=mg1&limit=10")"            'map(.message) | (index("semantic merge") != null and index("other") != null)'

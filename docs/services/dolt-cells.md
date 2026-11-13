@@ -223,6 +223,79 @@ one). A transaction made with [`{ commit }`](#commit-at-the-end-of-a-transaction
 leaves nothing to record. On a device with a fast flush the checkout is about
 a millisecond.
 
+## Local tables
+
+Some tables belong to an object and not to its history: an outbox of messages
+to send, receipts of what was delivered, a cache. They must change in the same
+transaction as the versioned facts they come from, so they live in the same
+store, but they must not be rewound by `reset`, copied by a fork, or carried
+into a merge. Declare them as **local tables** by name pattern.
+
+For a Dolt class, in the deployment config's `celld` block:
+
+```jsonc
+"celld": { "durable_objects": { "Channel": { "doltLocal": ["outbox_%", "receipt_%"] } } }
+```
+
+For a Dolt facet: a facet is not a deployment class (it can come from a Worker
+Loader, which has no manifest), so it declares them where it declares its
+engine, in the startup options. The class block does not reach facets.
+
+```js
+ctx.facets.get("ws:a", () => ({
+  class: WorkspaceClass,
+  celld: { storage: "dolt", doltLocal: ["outbox_%"] },
+}));
+```
+
+A pattern is up to 64 ASCII letters, digits and `_`, starting with a letter,
+with `%` standing for any run of characters; it is case-sensitive. A pattern
+that could cover a table celld or Dolt owns (`%`, `d%`, `_cf_%`, `dolt_%`,
+`sqlite_%`) is refused, at `celld deploy` for a class and when the facet starts
+for a facet. `doltLocal` on a class that is not a Dolt class is refused. A
+deployment that uses it requires the `dolt-local-v1` feature, so a node that
+does not know it refuses the deployment instead of versioning the tables.
+
+A table whose name matches is an ordinary table to `ctx.storage.sql` (create
+it, index it, read and write it in the same transactions as any other), and:
+
+| operation | local tables |
+| --- | --- |
+| `commit`, `status`, `diff`, `log` | never staged, never shown, never in a commit hash |
+| `reset({ hard })` | left as they are, not rewound |
+| `merge` | left as they are |
+| `checkout` | move with the object to the target branch, as one set, [without copying rows](#checkout) |
+| `env.NS.fork`, `restore`, `ctx.facets.fork` | start **empty** in the new object (their schema stays, so the class's `CREATE TABLE IF NOT EXISTS` finds it) |
+| `deleteAll()` | dropped, like any application table |
+
+There is one live copy: the checked-out branch holds it, and `checkout` moves
+it. They are replicated and restored with the rest of the store.
+
+How it works: a pattern is a row of `dolt_ignore`, like celld's own `_cf_%`, so
+Dolt never stages the tables, and `checkout` carries untracked ignored tables
+between branches (see [Checkout](#checkout)).
+
+Things to know:
+
+- The rules are rows of a versioned table. celld puts them back wherever they
+  decide something (at every open, on `commit` and on `checkout`), but a rule
+  added by a redeploy, or put back on a branch that lacks it, is an uncommitted
+  change to `dolt_ignore` until that branch commits (`status` shows it, and a
+  `merge` into that branch asks you to commit first). Removing a pattern from
+  the declaration leaves its rule in place.
+- Declare a pattern before the class creates its first table: a table that was
+  committed before it matched a rule stays tracked (Dolt's own rule for ignored
+  tables).
+- Do not use `AUTOINCREMENT` in a local table (`INTEGER PRIMARY KEY` is fine).
+  DoltLite keeps `sqlite_sequence` as one tracked table, so a counter for an
+  ignored table leaks into commits and makes `merge` refuse with "uncommitted
+  changes". A fork empties the rows of a local table but a rowid may continue
+  from where the source's table was.
+- A facet's declaration is read when the facet starts, so each
+  `ctx.facets.get` that creates the facet must name it. The rules persist in the
+  store: a start that names fewer patterns does not remove any, and one that
+  names more adds them.
+
 ## Semantics
 
 **Output gate.** Each method that can change the store (commit, branch create

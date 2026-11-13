@@ -1988,6 +1988,11 @@ pub struct WorkerConfig {
     /// for: the classes whose cells may `ctx.residency.hold()`. Empty for a
     /// loaded worker.
     pub residency_classes: Vec<String>,
+    /// The table-name patterns the deployment declared local for each Dolt
+    /// class, `"celld": { "durable_objects": { "Class": { "doltLocal": [...] } } }`.
+    /// Empty for a loaded worker (a Dolt facet declares its own in its startup
+    /// options).
+    pub dolt_local: std::collections::BTreeMap<String, Vec<String>>,
     /// The opened secrets of the classes that declared
     /// `"celld": { "durable_objects": { "Class": { "secrets": [...] } } }`.
     /// Empty for a loaded worker.
@@ -2139,6 +2144,7 @@ impl WorkerConfig {
             crons: Vec::new(),
             containers: Vec::new(),
             residency_classes: Vec::new(),
+            dolt_local: Default::default(),
             class_secrets: Default::default(),
             residency_grant: None,
             generation: 0,
@@ -2172,6 +2178,16 @@ impl WorkerConfig {
     pub fn with_residency_classes(mut self, classes: Vec<String>) -> Self {
         self.residency_classes = classes;
         self
+    }
+
+    pub fn with_dolt_local(mut self, declared: std::collections::BTreeMap<String, Vec<String>>) -> Self {
+        self.dolt_local = declared;
+        self
+    }
+
+    /// The table-name patterns cells of `class` keep local (`doltLocal`).
+    pub fn class_dolt_local(&self, class: &str) -> Vec<String> {
+        self.dolt_local.get(class).cloned().unwrap_or_default()
     }
 
     /// The secrets each declaring class sees (`crate::secrets`). They reach
@@ -2323,6 +2339,8 @@ pub struct CellStorage<'a> {
     pub vfs: Option<&'a str>,
     /// The storage engine of the cell's class.
     pub engine: celld_ltx::Engine,
+    /// The table-name patterns the cell's class declared local (`doltLocal`).
+    pub dolt_local: Vec<String>,
 }
 
 pub struct Worker {
@@ -6400,6 +6418,7 @@ impl Worker {
         props_sc: Vec<u8>,
         file: (std::path::PathBuf, bool),
         engine: celld_ltx::Engine,
+        dolt_local: Vec<String>,
     ) -> Result<u64> {
         let compat = self.inner.as_ref().expect("live worker isolate").compat;
         let (mut locker, _cells) = self.lock();
@@ -6433,6 +6452,7 @@ impl Worker {
                 path,
                 restored,
                 engine,
+                dolt_local,
             },
             compat,
         )?;
@@ -8300,6 +8320,33 @@ struct FacetStart {
     parent: storage::StorageIdentity,
     /// The storage engine the startup options named (`celld.storage`).
     engine: celld_ltx::Engine,
+    /// The table-name patterns the startup options declared local
+    /// (`celld.doltLocal`), validated.
+    dolt_local: Vec<String>,
+}
+
+/// The local table patterns a facet's startup options declare, as the JSON
+/// array the harness sent. Refused unless they are valid and the facet is a
+/// Dolt facet.
+fn facet_dolt_local(
+    scope: &mut v8::PinScope,
+    value: v8::Local<v8::Value>,
+    engine: celld_ltx::Engine,
+) -> Result<Vec<String>, String> {
+    if value.is_undefined() || value.is_null() {
+        return Ok(Vec::new());
+    }
+    let patterns: Vec<String> = serde_json::from_str(&value.to_rust_string_lossy(scope))
+        .map_err(|error| format!("FacetStartupOptions.celld.doltLocal: {error}"))?;
+    if patterns.is_empty() {
+        return Ok(patterns);
+    }
+    if engine != celld_ltx::Engine::Dolt {
+        return Err("FacetStartupOptions.celld.doltLocal needs celld.storage \"dolt\"".to_string());
+    }
+    crate::dolt_cell::validate_local_patterns(&patterns)
+        .map_err(|error| format!("FacetStartupOptions.celld.doltLocal: {error}"))?;
+    Ok(patterns)
 }
 
 /// The engine a facet's startup options name: `"dolt"` or, by default,
@@ -8677,6 +8724,7 @@ async fn prepare_facet(host: FacetHost, start: FacetStart) -> Result<LoadedFacet
                     start.props_sc,
                     file,
                     start.engine,
+                    start.dolt_local,
                 )
                 .map_err(|error| format!("{error:#}"))
         })
@@ -8712,6 +8760,10 @@ fn op_facet_rpc(
     let method = args.get(7).to_rust_string_lossy(scope);
     let call_args = view_bytes(args.get(8)).unwrap_or_default();
     let engine = facet_engine(scope, args.get(9));
+    let dolt_local = match facet_dolt_local(scope, args.get(10), engine) {
+        Ok(patterns) => patterns,
+        Err(error) => return loader_throw(scope, &error),
+    };
     // Before the identity sample, so the parent's gate covers the index row
     // before anything the facet writes can leave.
     if let Err(error) = storage::register_facet(&parent_scope, &name, engine, true) {
@@ -8741,6 +8793,7 @@ fn op_facet_rpc(
                 props_sc,
                 parent,
                 engine,
+                dolt_local,
             },
         )
         .await?;
@@ -8802,6 +8855,10 @@ fn op_facet_fetch(
     let method = args.get(8).to_rust_string_lossy(scope);
     let stream_arg = args.get(11);
     let engine = facet_engine(scope, args.get(12));
+    let dolt_local = match facet_dolt_local(scope, args.get(13), engine) {
+        Ok(patterns) => patterns,
+        Err(error) => return loader_throw(scope, &error),
+    };
     let body = if stream_arg.is_number() {
         RequestBody::Stream(stream_arg.number_value(scope).unwrap_or(0.0) as u64)
     } else {
@@ -8852,6 +8909,7 @@ fn op_facet_fetch(
                 props_sc,
                 parent,
                 engine,
+                dolt_local,
             },
         )
         .await?;

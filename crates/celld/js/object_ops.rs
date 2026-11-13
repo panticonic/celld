@@ -91,10 +91,12 @@ pub(super) fn op_object_export(
         }
         let scratch = crate::object_image::scratch_beside(&root.path, "export-root");
         let (image, index) = crate::object_image::rewrite(engine, &image, &scratch, |c| {
+            // Before the reset: a reset to an older commit can drop the rules
+            // that name the local tables.
+            crate::object_image::strip_identity(c, &target)?;
             if let Some(at) = &at {
                 crate::dolt_cell::reset_hard(c, at)?;
             }
-            crate::object_image::strip_identity(c, &target)?;
             crate::object_image::read_index(c)
         })
         .map_err(|error| format!("{error:#}"))?;

@@ -18,7 +18,8 @@ use crate::protocol::{
     asset_blob_key, AssetConfig, AssetEntry, AssetIndex, AssetManifestRef, DeployPointer, Manifest,
     ModuleKind, ModuleRef, QueueConsumerAttachment, QueueConsumerConfig, QueueConsumerDeployment,
     Rollout, RunWorkerFirst, FEATURE_ASSETS_V1, FEATURE_CONTAINERS_V1, FEATURE_CRON_V1,
-    FEATURE_CLASS_SECRETS_V1, FEATURE_D1_V1, FEATURE_DOLT_CELLS_V1, FEATURE_KV_V1, FEATURE_P2P_V1,
+    FEATURE_CLASS_SECRETS_V1, FEATURE_D1_V1, FEATURE_DOLT_CELLS_V1, FEATURE_DOLT_LOCAL_V1, FEATURE_KV_V1,
+    FEATURE_P2P_V1,
     FEATURE_PYTHON_WORKERS_V1, FEATURE_QUEUES_V1, FEATURE_R2_V1, FEATURE_RESIDENCY_V1,
     FEATURE_SQLITE_VEC_V1, FEATURE_WASM_V1, FEATURE_WORKFLOWS_V1,
     QUEUE_CONSUMER_ATTACHMENT_SCHEMA_VERSION,
@@ -779,6 +780,9 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
             }
             if !project.celld.class_secrets().is_empty() {
                 features.push(FEATURE_CLASS_SECRETS_V1.to_string());
+            }
+            if !project.celld.dolt_local().is_empty() {
+                features.push(FEATURE_DOLT_LOCAL_V1.to_string());
             }
             features
         },
@@ -1921,6 +1925,7 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
     // Declared before the variables because a class secret is not one: the
     // name leaves the local variables below, and may not also be a binding.
     let celld = celld_block::read(object, &do_classes)?;
+    celld.check_dolt_local(&dolt_classes)?;
     let secret_names: BTreeSet<String> = celld
         .class_secrets()
         .into_values()

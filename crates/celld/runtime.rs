@@ -1333,6 +1333,7 @@ impl RuntimeManager {
                     replicated_wake: self.wake.is_some(),
                     vfs: paged_vfs.as_deref(),
                     engine: config.class_engine(class),
+                    dolt_local: config.class_dolt_local(class),
                 },
             )
             .await;

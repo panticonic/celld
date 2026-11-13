@@ -376,6 +376,10 @@ pub(crate) fn strip_identity(connection: &Connection, scope: &str) -> anyhow::Re
     if table_exists(connection, RESTORE_TABLE)? {
         connection.execute_batch("DROP TABLE _cf_RESTORE")?;
     }
+    // The tables a Dolt class declared local belong to the identity too.
+    if crate::dolt_cell::is_prolly(connection) {
+        crate::dolt_cell::empty_local_tables(connection)?;
+    }
     if table_exists(connection, "_cf_KV")?
         && columns(connection, "_cf_KV")?.iter().any(|c| c == "scope")
     {

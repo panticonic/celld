@@ -7,5 +7,9 @@
   },
   // A Dolt class: each object is a DoltLite prolly store with commits,
   // branches and merge, behind the same ctx.storage.sql as a SQLite class.
-  "migrations": [{ "tag": "v1", "new_dolt_classes": ["Repo"] }]
+  "migrations": [{ "tag": "v1", "new_dolt_classes": ["Repo"] }],
+  // Tables named outbox_* belong to the object and not to its history: they
+  // are never committed, survive reset and merge, move with checkout and
+  // start empty in a fork.
+  "celld": { "durable_objects": { "Repo": { "doltLocal": ["outbox_%"] } } }
 }

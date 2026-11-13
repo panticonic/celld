@@ -4,7 +4,8 @@
 //! ```jsonc
 //! "celld": {
 //!   "durable_objects": {
-//!     "Kernel": { "residency": true, "secrets": ["API_TOKEN"] }
+//!     "Kernel": { "residency": true, "secrets": ["API_TOKEN"] },
+//!     "Channel": { "doltLocal": ["outbox_%"] }
 //!   }
 //! }
 //! ```
@@ -38,6 +39,12 @@ pub struct ClassCapabilities {
     /// stores them, sealed, apart from every deployment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Vec<String>>,
+    /// Table-name patterns (`outbox_%`) for tables of a Dolt class that are
+    /// local to the object: not versioned, not rewound by `reset`, carried by
+    /// `checkout` and empty in a fork (`docs/services/dolt-cells.md`, "Local
+    /// tables").
+    #[serde(default, rename = "doltLocal", skip_serializing_if = "Option::is_none")]
+    pub dolt_local: Option<Vec<String>>,
 }
 
 impl ClassCapabilities {
@@ -71,6 +78,32 @@ impl CelldDeclaration {
             .collect()
     }
 
+    /// The local table patterns each class declares, for the classes that
+    /// declare any.
+    pub fn dolt_local(&self) -> BTreeMap<String, Vec<String>> {
+        self.durable_objects
+            .iter()
+            .filter_map(|(class, caps)| {
+                let patterns = caps.dolt_local.as_ref().filter(|patterns| !patterns.is_empty())?;
+                Some((class.clone(), patterns.clone()))
+            })
+            .collect()
+    }
+
+    /// Refuse `doltLocal` on a class that is not a Dolt class: its tables are
+    /// in a SQLite file, which has no working sets and nothing to be local to.
+    pub fn check_dolt_local(&self, dolt_classes: &[String]) -> anyhow::Result<()> {
+        for class in self.dolt_local().keys() {
+            if !dolt_classes.iter().any(|dolt| dolt == class) {
+                bail!(
+                    "config `celld.durable_objects.{class}.doltLocal` is declared for a class that \
+                     is not a Dolt class; name {class:?} in `migrations[].new_dolt_classes`"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// The classes declared `residency: true`, in name order.
     pub fn residency_classes(&self) -> Vec<String> {
         self.durable_objects
@@ -97,7 +130,7 @@ pub fn read(
         .map_err(|error| anyhow!("{error}"))
         .context(
             "config `celld` is invalid (known: `durable_objects`, whose classes take \
-             `residency`, `codegen` and `secrets`)",
+             `residency`, `codegen`, `secrets` and `doltLocal`)",
         )?;
     for (class, caps) in &declaration.durable_objects {
         if crate::deploy::is_reserved_class(class) {
@@ -118,6 +151,10 @@ pub fn read(
                      not a valid binding name"
                 );
             }
+        }
+        if let Some(patterns) = &caps.dolt_local {
+            crate::dolt_cell::validate_local_patterns(patterns)
+                .map_err(|error| anyhow!("config `celld.durable_objects.{class}.doltLocal`: {error}"))?;
         }
     }
     // A secret is one class's. The same name under two classes would be two
@@ -234,6 +271,58 @@ mod tests {
             &["A"],
         );
         assert!(wrong_type.is_err());
+    }
+
+    #[test]
+    fn local_tables_are_declared_as_patterns_for_a_dolt_class() {
+        let declaration = parse(
+            json!({ "celld": { "durable_objects": {
+                "Channel": { "doltLocal": ["outbox_%", "receipt_%"], "residency": true },
+                "Plain": {},
+                "Empty": { "doltLocal": [] }
+            } } }),
+            &["Channel", "Plain", "Empty"],
+        )
+        .unwrap();
+        assert_eq!(
+            declaration.dolt_local(),
+            BTreeMap::from([(
+                "Channel".to_string(),
+                vec!["outbox_%".to_string(), "receipt_%".to_string()]
+            )])
+        );
+        let json = serde_json::to_value(&declaration).unwrap();
+        assert_eq!(json["durable_objects"]["Channel"]["doltLocal"][1], "receipt_%");
+        assert_eq!(
+            serde_json::from_value::<CelldDeclaration>(json).unwrap(),
+            declaration
+        );
+        declaration.check_dolt_local(&["Channel".to_string()]).unwrap();
+        let error = declaration.check_dolt_local(&["Other".to_string()]).unwrap_err();
+        assert!(format!("{error:#}").contains("not a Dolt class"), "{error:#}");
+    }
+
+    #[test]
+    fn a_local_pattern_must_be_valid_and_leave_celld_s_tables_alone() {
+        for bad in ["%", "d%", "s%", "_cf_%", "dolt_%", "sqlite_%", "", "outbox-%", "a b", "9lives%", "_x%"] {
+            let error = parse(
+                json!({ "celld": { "durable_objects": { "C": { "doltLocal": [bad] } } } }),
+                &["C"],
+            )
+            .unwrap_err();
+            assert!(format!("{error:#}").contains("doltLocal"), "{bad:?}: {error:#}");
+        }
+        let twice = parse(
+            json!({ "celld": { "durable_objects": { "C": { "doltLocal": ["a_%", "a_%"] } } } }),
+            &["C"],
+        )
+        .unwrap_err();
+        assert!(format!("{twice:#}").contains("twice"), "{twice:#}");
+        assert!(parse(
+            json!({ "celld": { "durable_objects": { "C": { "doltLocal": "outbox_%" } } } }),
+            &["C"]
+        )
+        .is_err());
     }
 
     #[test]

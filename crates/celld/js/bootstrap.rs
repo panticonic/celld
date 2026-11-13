@@ -988,6 +988,7 @@ pub(super) fn adopt_cell(
 ) -> Result<Option<i64>> {
     let owned = cell_storage.is_some();
     if let Some(cell_storage) = cell_storage {
+        storage::declare_dolt_local(cell, &cell_storage.dolt_local);
         storage::open_at_epoch(
             cell,
             cell_storage.path,
@@ -1008,6 +1009,8 @@ pub(super) struct EmbeddedStartup {
     pub path: std::path::PathBuf,
     pub restored: bool,
     pub engine: celld_ltx::Engine,
+    /// The table-name patterns the facet's startup options declared local.
+    pub dolt_local: Vec<String>,
 }
 
 pub(super) fn adopt_embedded_cell(
@@ -1018,6 +1021,7 @@ pub(super) fn adopt_embedded_cell(
     startup: EmbeddedStartup,
     compat: Compat,
 ) -> Result<Option<i64>> {
+    storage::declare_dolt_local(cell, &startup.dolt_local);
     storage::open_embedded(
         cell,
         parent,

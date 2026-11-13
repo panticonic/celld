@@ -2648,6 +2648,17 @@ class DurableObjectFacets {
         if (storage !== "sqlite" && storage !== "dolt")
           throw new TypeError(
             'FacetStartupOptions.celld.storage must be "sqlite" or "dolt".');
+        // celld fork: `celld: { storage: "dolt", doltLocal: ["outbox_%"] }`
+        // names tables of this facet that are local to it (not versioned, not
+        // rewound, carried by checkout, empty in a fork). A facet is not a
+        // deployment class, so it declares them here; the host validates.
+        const local = fork?.doltLocal === undefined ? [] : fork.doltLocal;
+        if (!Array.isArray(local) || local.some((pattern) => typeof pattern !== "string"))
+          throw new TypeError(
+            "FacetStartupOptions.celld.doltLocal must be an array of table-name patterns.");
+        if (local.length !== 0 && storage !== "dolt")
+          throw new TypeError(
+            'FacetStartupOptions.celld.doltLocal needs celld.storage "dolt".');
         const { id: loader } = await meta.loadPromise;
         const id = options.id === undefined ? this._state.id : options.id;
         // Keep the ID kind and name in one clone. A string round-trip erases
@@ -2655,7 +2666,7 @@ class DurableObjectFacets {
         const idSc = __sc_encode(id instanceof DurableObjectId
           ? [id._className, id.toString(), id.name] : String(id));
         // Keep the load alive after the startup callback and class are gone.
-        return [loader, meta.name, idSc, meta.propsSc, meta, storage];
+        return [loader, meta.name, idSc, meta.propsSc, meta, storage, JSON.stringify(local)];
       });
     const invoke = async (operation) => {
       if (record.aborted) throw record.error;
@@ -2667,26 +2678,26 @@ class DurableObjectFacets {
     const session = {
       get: () => Promise.reject(new Error(
         "Awaitable properties on facets are not supported yet.")),
-      call: (path, args) => invoke(async ([loader, className, id, propsSc, , storage]) => {
+      call: (path, args) => invoke(async ([loader, className, id, propsSc, , storage, local]) => {
         if (path.length !== 1)
           throw new Error(
             "Pipelined property paths on facets are not supported yet.");
         return __rpcDes(await __facet_rpc(
           loader, className, this._state._scope, record.owner, name, id,
-          propsSc, path[0], __rpcOut(args, false), storage));
+          propsSc, path[0], __rpcOut(args, false), storage, local));
       }),
     };
     // Arrow closures retain the manager because `target.fetch`'s method
     // receiver is the target object, not the DurableObjectFacets instance.
     const manager = this;
     target.fetch = async function(input, init) {
-      return invoke(async ([loader, className, id, propsSc, , storage]) => {
+      return invoke(async ([loader, className, id, propsSc, , storage, local]) => {
         const req = new Request(input, init);
         const headers = JSON.stringify(req.headers.__celldHeaderList);
         const { body, streamId } = await __subrequestBody(req);
         const response = JSON.parse(await __facet_fetch(
           loader, className, manager._state._scope, record.owner, name, id,
-          propsSc, req.url, req.method, body, headers, streamId, storage));
+          propsSc, req.url, req.method, body, headers, streamId, storage, local));
         const responseBody = response.streamId !== undefined
           ? new CelldHttpBodyStream(response.streamId)
           : response.body !== undefined ? response.body

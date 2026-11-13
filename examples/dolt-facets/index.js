@@ -11,6 +11,8 @@ import { DurableObject } from "cloudflare:workers";
 //   GET /fork?ws=<a>&to=<b>[&at=<rev>]   ctx.facets.fork(a, b, { at })
 //   GET /abort?ws=<a>  GET /delete?ws=<a>
 //   GET /as-sqlite?ws=<a>   restart <a> naming the other engine (refused)
+//   GET /outbox?ws=<a>[&add=<text>]   the facet's local table (outbox_%)
+//   GET /bad-local          a facet whose doltLocal pattern covers celld's tables (refused)
 //   GET /plain              an ordinary SQLite facet beside the Dolt ones
 
 // The workspace's code. A real application loads it from a bundle or a
@@ -22,8 +24,11 @@ export class Workspace extends DurableObject {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.dolt = ctx.storage.dolt;
-    if (this.dolt)
+    if (this.dolt) {
       this.sql.exec("CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)");
+      // A local table: the supervisor names outbox_% in doltLocal.
+      this.sql.exec("CREATE TABLE IF NOT EXISTS outbox_msgs (id INTEGER PRIMARY KEY, body TEXT NOT NULL)");
+    }
   }
   notes() {
     return this.sql.exec("SELECT id, body FROM notes ORDER BY id").toArray();
@@ -45,6 +50,13 @@ export class Workspace extends DurableObject {
         return json({ notes: this.notes() });
       case "notes":
         return json({ branch: dolt.branch.current(), notes: this.notes() });
+      case "outbox":
+        if (q("add") != null) this.sql.exec("INSERT INTO outbox_msgs(body) VALUES (?)", q("add"));
+        return json({
+          branch: dolt.branch.current(),
+          outbox: this.sql.exec("SELECT id, body FROM outbox_msgs ORDER BY id").toArray(),
+          status: dolt.status(),
+        });
       case "commit":
         return json({ hash: dolt.commit({ message: q("message", "commit") }) });
       case "branch":
@@ -99,7 +111,9 @@ export class Supervisor extends DurableObject {
   workspace(name, storage = "dolt") {
     return this.ctx.facets.get("ws:" + name, () => ({
       class: this.workspaceClass(),
-      celld: { storage },
+      // A facet is not a deployment class, so its local tables are declared
+      // here, beside its engine.
+      celld: storage === "dolt" ? { storage, doltLocal: ["outbox_%"] } : { storage },
     }));
   }
 
@@ -136,6 +150,19 @@ export class Supervisor extends DurableObject {
           return Response.json({ refused: true, error: String(error.message ?? error) });
         } finally {
           this.ctx.facets.abort("ws:" + ws, new Error("restart"));
+        }
+      }
+      case "/bad-local": {
+        // A pattern that would cover celld's own tables is refused.
+        const facet = this.ctx.facets.get("ws:bad", () => ({
+          class: this.workspaceClass(),
+          celld: { storage: "dolt", doltLocal: ["%"] },
+        }));
+        try {
+          await facet.fetch("https://ws/engine");
+          return Response.json({ refused: false });
+        } catch (error) {
+          return Response.json({ refused: true, error: String(error.message ?? error) });
         }
       }
       case "/plain":

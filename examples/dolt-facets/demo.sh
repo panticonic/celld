@@ -57,13 +57,18 @@ get "/add?$W&body=first" >/dev/null
 C1=$(get "/commit?$W&message=first" | jq -r .hash)
 check "commit hash"          "{\"h\":\"$C1\"}"                            '.h | length == 40'
 check "kv write"             "$(get "/kv?$W&set=runtime-state")"          '.kv == "runtime-state"'
+check "local table"          "$(get "/outbox?$W&add=o1")"                 '(.outbox | map(.body)) == ["o1"] and .status == []'
+check "local pattern validated" "$(get "/bad-local")"                     '.refused == true and (.error | test("doltLocal"))'
 check "branch create"        "$(get "/branch?$W&name=feature")"           'map(.name) | index("feature") != null'
 check "checkout feature"     "$(get "/checkout?$W&name=feature")"         '.branch == "feature"'
 get "/add?$W&body=on-feature" >/dev/null
 C2=$(get "/commit?$W&message=feature" | jq -r .hash)
 check "kv survives checkout" "$(get "/kv?$W")"                            '.kv == "runtime-state"'
+check "local rows follow checkout" "$(get "/outbox?$W&add=o2")"           '(.outbox | map(.body)) == ["o1","o2"] and .branch == "feature" and .status == []'
 check "checkout main"        "$(get "/checkout?$W&name=main")"            '.branch == "main" and (.notes | length) == 1'
+check "local rows back on main" "$(get "/outbox?$W")"                     '(.outbox | map(.body)) == ["o1","o2"] and .branch == "main"'
 check "merge"                "$(get "/merge?$W&name=feature")"            '.hash != null and (.conflicts | length) == 0'
+check "merge keeps local rows" "$(get "/outbox?$W")"                      '(.outbox | length) == 2 and .status == []'
 check "merged rows"          "$(get "/notes?$W")"                         '(.notes | length) == 2'
 check "hashOf"               "$(get "/hash?$W&ref=feature")"              ".hash == \"$C2\""
 MAIN=$(get "/hash?$W&ref=main" | jq -r .hash)
@@ -85,6 +90,8 @@ echo "-- fork and abort"
 FORK=$(get "/fork?$W&to=b&at=$C1")
 check "fork at first commit" "$FORK"                                      '(.fork.notes | length) == 1 and .forked.bytes > 0'
 check "fork is dolt"         "$(get "/engine?ws=b")"                      '.dolt == true'
+check "fork starts with no local rows" "$(get "/outbox?ws=b")"           '.outbox == []'
+check "source keeps local rows" "$(get "/outbox?$W")"                    '(.outbox | length) == 2'
 check "fork has history"     "$(get "/log?ws=b")"                         'map(.message) | index("first") != null'
 check "fork refuses overwrite" "$(get "/fork?$W&to=b")"                   '.error | test("already exists|running")'
 get "/add?ws=b&body=only-in-b" >/dev/null
@@ -103,6 +110,7 @@ check "main after restart"   "$(get "/hash?$W&ref=main")"                 ".hash
 # `b` is not running in this activation: the host refuses the overwrite.
 check "fork onto stored facet" "$(get "/fork?$W&to=b")"                   '.error | test("already exists")'
 check "fork after restart"   "$(get "/notes?ws=b")"                       '(.notes | length) == 2'
+check "local rows after restart" "$(get "/outbox?$W")"                    '(.outbox | length) == 2 and .branch == "feature"'
 
 echo "-- restore from replication (node cell files deleted)"
 stop
@@ -116,6 +124,7 @@ check "restored branch"      "$(get "/engine?$W")"                        '.bran
 check "restored kv"          "$(get "/kv?$W")"                            '.kv == "runtime-state"'
 check "restored main"        "$(get "/hash?$W&ref=main")"                 ".hash == \"$MAIN\""
 check "restored fork"        "$(get "/notes?ws=b")"                       '(.notes | length) == 2'
+check "restored local rows"  "$(get "/outbox?$W")"                        '(.outbox | length) == 2 and .branch == "feature"'
 check "restored exec facet"  "$(get "/exec?ws=x1")"                       '(.rows | length) == 2'
 check "back to main"         "$(get "/checkout?$W&name=main")"            '.branch == "main"'
 get "/add?$W&body=after-restore" >/dev/null

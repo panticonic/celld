@@ -92,6 +92,7 @@ pub const SUPPORTED_DEPLOYMENT_FEATURES: &[&str] = &[
     FEATURE_PYTHON_WORKERS_V1,
     FEATURE_RESIDENCY_V1,
     FEATURE_CLASS_SECRETS_V1,
+    FEATURE_DOLT_LOCAL_V1,
 ];
 
 /// A deployment whose `celld` block declares class secrets. Required because
@@ -99,6 +100,12 @@ pub const SUPPORTED_DEPLOYMENT_FEATURES: &[&str] = &[
 /// without the credential it declared, which reads in the application as a
 /// missing environment variable.
 pub const FEATURE_CLASS_SECRETS_V1: &str = "class-secrets-v1";
+
+/// A deployment whose `celld` block declares local tables (`doltLocal`).
+/// Required because a build that does not know them would load the manifest
+/// and version, rewind and fork tables the class declared as local, losing
+/// what they hold on the first `reset` or `fork`.
+pub const FEATURE_DOLT_LOCAL_V1: &str = "dolt-local-v1";
 
 /// A deployment whose `celld` block grants `residency`. Required because a
 /// build without `ctx.residency` would load the manifest and let an object

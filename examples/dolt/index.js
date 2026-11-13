@@ -11,6 +11,14 @@ export class Repo {
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)",
     );
+    // A local table (wrangler.jsonc, celld.durable_objects.Repo.doltLocal).
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS outbox_msgs (id INTEGER PRIMARY KEY, body TEXT NOT NULL)",
+    );
+  }
+
+  outbox() {
+    return this.sql.exec("SELECT id, body FROM outbox_msgs ORDER BY id").toArray();
   }
 
   notes() {
@@ -39,6 +47,25 @@ export class Repo {
       }
       case "notes":
         return Response.json({ branch: dolt.branch.current(), notes: this.notes() });
+      case "outbox": {
+        // Local tables: written like any table, committed by no commit.
+        if (q("add") != null) this.sql.exec("INSERT INTO outbox_msgs(body) VALUES (?)", q("add"));
+        return Response.json({ branch: dolt.branch.current(), outbox: this.outbox(), status: dolt.status() });
+      }
+      case "outbox-fill": {
+        // Many local rows in one transaction, for the cost of a checkout.
+        const n = Number(q("n", "1000"));
+        this.ctx.storage.transactionSync(() => {
+          for (let i = 0; i < n; i++)
+            this.sql.exec("INSERT INTO outbox_msgs(body) VALUES (?)", `message ${i} ${"x".repeat(32)}`);
+        });
+        return Response.json({ count: this.sql.exec("SELECT count(*) AS n FROM outbox_msgs").one().n });
+      }
+      case "outbox-count":
+        return Response.json({
+          branch: dolt.branch.current(),
+          count: this.sql.exec("SELECT count(*) AS n FROM outbox_msgs").one().n,
+        });
       case "commit": {
         const hash = dolt.commit({
           message: q("message", "commit"),

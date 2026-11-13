@@ -27,7 +27,7 @@ has not been run yet.
 | Fixes for the upstream defects the harness found (S1–S4, E1, E3) | merged | `docs/fork/upstream-findings.md` |
 | V8 inspector (CDP: discovery, evaluate, CPU profiles, heap snapshots, breakpoints) | merged | `docs/services/inspector.md` |
 | Chronolog `transport-iroh` | done (Chronolog branch `feature/transport-iroh`) | |
-| Chronolog node on the fork | two-node end-to-end test passes (Chronolog branch `feature/celld-host`, `HANDOFF-celld-host.md`); fork APIs on `fix/dolt-exec-log-query` awaiting review | |
+| Chronolog node on the fork | two-node end-to-end test passes (Chronolog branch `feature/celld-host`, `HANDOFF-celld-host.md`); its fork APIs are merged | |
 | Windows port (compile and cross-link; CI workflow for a real Windows run) | merged | `docs/fork/windows.md` |
 | Vibestudio compatibility audit | done (Vibestudio branch `audit/celld-compat`, `docs/celld-compat-audit.md`) | fork bugs A1 and A2 fixed |
 | Vibestudio runtime cutover | partial, paused (Vibestudio branch `feat/celld-runtime`, `HANDOFF-celld-runtime.md`) | |
@@ -36,7 +36,7 @@ has not been run yet.
 ### Single-track backlog (from 2026-11-13, in order)
 
 1. ~~Dolt facets~~ merged (`ctx.facets.get(name, () => ({ class, celld: { storage: "dolt" } }))`). Still open: forking a root together with its facets, which belongs with F3.
-2. Review the fork APIs Chronolog needed (`fix/dolt-exec-log-query`): `execute(…, { log })`, `dolt.query`, `beginTransactionSync()`. Add unit tests, then merge.
+2. ~~Review the fork APIs Chronolog needed~~ merged with tests: `execute(…, { log })`, `dolt.query` and `beginTransactionSync()`.
 3. Fork gaps blocking the Vibestudio cutover:
    - G1: `env.NS.fork` and `restore` for SQLite objects, including their facets;
    - G2: `celld cell import` from a plain SQLite file;

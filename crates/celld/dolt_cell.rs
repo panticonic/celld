@@ -8,30 +8,46 @@
 //! the storage layer calls with the application authorizer lifted
 //! (`storage::dolt_op`). The capture half is `celld_ltx::DoltStore`.
 //!
-//! # celld's runtime tables
+//! # celld's runtime tables and a class's local tables
 //!
 //! celld keeps its own state in `_cf_*` tables (`_cf_KV`, `_cf_ALARM`,
 //! `_cf_METADATA`, `_cf_FACETS`, `_cf_WAKE`, and `_cf_DOLT` here). They live
 //! in the prolly store, so one root record commits a handler's application
-//! rows and celld's rows together and one capture replicates both. They are
-//! never versioned:
+//! rows and celld's rows together and one capture replicates both. A class
+//! can declare **local tables** of its own (`celld.durable_objects.<Class>.
+//! doltLocal`, or `FacetStartupOptions.celld.doltLocal`): name patterns such
+//! as `outbox_%` for tables that belong to this object's identity and not to
+//! its history (outboxes, receipts, caches). Both kinds are *local tables* and
+//! are never versioned:
 //!
-//! - `dolt_ignore` holds `_cf_%`, so `commit` (which stages everything)
-//!   never stages them, `reset --hard` and `merge` leave them alone, and
-//!   commit hashes depend only on application tables.
+//! - `dolt_ignore` holds `_cf_%` and each declared pattern, so `commit` (which
+//!   stages everything) never stages them, `reset --hard` and `merge` leave
+//!   them alone, and commit hashes depend only on application tables. The
+//!   rules are rows of a versioned table, so [`ensure_runtime`] restores them
+//!   at every open and `commit` and `checkout` restore them on the branch they
+//!   work on (a branch made from a commit older than a rule lacks it).
 //! - A Dolt working set is per branch, and DoltLite's checkout is per
-//!   connection, so the runtime tables travel with the active branch:
-//!   [`checkout`] copies them into the target branch's working set in one
-//!   transaction, then flips the pointer `_cf_DOLT.branch` on `main`, which
-//!   is the one place an open reads first. A crash before the flip reopens
-//!   on the old branch, whose copy is still current; a crash after it opens
-//!   the new branch, whose copy is complete. Copies left on other branches
-//!   are stale and never read. The cost of a checkout is the size of the
-//!   runtime tables.
+//!   connection, so the local tables travel with the active branch. The
+//!   checkout is `dolt_checkout('--carry-ignored', branch)` (celld patch 0003):
+//!   the engine grafts the session's untracked ignored tables onto the target
+//!   branch's working catalog by catalog entry, replacing the target's stale
+//!   copy of the same name, **without reading or writing a row**. The cost of a
+//!   checkout does not depend on how much local state there is. A branch's
+//!   own copy is left behind and is stale from then on; it is never read,
+//!   because the next checkout to that branch carries the live one over it.
+//! - DoltLite opens every connection on `main`, so the active branch is a
+//!   pointer, `_cf_DOLT.branch` in `main`'s working set, which every open reads
+//!   first (crash-safe: [`checkout`] flips it only after the target holds the
+//!   live local tables, so a crash before the flip reopens on the old branch,
+//!   whose copy is still current, and a crash after it opens the new one).
+//! - A fork starts with empty local tables ([`fork_image`]): the declared
+//!   patterns are read back from `dolt_ignore`, and the identity-bound
+//!   `_cf_ALARM`, `_cf_WAKE` and `_cf_METADATA` are emptied too.
 //!
-//! Application SQL cannot reach any of this: the authorizer reserves `_cf_*`,
-//! denies writes to `dolt_*` system tables, and denies every `dolt_*`
-//! function except read-only ones (`storage.rs`).
+//! Application SQL cannot reach any `_cf_` table: the authorizer reserves
+//! `_cf_*`, denies writes to `dolt_*` system tables, and denies every `dolt_*`
+//! function except read-only ones (`storage.rs`). A class's own local tables
+//! are ordinary tables to its SQL.
 
 use anyhow::{anyhow, bail, Context};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
@@ -153,29 +169,108 @@ pub(crate) fn attach_active_branch(connection: &Connection) -> anyhow::Result<()
 }
 
 /// Create the Dolt runtime bookkeeping on the active branch: the pointer
-/// table and the ignore rule. Idempotent; runs after `storage::schema`.
-pub(crate) fn ensure_runtime(connection: &Connection) -> anyhow::Result<()> {
+/// table and the ignore rules of the runtime tables and of the class's
+/// `local` patterns. Idempotent; runs after `storage::schema`.
+pub(crate) fn ensure_runtime(connection: &Connection, local: &[String]) -> anyhow::Result<()> {
     connection.execute(
         "CREATE TABLE IF NOT EXISTS _cf_DOLT (k TEXT PRIMARY KEY, v TEXT NOT NULL)",
         [],
     )?;
-    ensure_ignore_rule(connection)
+    ensure_ignore_rules(connection, local)
 }
 
-fn ensure_ignore_rule(connection: &Connection) -> anyhow::Result<()> {
-    let present = connection
-        .query_row(
-            "SELECT 1 FROM dolt_ignore WHERE pattern=?1 AND ignored=1",
-            [RUNTIME_PATTERN],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some();
-    if !present {
-        connection.execute(
-            "INSERT OR REPLACE INTO dolt_ignore(pattern, ignored) VALUES (?1, 1)",
-            [RUNTIME_PATTERN],
-        )?;
+/// A table name celld or Dolt owns: no local pattern may match one.
+const RESERVED_TABLE_SAMPLES: &[&str] = &[
+    "_cf_KV",
+    "_cf_ALARM",
+    "_cf_DOLT",
+    "dolt_ignore",
+    "dolt_log",
+    "doltlite_engine",
+    "sqlite_sequence",
+    "sqlite_schema",
+    "_litestream_seq",
+    "_litestream_lock",
+];
+
+/// Whether `name` is covered by a `dolt_ignore` pattern. DoltLite's matcher:
+/// `%` and `*` match any run of characters, everything else matches itself
+/// (case-sensitively). Declared patterns hold only `%` as a wildcard.
+fn pattern_matches(pattern: &str, name: &str) -> bool {
+    let (p, n) = (pattern.as_bytes(), name.as_bytes());
+    let (mut pi, mut ni) = (0usize, 0usize);
+    let (mut star, mut mark) = (None::<usize>, 0usize);
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == b'%' || p[pi] == b'*') {
+            star = Some(pi);
+            mark = ni;
+            pi += 1;
+        } else if pi < p.len() && p[pi] == n[ni] {
+            pi += 1;
+            ni += 1;
+        } else if let Some(at) = star {
+            pi = at + 1;
+            mark += 1;
+            ni = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && (p[pi] == b'%' || p[pi] == b'*') {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+/// The longest a local table pattern may be.
+const MAX_LOCAL_PATTERN: usize = 64;
+
+/// Check the table-name patterns a class declares as local (`doltLocal`):
+/// ASCII letters, digits, `_` and the wildcard `%`, starting with a letter,
+/// and none that could cover a table celld or Dolt owns (`_cf_*`, `dolt_*`,
+/// `sqlite_*`), so `%` and `d%` are refused and `outbox_%` is fine.
+pub fn validate_local_patterns(patterns: &[String]) -> anyhow::Result<()> {
+    let mut seen = std::collections::BTreeSet::new();
+    for pattern in patterns {
+        anyhow::ensure!(
+            !pattern.is_empty()
+                && pattern.len() <= MAX_LOCAL_PATTERN
+                && pattern.starts_with(|c: char| c.is_ascii_alphabetic())
+                && pattern.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'%'),
+            "local table pattern {pattern:?} is not valid: use up to {MAX_LOCAL_PATTERN} ASCII letters, \
+             digits and `_`, starting with a letter, with `%` for any run of characters"
+        );
+        if let Some(reserved) = RESERVED_TABLE_SAMPLES.iter().find(|name| pattern_matches(pattern, name)) {
+            bail!(
+                "local table pattern {pattern:?} would cover {reserved:?}, a table celld or Dolt owns; \
+                 give the pattern a prefix of your own, such as `outbox_%`"
+            );
+        }
+        anyhow::ensure!(seen.insert(pattern.as_str()), "local table pattern {pattern:?} is listed twice");
+    }
+    Ok(())
+}
+
+/// Put `_cf_%` and each of `local` in `dolt_ignore` of the active branch,
+/// where absent. The rules are rows of a versioned table: a branch made from
+/// a commit that predates a rule lacks it, and a reset to such a commit
+/// removes it, so this runs wherever the rules decide something.
+fn ensure_ignore_rules(connection: &Connection, local: &[String]) -> anyhow::Result<()> {
+    for pattern in std::iter::once(RUNTIME_PATTERN).chain(local.iter().map(String::as_str)) {
+        let present = connection
+            .query_row(
+                "SELECT 1 FROM dolt_ignore WHERE pattern=?1 AND ignored=1",
+                [pattern],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !present {
+            connection.execute(
+                "INSERT OR REPLACE INTO dolt_ignore(pattern, ignored) VALUES (?1, 1)",
+                [pattern],
+            )?;
+        }
     }
     Ok(())
 }
@@ -337,9 +432,10 @@ pub(crate) fn run_in_transaction(
     connection: &Connection,
     op: &str,
     args: &Value,
+    local: &[String],
 ) -> anyhow::Result<Value> {
     match op {
-        "txCommit" => commit(connection, args),
+        "txCommit" => commit(connection, args, local),
         "mergeBegin" => merge_begin(connection, args),
         "mergeTake" => merge_take(connection, args),
         "mergeFinish" => merge_finish(connection, args),
@@ -690,12 +786,23 @@ fn merge_finish(connection: &Connection, args: &Value) -> anyhow::Result<Value> 
     Ok(Value::Null)
 }
 
+/// [`run_with`] for a cell that declares no local tables.
+#[cfg(test)]
+pub(crate) fn run(connection: &Connection, op: &str, args: &Value) -> anyhow::Result<Value> {
+    run_with(connection, op, args, &[])
+}
+
 /// Run one `ctx.storage.dolt` operation. The caller holds the cell's
 /// connection outside any transaction, with the application authorizer
-/// lifted.
-pub(crate) fn run(connection: &Connection, op: &str, args: &Value) -> anyhow::Result<Value> {
+/// lifted. `local` is the cell's declared local table patterns.
+pub(crate) fn run_with(
+    connection: &Connection,
+    op: &str,
+    args: &Value,
+    local: &[String],
+) -> anyhow::Result<Value> {
     match op {
-        "commit" => commit(connection, args),
+        "commit" => commit(connection, args, local),
         "branchCreate" => {
             let name = branch_name(&args["name"], "branch name")?;
             let mut call_args = vec![name];
@@ -733,7 +840,7 @@ pub(crate) fn run(connection: &Connection, op: &str, args: &Value) -> anyhow::Re
             if args.get("create").and_then(Value::as_bool).unwrap_or(false) {
                 call(connection, "dolt_branch", &[target.clone()])?;
             }
-            checkout(connection, &target)?;
+            checkout(connection, &target, local)?;
             Ok(Value::String(target))
         }
         "reset" => {
@@ -794,13 +901,13 @@ fn hash_of(connection: &Connection, rev: &str) -> anyhow::Result<String> {
     }
 }
 
-fn commit(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
+fn commit(connection: &Connection, args: &Value, local: &[String]) -> anyhow::Result<Value> {
     let message = optional_string(args, "message")?
         .filter(|message| !message.is_empty())
         .ok_or_else(|| anyhow!("commit needs a non-empty message"))?;
-    // A branch created from a commit made before the rule existed lacks
-    // it; restore it so the runtime tables are never staged.
-    ensure_ignore_rule(connection)?;
+    // A branch created from a commit made before a rule existed lacks it;
+    // restore the rules so the local tables are never staged.
+    ensure_ignore_rules(connection, local)?;
     let mut call_args = vec!["-A".to_string(), "-m".to_string(), message];
     if let Some(author) = optional_string(args, "author")? {
         anyhow::ensure!(
@@ -906,103 +1013,34 @@ fn diff(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
         }
     };
     let summary = rows(connection, summary_sql, &params)?;
-    let patch = rows(
-        connection,
-        "SELECT table_name AS \"table\", diff_type AS diffType, statement \
-         FROM dolt_patch(?1, ?2) ORDER BY statement_order",
-        &[from, to],
-    )?
-    .into_iter()
-    .filter(|row| {
-        let name = row.get("table").and_then(Value::as_str).unwrap_or("");
-        !name.starts_with("_cf_")
-            && table.as_deref().is_none_or(|table| table == name)
-    })
-    .collect::<Vec<_>>();
+    // The patch is asked for table by table: `dolt_patch(from, to)` fails
+    // over a range that changes `dolt_ignore` (a class that adds a local table
+    // pattern does that), and a system table has no patch of use to an
+    // application anyway.
+    let mut patch = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for row in &summary {
+        let name = row
+            .get("toTable")
+            .and_then(Value::as_str)
+            .or_else(|| row.get("fromTable").and_then(Value::as_str))
+            .unwrap_or("");
+        if name.is_empty()
+            || name.starts_with("_cf_")
+            || name.starts_with("dolt_")
+            || table.as_deref().is_some_and(|table| table != name)
+            || !seen.insert(name.to_string())
+        {
+            continue;
+        }
+        patch.extend(rows(
+            connection,
+            "SELECT table_name AS \"table\", diff_type AS diffType, statement \
+             FROM dolt_patch(?1, ?2, ?3) ORDER BY statement_order",
+            &[from.clone(), to.clone(), name.to_string()],
+        )?);
+    }
     Ok(json!({ "summary": summary, "patch": patch }))
-}
-
-/// One runtime table's definition and rows.
-struct RuntimeTable {
-    name: String,
-    sql: String,
-    indexes: Vec<String>,
-    rows: Vec<Vec<rusqlite::types::Value>>,
-}
-
-fn dump_runtime(connection: &Connection) -> anyhow::Result<Vec<RuntimeTable>> {
-    let mut statement = connection.prepare(
-        "SELECT name, sql FROM sqlite_schema WHERE type='table' \
-         AND name LIKE '\\_cf\\_%' ESCAPE '\\' AND sql IS NOT NULL ORDER BY name",
-    )?;
-    let tables = statement
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    drop(statement);
-    let mut out = Vec::new();
-    for (name, sql) in tables {
-        let mut statement = connection.prepare(
-            "SELECT sql FROM sqlite_schema WHERE type='index' AND tbl_name=?1 AND sql IS NOT NULL",
-        )?;
-        let indexes = statement
-            .query_map([&name], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        drop(statement);
-        let quoted = name.replace('"', "\"\"");
-        let mut statement = connection.prepare(&format!("SELECT * FROM \"{quoted}\""))?;
-        let columns = statement.column_count();
-        let rows = statement
-            .query_map([], |row| {
-                (0..columns)
-                    .map(|index| row.get::<_, rusqlite::types::Value>(index))
-                    .collect::<rusqlite::Result<Vec<_>>>()
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        out.push(RuntimeTable {
-            name,
-            sql,
-            indexes,
-            rows,
-        });
-    }
-    Ok(out)
-}
-
-fn load_runtime(connection: &Connection, tables: &[RuntimeTable]) -> anyhow::Result<()> {
-    for table in tables {
-        let quoted = table.name.replace('"', "\"\"");
-        // Reuse a table the branch already has, so the branch's catalog
-        // keeps its shape: DoltLite compares catalogs to decide whether a
-        // working set is clean, and a dropped and recreated table is not.
-        let existing: Option<String> = connection
-            .query_row(
-                "SELECT sql FROM sqlite_schema WHERE type='table' AND name=?1",
-                [&table.name],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if existing.as_deref() == Some(table.sql.as_str()) {
-            connection.execute_batch(&format!("DELETE FROM \"{quoted}\""))?;
-        } else {
-            connection.execute_batch(&format!("DROP TABLE IF EXISTS \"{quoted}\""))?;
-            connection.execute_batch(&table.sql)?;
-            for index in &table.indexes {
-                connection.execute_batch(index)?;
-            }
-        }
-        if let Some(first) = table.rows.first() {
-            let placeholders = (1..=first.len())
-                .map(|index| format!("?{index}"))
-                .collect::<Vec<_>>()
-                .join(",");
-            let mut insert =
-                connection.prepare(&format!("INSERT INTO \"{quoted}\" VALUES ({placeholders})"))?;
-            for row in &table.rows {
-                insert.execute(rusqlite::params_from_iter(row.iter()))?;
-            }
-        }
-    }
-    ensure_ignore_rule(connection)
 }
 
 fn set_pointer(connection: &Connection, branch: &str) -> anyhow::Result<()> {
@@ -1023,45 +1061,33 @@ fn switch(connection: &Connection, branch: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Check out `target`, carrying celld's runtime tables along. See the module
-/// documentation for the crash argument.
-pub(crate) fn checkout(connection: &Connection, target: &str) -> anyhow::Result<()> {
+/// Check out `target`, carrying the local tables (celld's `_cf_*` and the
+/// class's declared patterns) along. See the module documentation for the
+/// carry and the crash argument.
+///
+/// 1. `--carry-ignored` moves the live local tables onto `target` by catalog
+///    entry; the cost does not depend on their size.
+/// 2. The active-branch pointer flips on `main`: a plain switch to `main`
+///    (whose own local tables are stale and never read), the pointer write, a
+///    plain switch back. Landing on `main` carries the pointer with the
+///    tables, so it is one write.
+pub(crate) fn checkout(connection: &Connection, target: &str, local: &[String]) -> anyhow::Result<()> {
     let source = active_branch(connection)?;
     if source == target {
         return Ok(());
     }
-    let tables = dump_runtime(connection)?;
+    call(connection, "dolt_checkout", &["--carry-ignored".to_string(), target.to_string()])
+        .with_context(|| format!("check out {target:?}"))?;
+    // The rules are rows of a versioned table the target may lack.
+    ensure_ignore_rules(connection, local)?;
+    if target == HOME_BRANCH {
+        return set_pointer(connection, HOME_BRANCH);
+    }
+    // Flip the pointer on `main`: the commit point of the checkout.
+    switch(connection, HOME_BRANCH)?;
+    let flipped = ensure_ignore_rules(connection, local).and_then(|()| set_pointer(connection, target));
     switch(connection, target)?;
-    let copied = (|| -> anyhow::Result<()> {
-        connection.execute_batch("BEGIN IMMEDIATE")?;
-        let result = (|| -> anyhow::Result<()> {
-            load_runtime(connection, &tables)?;
-            if target == HOME_BRANCH {
-                // On `main` the copy and the pointer commit together.
-                set_pointer(connection, HOME_BRANCH)?;
-            }
-            Ok(())
-        })();
-        match result {
-            Ok(()) => Ok(connection.execute_batch("COMMIT")?),
-            Err(error) => {
-                let _ = connection.execute_batch("ROLLBACK");
-                Err(error)
-            }
-        }
-    })();
-    if let Err(error) = copied {
-        let _ = switch(connection, &source);
-        return Err(error.context(format!("carry runtime state to branch {target:?}")));
-    }
-    if target != HOME_BRANCH {
-        // Flip the pointer on `main`: the commit point of the checkout.
-        switch(connection, HOME_BRANCH)?;
-        let flipped = set_pointer(connection, target);
-        switch(connection, target)?;
-        flipped?;
-    }
-    Ok(())
+    flipped
 }
 
 /// The image a fork of a Dolt cell starts from: the source's chunk file at
@@ -1085,6 +1111,9 @@ pub(crate) fn fork_image(
             let connection = Connection::open(scratch)?;
             anyhow::ensure!(is_prolly(&connection), "fork source is not a prolly store");
             attach_active_branch(&connection)?;
+            // The class's local tables are read back from the rules, which a
+            // reset to an older commit can drop, so they are emptied first.
+            empty_local_tables(&connection)?;
             if let Some(at) = at {
                 reset_hard(&connection, at)?;
             }
@@ -1111,6 +1140,45 @@ pub(crate) fn fork_image(
         }
     }
     built
+}
+
+/// The tables of the active branch that a class declared local: those
+/// covered by a `dolt_ignore` rule other than celld's own `_cf_%`.
+fn declared_local_tables(connection: &Connection) -> anyhow::Result<Vec<String>> {
+    let patterns = table_names(
+        connection,
+        &format!("SELECT pattern FROM dolt_ignore WHERE ignored = 1 AND pattern <> '{RUNTIME_PATTERN}'"),
+    )?;
+    if patterns.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tables = table_names(
+        connection,
+        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' \
+         AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\' AND name NOT LIKE 'dolt\\_%' ESCAPE '\\' ORDER BY name",
+    )?;
+    Ok(tables
+        .into_iter()
+        .filter(|table| patterns.iter().any(|pattern| pattern_matches(pattern, table)))
+        .collect())
+}
+
+/// A fork, a restore or an import is a new identity: the tables a class
+/// declared local start empty (their schema stays, so the class's migrations
+/// find what they made). Their names are read back from the `dolt_ignore`
+/// rules of the active branch; call this before a reset to an older commit
+/// can drop the rules.
+pub(crate) fn empty_local_tables(connection: &Connection) -> anyhow::Result<()> {
+    let local = declared_local_tables(connection)?;
+    for table in &local {
+        connection.execute(&format!("DELETE FROM {}", quote_ident(table)), [])?;
+    }
+    if !local.is_empty() && table_exists(connection, "sqlite_sequence")? {
+        for table in &local {
+            connection.execute("DELETE FROM sqlite_sequence WHERE name = ?1", [table])?;
+        }
+    }
+    Ok(())
 }
 
 /// Reset the active branch of a fork's image to the revision `at`.
@@ -1201,12 +1269,17 @@ pub(crate) fn fork_snapshot(image: &[u8]) -> anyhow::Result<Vec<u8>> {
 mod tests {
     use super::*;
 
+    /// [`super::run_in_transaction`] for a cell that declares no local tables.
+    fn run_in_transaction(connection: &Connection, op: &str, args: &Value) -> anyhow::Result<Value> {
+        super::run_in_transaction(connection, op, args, &[])
+    }
+
     fn cell(dir: &std::path::Path) -> (String, Connection) {
         let path = dir.join("cell.db").to_string_lossy().into_owned();
         let connection = open_connection(&path, celld_ltx::Engine::Dolt, None).unwrap();
         attach_active_branch(&connection).unwrap();
         crate::storage::schema(&connection).unwrap();
-        ensure_runtime(&connection).unwrap();
+        ensure_runtime(&connection, &[]).unwrap();
         (path, connection)
     }
 
@@ -1594,6 +1667,243 @@ mod tests {
         let error = run_in_transaction(&c, "mergeTake", &json!({"table": "t", "id": "nope"}));
         c.execute_batch("ROLLBACK").unwrap();
         assert!(error.is_err());
+    }
+
+    /// A cell that declares `outbox_%` local, and the calls it makes.
+    fn local_cell(dir: &std::path::Path) -> (String, Connection) {
+        let path = dir.join("cell.db").to_string_lossy().into_owned();
+        let connection = open_connection(&path, celld_ltx::Engine::Dolt, None).unwrap();
+        attach_active_branch(&connection).unwrap();
+        crate::storage::schema(&connection).unwrap();
+        ensure_runtime(&connection, &LOCAL).unwrap();
+        (path, connection)
+    }
+
+    static LOCAL: std::sync::LazyLock<Vec<String>> =
+        std::sync::LazyLock::new(|| vec!["outbox_%".to_string()]);
+
+    fn dolt(c: &Connection, op: &str, args: Value) -> Value {
+        run_with(c, op, &args, &LOCAL).unwrap_or_else(|error| panic!("{op} {args}: {error:#}"))
+    }
+
+    fn outbox(c: &Connection) -> Vec<String> {
+        let mut statement = c.prepare("SELECT body FROM outbox_msgs ORDER BY id").unwrap();
+        statement.query_map([], |row| row.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+    }
+
+    /// F4: tables the class declared local are ignored by commits, survive
+    /// reset and merge, move with checkout, and never enter a diff.
+    #[test]
+    fn declared_local_tables_follow_the_branch_and_stay_out_of_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_path, c) = local_cell(dir.path());
+        c.execute_batch(
+            "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT); \
+             CREATE TABLE outbox_msgs(id INTEGER PRIMARY KEY, body TEXT); \
+             CREATE INDEX outbox_by_body ON outbox_msgs(body); \
+             INSERT INTO t VALUES (1,'x'); INSERT INTO outbox_msgs(body) VALUES ('o1');",
+        )
+        .unwrap();
+        let base = dolt(&c, "commit", json!({"message": "base"}));
+        // Nothing local was staged, and no later diff shows it.
+        assert_eq!(dolt(&c, "status", json!({})), json!([]));
+        c.execute("INSERT INTO outbox_msgs(body) VALUES ('o2')", []).unwrap();
+        assert_eq!(dolt(&c, "status", json!({})), json!([]));
+        let diff = dolt(&c, "diff", json!({"from": base}));
+        assert!(
+            diff["summary"].as_array().unwrap().iter().all(|row| row["toTable"] != "outbox_msgs"),
+            "{diff}"
+        );
+
+        // Moves with checkout; the branch's stale copy is replaced.
+        dolt(&c, "branchCreate", json!({"name": "b"}));
+        dolt(&c, "checkout", json!({"branch": "b"}));
+        assert_eq!(outbox(&c), ["o1", "o2"]);
+        c.execute("INSERT INTO outbox_msgs(body) VALUES ('o3')", []).unwrap();
+        c.execute("UPDATE t SET b='on b' WHERE a=1", []).unwrap();
+        dolt(&c, "commit", json!({"message": "on b"}));
+        dolt(&c, "checkout", json!({"branch": "main"}));
+        assert_eq!(outbox(&c), ["o1", "o2", "o3"], "main's copy from before is replaced by the live one");
+        c.execute("DELETE FROM outbox_msgs WHERE body='o1'", []).unwrap();
+        dolt(&c, "checkout", json!({"branch": "b"}));
+        assert_eq!(outbox(&c), ["o2", "o3"]);
+        // The index came along.
+        c.execute("INSERT INTO outbox_msgs(body) VALUES ('o4')", []).unwrap();
+        let indexes: i64 = c
+            .query_row("SELECT count(*) FROM sqlite_schema WHERE name='outbox_by_body'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(indexes, 1);
+        dolt(&c, "checkout", json!({"branch": "main"}));
+
+        // Survives merge and reset --hard.
+        let merged = dolt(&c, "merge", json!({"branch": "b"}));
+        assert_eq!(merged["conflicts"], json!([]));
+        assert_eq!(outbox(&c), ["o2", "o3", "o4"]);
+        dolt(&c, "reset", json!({"hard": true, "to": base}));
+        assert_eq!(outbox(&c), ["o2", "o3", "o4"]);
+        let b: String = c.query_row("SELECT b FROM t WHERE a=1", [], |r| r.get(0)).unwrap();
+        assert_eq!(b, "x");
+        // Local rows do not change a commit's identity.
+        dolt(&c, "commit", json!({"message": "empty", "allowEmpty": true, "date": 1}));
+        let first = dolt(&c, "hashOf", json!({"ref": "HEAD"}));
+        dolt(&c, "reset", json!({"hard": true, "to": base}));
+        c.execute("DELETE FROM outbox_msgs", []).unwrap();
+        dolt(&c, "commit", json!({"message": "empty", "allowEmpty": true, "date": 1}));
+        assert_eq!(dolt(&c, "hashOf", json!({"ref": "HEAD"})), first);
+    }
+
+    /// A branch made from a commit that predates a rule, or reset to one,
+    /// gets the rule back where it matters: commit and checkout.
+    #[test]
+    fn the_local_rules_come_back_on_a_branch_that_lacks_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_path, c) = cell(dir.path());
+        c.execute_batch("CREATE TABLE t(a INTEGER PRIMARY KEY);").unwrap();
+        let before_rule = run(&c, "commit", &json!({"message": "before the class declared a local table"})).unwrap();
+        // The class is redeployed with `outbox_%` local.
+        ensure_runtime(&c, &LOCAL).unwrap();
+        c.execute_batch("CREATE TABLE outbox_msgs(id INTEGER PRIMARY KEY, body TEXT); INSERT INTO outbox_msgs(body) VALUES ('o1');")
+            .unwrap();
+        dolt(&c, "commit", json!({"message": "after"}));
+        assert_eq!(dolt(&c, "status", json!({})), json!([]));
+        // A branch from the old commit has no rule, yet the table follows it
+        // there. The rule is a row of `dolt_ignore`, a versioned table, so
+        // putting it back is a change the branch commits; the table itself
+        // is never one.
+        dolt(&c, "branchCreate", json!({"name": "old", "from": before_rule}));
+        dolt(&c, "checkout", json!({"branch": "old"}));
+        assert_eq!(outbox(&c), ["o1"]);
+        let status = dolt(&c, "status", json!({}));
+        assert_eq!(status.as_array().unwrap().len(), 1, "{status}");
+        assert_eq!(status[0]["table"], "dolt_ignore");
+        dolt(&c, "commit", json!({"message": "on old"}));
+        assert_eq!(dolt(&c, "status", json!({})), json!([]));
+        let diff = dolt(&c, "diff", json!({"from": "HEAD~1", "to": "HEAD"}));
+        let changed: Vec<&str> = diff["summary"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|row| row["toTable"].as_str().or(row["fromTable"].as_str()))
+            .collect();
+        assert_eq!(changed, ["dolt_ignore"], "{diff}");
+    }
+
+    /// F4: a fork starts with empty local tables and keeps their schema; the
+    /// identity-bound runtime state goes too.
+    #[test]
+    fn a_fork_image_empties_the_declared_local_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, c) = local_cell(dir.path());
+        c.execute_batch(
+            "CREATE TABLE t(a INTEGER PRIMARY KEY); INSERT INTO t VALUES (1); \
+             CREATE TABLE outbox_msgs(id INTEGER PRIMARY KEY, body TEXT); \
+             INSERT INTO outbox_msgs(body) VALUES ('o1'),('o2'); \
+             CREATE TABLE ordinary(a INTEGER PRIMARY KEY); INSERT INTO ordinary VALUES (7);",
+        )
+        .unwrap();
+        let first = dolt(&c, "commit", json!({"message": "one"}));
+        // A fork at an older commit: the rules the reset would drop are read first.
+        c.execute("INSERT INTO t VALUES (2)", []).unwrap();
+        dolt(&c, "commit", json!({"message": "two"}));
+        let source = std::fs::read(&path).unwrap();
+        for at in [None, Some(first.as_str().unwrap())] {
+            let image = fork_image(&source, &dir.path().join("scratch.db"), at).unwrap();
+            let fork = dir.path().join("fork.db");
+            std::fs::write(&fork, celld_ltx::ltx::decode_database_image(&fork_snapshot(&image).unwrap()).unwrap())
+                .unwrap();
+            celld_ltx::DoltStore::open(&fork, celld_ltx::LtxHost::default()).unwrap();
+            let f = Connection::open(&fork).unwrap();
+            attach_active_branch(&f).unwrap();
+            assert_eq!(outbox(&f), Vec::<String>::new(), "at {at:?}");
+            let ordinary: i64 = f.query_row("SELECT count(*) FROM ordinary", [], |r| r.get(0)).unwrap();
+            assert_eq!(ordinary, 1, "an ordinary table is a fork's data");
+            // The table works as a new one does.
+            f.execute("INSERT INTO outbox_msgs(body) VALUES ('fresh')", []).unwrap();
+            assert_eq!(outbox(&f), ["fresh"]);
+            drop(f);
+            std::fs::remove_file(&fork).unwrap();
+        }
+        assert_eq!(outbox(&c), ["o1", "o2"], "the source is untouched");
+    }
+
+    /// F5: a checkout moves local tables by catalog entry and does not copy
+    /// rows, so the store grows by a few chunks however much local state
+    /// there is (copying 5000 rows of 100 bytes would append over 500 KB).
+    #[test]
+    fn checkout_does_not_copy_local_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, c) = local_cell(dir.path());
+        c.execute_batch("CREATE TABLE t(a INTEGER PRIMARY KEY); CREATE TABLE outbox_msgs(id INTEGER PRIMARY KEY, body TEXT);")
+            .unwrap();
+        c.execute_batch("BEGIN").unwrap();
+        for i in 0..5000 {
+            c.execute("INSERT INTO outbox_msgs(body) VALUES (?1)", [format!("{i:0>100}")]).unwrap();
+        }
+        c.execute_batch("COMMIT").unwrap();
+        dolt(&c, "commit", json!({"message": "base"}));
+        dolt(&c, "branchCreate", json!({"name": "b"}));
+        dolt(&c, "checkout", json!({"branch": "b"}));
+        let before = std::fs::metadata(&path).unwrap().len();
+        for _ in 0..5 {
+            dolt(&c, "checkout", json!({"branch": "main"}));
+            dolt(&c, "checkout", json!({"branch": "b"}));
+        }
+        let grown = std::fs::metadata(&path).unwrap().len() - before;
+        assert!(grown < 100_000, "ten checkouts appended {grown} bytes");
+        assert_eq!(outbox(&c).len(), 5000);
+    }
+
+    /// Release benchmark for F5 (`cargo test -p celld --release --lib
+    /// checkout_cost -- --ignored --nocapture`): checkout latency with
+    /// local rows in the table, at each `synchronous` level (celld runs cells
+    /// at NORMAL).
+    #[test]
+    #[ignore]
+    fn checkout_cost_by_local_rows() {
+        fn percentile(mut v: Vec<f64>, p: f64) -> f64 {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            v[((v.len() as f64 * p) as usize).min(v.len() - 1)]
+        }
+        for sync in ["FULL", "NORMAL", "OFF"] {
+            for rows in [0usize, 1_000, 10_000] {
+                let dir = tempfile::tempdir().unwrap();
+                let (_path, c) = local_cell(dir.path());
+                c.execute_batch(&format!("PRAGMA synchronous={sync}")).unwrap();
+                c.execute_batch("CREATE TABLE t(a INTEGER PRIMARY KEY); CREATE TABLE outbox_msgs(id INTEGER PRIMARY KEY, body TEXT);")
+                    .unwrap();
+                c.execute_batch("BEGIN").unwrap();
+                for i in 0..rows {
+                    c.execute("INSERT INTO outbox_msgs(body) VALUES (?1)", [format!("{i:0>64}")]).unwrap();
+                }
+                c.execute_batch("COMMIT").unwrap();
+                dolt(&c, "commit", json!({"message": "base"}));
+                dolt(&c, "branchCreate", json!({"name": "b"}));
+                let mut quiet = Vec::new();
+                let mut written = Vec::new();
+                for i in 0..200 {
+                    let target = if i % 2 == 0 { "b" } else { "main" };
+                    // A local write before each checkout, as an outbox sees.
+                    c.execute("INSERT INTO outbox_msgs(body) VALUES ('x')", []).unwrap();
+                    let started = std::time::Instant::now();
+                    dolt(&c, "checkout", json!({"branch": target}));
+                    written.push(started.elapsed().as_secs_f64() * 1000.0);
+                }
+                for i in 0..200 {
+                    let target = if i % 2 == 0 { "b" } else { "main" };
+                    let started = std::time::Instant::now();
+                    dolt(&c, "checkout", json!({"branch": target}));
+                    quiet.push(started.elapsed().as_secs_f64() * 1000.0);
+                }
+                println!(
+                    "synchronous={sync:<4} local rows {rows:>6}: checkout p50/p95 ms: \
+                     after a local write {:.2}/{:.2}, no write {:.2}/{:.2}",
+                    percentile(written.clone(), 0.5),
+                    percentile(written, 0.95),
+                    percentile(quiet.clone(), 0.5),
+                    percentile(quiet, 0.95),
+                );
+            }
+        }
     }
 
     #[test]

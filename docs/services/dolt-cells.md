@@ -186,6 +186,43 @@ Functions with network or file reach (`dolt_clone`, `dolt_fetch`,
 denied to every statement; a cell's state leaves the node only through
 replication.
 
+## Checkout
+
+Dolt keeps a working set per branch, but celld's own tables (the key-value
+API, alarms, bookkeeping) belong to the object and must follow whichever
+branch is checked out. `checkout` is `dolt_checkout --carry-ignored` (celld's
+DoltLite patch 0003, `vendor/libsqlite3-sys/doltlite/patches`): the engine
+moves the session's untracked ignored tables to the target branch **by catalog
+entry**, replacing the target's stale copy of the same name, and reads and
+writes no row. A branch you left keeps a stale copy that is never read; the
+next checkout to it replaces it with the live one. celld then records which
+branch is active (a pointer in `main`'s working set, which every open reads
+first): a switch to `main`, one write, a switch back.
+
+**The cost of a checkout does not depend on how much local state there is.**
+Measured on the release profile (`cargo test -p celld --release --lib
+checkout_cost -- --ignored --nocapture`, one local table, a local write before
+each checkout, 200 checkouts alternating two branches, this machine's NVMe,
+whose `fsync` takes about 6.4 ms):
+
+| `synchronous` | local rows | checkout after a local write, p50 / p95 | checkout with nothing written, p50 / p95 |
+| --- | ---: | ---: | ---: |
+| OFF (no device flush) | 0 | 0.67 / 0.93 ms | 0.70 / 0.75 ms |
+| OFF | 1 000 | 0.66 / 0.77 ms | 0.71 / 0.77 ms |
+| OFF | 10 000 | 0.74 / 0.81 ms | 0.73 / 0.78 ms |
+| NORMAL (celld's setting) | 0 | 13.78 / 15.07 ms | 7.50 / 8.19 ms |
+| NORMAL | 1 000 | 13.83 / 15.05 ms | 7.41 / 7.84 ms |
+| NORMAL | 10 000 | 13.68 / 15.42 ms | 7.55 / 7.87 ms |
+| FULL | 10 000 | 14.14 / 16.31 ms | 7.66 / 8.18 ms |
+
+The CPU cost is under a millisecond and the same for 0, 1 000 and 10 000 rows.
+What remains at `synchronous=FULL` or `NORMAL` is the device: a checkout
+makes the pointer write durable (one root record) and, when the branch you left
+has local writes that no commit made durable, records its new state (a second
+one). A transaction made with [`{ commit }`](#commit-at-the-end-of-a-transaction)
+leaves nothing to record. On a device with a fast flush the checkout is about
+a millisecond.
+
 ## Semantics
 
 **Output gate.** Each method that can change the store (commit, branch create
@@ -214,9 +251,7 @@ a takeover, and a restore. An object starts on `main`.
 bookkeeping live in `_cf_*` tables inside the store, so a handler's KV writes
 and SQL writes commit and replicate together. They are excluded from every
 commit (a `dolt_ignore` rule celld installs), survive `reset` and `merge`, and
-move with `checkout`. Because Dolt keeps a working set per branch, a checkout
-copies these tables to the target branch; its cost grows with the size of the
-key-value data, so keep large data in SQL tables on a Dolt cell. The
+move with `checkout` without being copied (see [Checkout](#checkout)). The
 `dolt_ignore` rule itself is part of the first commit. celld's alarm
 bookkeeping triggers are connection-local on a Dolt cell, so they never enter
 `dolt_schemas` or a commit.

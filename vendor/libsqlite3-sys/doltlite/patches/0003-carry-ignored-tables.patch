@@ -1,0 +1,180 @@
+celld patch 0003: dolt_checkout --carry-ignored.
+
+Why. A Dolt working set is per branch, so a table that is not versioned
+(a table that dolt_ignore covers and no commit holds) exists once for each
+branch that was ever checked out, and a checkout leaves the new branch with
+a stale copy or none. celld keeps its own runtime tables (_cf_KV, the alarm
+and wake records, ...) and a class's declared local tables in such tables,
+and they must follow the cell wherever it is checked out. Without this patch
+celld copied them row by row on every checkout, so a checkout cost as much
+as the local state is large.
+
+What. dolt_checkout accepts --carry-ignored. The session's untracked ignored
+tables (the same set the merge and pull paths carry across a moving branch:
+mergeFindLocalTables, mergeCopyLocalTables) are grafted onto the target
+branch's working catalog by catalog entry, so a table of the same name that
+the target held from an earlier visit is replaced and no row is read or
+written. The branch being left keeps its own copy, which is stale from then
+on. A table the target commit holds under the same name with different
+content is not carried. Without the flag nothing changes.
+
+--- a/sqlite3.c
++++ b/sqlite3.c
+@@ -554228,6 +554228,12 @@
+   /* Top-level branch-connection checkout must persist despite a savepoint
+   ** frame; nested savepoint checkout remains rollbackable. */
+   int bPersistUnderSavepoint;
++  /* celld: dolt_checkout --carry-ignored. The untracked tables that
++  ** dolt_ignore covers move with the session to the target branch, by
++  ** catalog entry: no row is copied. */
++  u8 bCarryIgnored;
++  struct TableEntry *aCarry;
++  int nCarry;
+ };
+ 
+ /* Write open vtab transactions into the live catalog. A null command
+@@ -554408,6 +554414,78 @@
+   return rc;
+ }
+ 
++/* celld: the tables checkout carries. Runs while the session still holds
++** the branch being left, because dolt_ignore is read through it. These are
++** the tables the branch does not track and dolt_ignore covers (the split
++** the pull path makes, mergeSplitWorkingCatalog), named so that
++** mergeCopyLocalTables can move them by name. */
++static int checkoutCarryFind(sqlite3 *db, CheckoutMutationCtx *p){
++  ProllyHash headCat, tracked, ignored;
++  struct TableEntry *aIgnored = 0;
++  int nIgnored = 0;
++  char *zErr = 0;
++  int i, rc;
++  doltliteFreeCatalog(p->aCarry, p->nCarry);
++  p->aCarry = 0;
++  p->nCarry = 0;
++  if( !p->bCarryIgnored || !p->haveOldState || p->savedWasDetached
++   || p->oldBranchMissing || prollyHashIsEmpty(&p->oldCommitHash) ){
++    return SQLITE_OK;
++  }
++  rc = doltliteCommitCatalogHash(db, &p->oldCommitHash, &headCat);
++  if( rc==SQLITE_OK ){
++    rc = mergeSplitWorkingCatalog(db, &headCat, &headCat, 0,
++                                  &tracked, &ignored, &zErr);
++  }
++  sqlite3_free(zErr);
++  if( rc!=SQLITE_OK || prollyHashIsEmpty(&ignored) ) return rc;
++  rc = doltliteLoadCatalog(db, &ignored, &aIgnored, &nIgnored, 0);
++  if( rc!=SQLITE_OK ) return rc;
++  p->aCarry = sqlite3_malloc64(((sqlite3_uint64)nIgnored+1)*sizeof(*p->aCarry));
++  if( !p->aCarry ){
++    doltliteFreeCatalog(aIgnored, nIgnored);
++    return SQLITE_NOMEM;
++  }
++  for(i=0; i<nIgnored; i++){
++    if( aIgnored[i].iTable<=1 || !aIgnored[i].zName
++     || strcmp(aIgnored[i].zName, "sqlite_sequence")==0 ) continue;
++    memset(&p->aCarry[p->nCarry], 0, sizeof(p->aCarry[0]));
++    p->aCarry[p->nCarry].zName = sqlite3_mprintf("%s", aIgnored[i].zName);
++    if( !p->aCarry[p->nCarry].zName ){
++      rc = SQLITE_NOMEM;
++      break;
++    }
++    p->nCarry++;
++  }
++  doltliteFreeCatalog(aIgnored, nIgnored);
++  if( rc!=SQLITE_OK ){
++    doltliteFreeCatalog(p->aCarry, p->nCarry);
++    p->aCarry = 0;
++    p->nCarry = 0;
++  }
++  return rc;
++}
++
++/* celld: graft the carried tables onto the target's working catalog. A table
++** of the same name the target already holds (its copy from an earlier visit)
++** is replaced. */
++static int checkoutCarryApply(sqlite3 *db, CheckoutMutationCtx *p){
++  ProllyHash grafted;
++  char *zErr = 0;
++  int rc;
++  if( p->nCarry<=0 ) return SQLITE_OK;
++  rc = mergeCopyLocalTables(db, &p->oldCatHash, &p->targetCatHash,
++                            p->aCarry, p->nCarry, &grafted, &zErr);
++  sqlite3_free(zErr);
++  if( rc!=SQLITE_OK ) return rc;
++  rc = doltliteSwitchCatalog(db, &grafted);
++  if( rc==SQLITE_OK ){
++    p->targetCatHash = grafted;
++    sqlite3VtabRollback(db);
++  }
++  return rc;
++}
++
+ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
+   CheckoutMutationCtx *p = (CheckoutMutationCtx*)pArg;
+   int bSavepoint = doltliteCommandHasUserSavepoint(db);
+@@ -554458,6 +554536,8 @@
+       return SQLITE_NOTFOUND;
+     }
+   }
++  rc = checkoutCarryApply(db, p);
++  if( rc!=SQLITE_OK ) return rc;
+ 
+   {
+     ProllyHash staged;
+@@ -554504,7 +554584,11 @@
+ }
+ 
+ static int checkoutApplyRefs(sqlite3 *db, CheckoutMutationCtx *p){
+-  int rc = doltliteMutateRefs(db, checkoutMutateRefs, p);
++  int rc = checkoutCarryFind(db, p);
++  if( rc==SQLITE_OK ) rc = doltliteMutateRefs(db, checkoutMutateRefs, p);
++  doltliteFreeCatalog(p->aCarry, p->nCarry);
++  p->aCarry = 0;
++  p->nCarry = 0;
+   if( rc==SQLITE_OK
+    && (!doltliteCommandHasUserSavepoint(db) || p->bPersistUnderSavepoint) ){
+     doltliteAdoptRollbackBaseline(db, &p->targetCatHash);
+@@ -555460,7 +555544,7 @@
+   int argc,
+   sqlite3_value **argv,
+   const char *zNewBranch,
+-  int forceBranch, int iEndOptions
++  int forceBranch, int iEndOptions, int bCarryIgnored
+ ){
+   sqlite3 *db = sqlite3_context_db_handle(ctx);
+   ChunkStore *cs = doltliteGetChunkStore(db);
+@@ -555495,6 +555579,7 @@
+ 
+   memset(&m, 0, sizeof(m));
+   memset(&branchCreate, 0, sizeof(branchCreate));
++  m.bCarryIgnored = (u8)(bCarryIgnored!=0);
+ 
+   if( doltliteIsDetached(db) ){
+     ProllyHash probe;
+@@ -555783,6 +555868,7 @@
+   int force = 0;
+   int overwriteIgnore = 0;
+   int noOverwriteIgnore = 0;
++  int carryIgnored = 0;
+   const char *zCreateBranch = 0;
+   const char *zForceBranch = 0;
+   DoltliteCmdOption aOption[] = {
+@@ -555790,7 +555876,8 @@
+     { 0, 'B', DOLTLITE_CMD_OPTION_VALUE, &forceBranch, &zForceBranch },
+     { "force", 'f', DOLTLITE_CMD_OPTION_FLAG, &force, 0 },
+     { "overwrite-ignore", 0, DOLTLITE_CMD_OPTION_FLAG, &overwriteIgnore, 0 },
+-    { "no-overwrite-ignore", 0, DOLTLITE_CMD_OPTION_FLAG, &noOverwriteIgnore, 0 }
++    { "no-overwrite-ignore", 0, DOLTLITE_CMD_OPTION_FLAG, &noOverwriteIgnore, 0 },
++    { "carry-ignored", 0, DOLTLITE_CMD_OPTION_FLAG, &carryIgnored, 0 }
+   };
+   int rc;
+ 
+@@ -555814,7 +555901,7 @@
+   }else{
+     doltCheckoutParsedFunc(ctx, args.nPositional, args.apPositional,
+                            forceBranch ? zForceBranch : zCreateBranch,
+-                           forceBranch, args.iEndOptions);
++                           forceBranch, args.iEndOptions, carryIgnored);
+   }
+   doltliteCmdArgsClear(&args);
+ }

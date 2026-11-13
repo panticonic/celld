@@ -91,6 +91,9 @@ struct OpenCell {
     /// changes no SQLite row counter, yet it is a write the output gate must
     /// prove before an output that follows it.
     dolt_mutations: u64,
+    /// The table-name patterns the cell's class (or a facet's startup
+    /// options) declared local (`doltLocal`); empty on a SQLite cell.
+    dolt_local: Vec<String>,
     epoch: u64,
     replicated_wake: bool,
     /// Whether the connection carries sqlite-vec, so a reopen does too.
@@ -855,6 +858,34 @@ fn register_vec0_extension(connection: &Connection) -> anyhow::Result<()> {
 }
 
 /// Open (or replace) the connection for `scope`'s db file.
+/// The table-name patterns declared local for the Dolt cells about to open,
+/// by cell scope: a root's from its class (`celld.durable_objects.<Class>.
+/// doltLocal`), a facet's from its startup options. Declared before the
+/// cell's storage opens and read by it (`finish_open`, `open_embedded`); a
+/// root keeps its entry so that a restore, which reopens the same scope, finds
+/// it, and a facet's is dropped when the facet closes.
+static DOLT_LOCAL: std::sync::Mutex<Option<HashMap<String, Vec<String>>>> = std::sync::Mutex::new(None);
+
+/// Declare the local table patterns of the cell `scope`, replacing any it had.
+pub(crate) fn declare_dolt_local(scope: &str, patterns: &[String]) {
+    let mut declared = DOLT_LOCAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let declared = declared.get_or_insert_with(HashMap::new);
+    if patterns.is_empty() {
+        declared.remove(scope);
+    } else {
+        declared.insert(scope.to_string(), patterns.to_vec());
+    }
+}
+
+fn declared_dolt_local(scope: &str) -> Vec<String> {
+    DOLT_LOCAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .and_then(|declared| declared.get(scope).cloned())
+        .unwrap_or_default()
+}
+
 pub fn open(scope: &str, path: &str) -> anyhow::Result<()> {
     open_with_compat(scope, path, false)
 }
@@ -958,8 +989,9 @@ fn finish_open(
         crate::dolt_cell::attach_active_branch(&c)?;
     }
     schema(&c)?;
+    let dolt_local = if engine == celld_ltx::Engine::Dolt { declared_dolt_local(scope) } else { Vec::new() };
     if engine == celld_ltx::Engine::Dolt {
-        crate::dolt_cell::ensure_runtime(&c)?;
+        crate::dolt_cell::ensure_runtime(&c, &dolt_local)?;
     }
     if replicated_wake {
         wake_record::initialize(&c, scope, epoch, engine == celld_ltx::Engine::Dolt)?;
@@ -1009,6 +1041,7 @@ fn finish_open(
                 connection: c,
                 engine,
                 dolt_mutations: 0,
+                dolt_local,
                 epoch,
                 replicated_wake,
                 sqlite_vec,
@@ -1047,6 +1080,10 @@ pub fn close(scope: &str) {
         // SAFETY: the handle is only used as an identity.
         let handle = unsafe { cell.connection.handle() } as usize;
         cells(|c| c.dolt_handles.borrow_mut().remove(&handle));
+        // A facet's run has a scope of its own and is never reopened under it.
+        if matches!(cell.backing, StorageBacking::Embedded { .. }) {
+            declare_dolt_local(scope, &[]);
+        }
     }
     active_alarms(|alarms| alarms.borrow_mut().remove(scope));
     alarm_moves(|moves| {
@@ -1283,7 +1320,7 @@ pub(crate) fn open_embedded(
     }
     schema(&connection)?;
     if engine == celld_ltx::Engine::Dolt {
-        crate::dolt_cell::ensure_runtime(&connection)?;
+        crate::dolt_cell::ensure_runtime(&connection, &declared_dolt_local(scope))?;
     }
     // Each run of a facet has its own scope, so a continuation from an
     // aborted instance cannot enter its replacement. The database is one
@@ -4575,7 +4612,7 @@ pub fn dolt_op(scope: &str, op: &str, args: &serde_json::Value) -> Result<serde_
         }
         let connection = &cell.connection;
         let result = without_sql_authorizer(connection, || {
-            let result = crate::dolt_cell::run(connection, op, args);
+            let result = crate::dolt_cell::run_with(connection, op, args, &cell.dolt_local);
             // A branch switch or a reset can drop the wake triggers with the
             // tables they sit on; put them back before anything else runs.
             if cell.replicated_wake && crate::dolt_cell::mutates(op) {
@@ -4631,7 +4668,7 @@ pub fn dolt_tx_op(
         }
         let connection = &cell.connection;
         let result = without_sql_authorizer(connection, || {
-            let result = crate::dolt_cell::run_in_transaction(connection, op, args);
+            let result = crate::dolt_cell::run_in_transaction(connection, op, args, &cell.dolt_local);
             if result.is_ok() && cell.replicated_wake && crate::dolt_cell::changes_schema_in_transaction(op) {
                 if let Err(error) = crate::dolt_cell::ensure_wake_triggers(connection) {
                     return Err(error.context("restore the wake triggers"));

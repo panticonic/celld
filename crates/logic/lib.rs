@@ -933,7 +933,12 @@ impl State {
     /// lease lapsed must answer `false` here even if `Timer::NodeLeaseFence`
     /// has not fired yet: the timer is the liveness backstop that halts the
     /// process, never the safety mechanism. A suspended VM's timer fires
-    /// late, but a request evaluated after resume still refuses. The `<` /
+    /// late, but a request evaluated after resume still refuses -- provided
+    /// the shell's `now_mono_ms` keeps counting while the machine is
+    /// suspended (`asyncrt::mono_ms` reads `CLOCK_BOOTTIME` on Linux), since
+    /// peers measure the same lapse in wall time. A clock that stops during
+    /// suspend breaks this (logic-sim's `suspend-stops-monotonic` mutation).
+    /// The `<` /
     /// `>=` polarity matches the fence timer at `handle_timer`, so the
     /// predicate and the timer cannot disagree.
     pub fn node_authoritative(&self) -> bool {

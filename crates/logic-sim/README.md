@@ -12,7 +12,7 @@ cargo run --release -p logic-sim -- --seed 52           # replay one seed: confi
                                                         # minimised config, focused trace
 cargo run --release -p logic-sim -- --sweep 0..10000    # long sweep
 cargo run --release -p logic-sim -- --sweep 0..200 --mutation ack-before-durable
-cargo run --release -p logic-sim -- --seed 52 --strict  # also fail on already-reported findings
+cargo run --release -p logic-sim -- --seed 52 --strict  # `--strict` is accepted and ignored: every finding is fatal
 LOGIC_SIM_FULL_TRACE=1 cargo run ... --seed N           # unfocused, untruncated trace
 ```
 
@@ -46,8 +46,11 @@ cells, bucket or fleet durability, a 30 s faulty phase, then a final phase.
   the bucket.
 * **Network** — per-message delay (reordering), drops, and node partitions.
 * **Clocks** — per-node wall offset (skew) and a monotonic clock per
-  incarnation. Pauses defer all of a node's events; a "suspend" pause also
-  stops its monotonic clock while wall time advances.
+  incarnation. Pauses defer all of a node's events, and the node's
+  monotonic clock keeps running through them, as the shell's does
+  (`asyncrt::mono_ms` counts suspended time). The `suspend-stops-monotonic`
+  mutation restores the old behaviour, a clock that stops during a "suspend"
+  pause while wall time advances.
 * **Processes** — crash (memory lost, disk kept; restart after more than one
   TTL, as `guarantees.md` requires of the supervisor), self-fence `Halt`
   (exit + restart), graceful drain (`ReleaseAll`, then exit).
@@ -103,7 +106,11 @@ seeds 0..100: non-conditional owner CAS 38/100 (`OneWriterPerEpoch`),
 ack-before-durable 93/100 (`LostAck`), skip-verify-ownership 4/100
 (`StaleAck`), skip-log-recovery 6/100 (`LostAck`/`StaleAck`),
 follower-ignores-seal 3/100 (`StaleAck`), restore-oldest-epoch 100/100
-(`LostAck`), lease-always-expired 74/100 (`StaleServe`).
+(`LostAck`), lease-always-expired 74/100 (`StaleServe`),
+suspend-stops-monotonic (`StaleServe`; first seed 3).
+skip-verify-ownership is now rarer (first seed 355): a resumed node refuses
+on its own clock, so only a pause between the durability proof and the
+ownership read still needs the check.
 
 ## Fidelity gaps (what the model does not do)
 
@@ -130,49 +137,20 @@ follower-ignores-seal 3/100 (`StaleAck`), restore-oldest-epoch 100/100
 
 ## Findings
 
-Seeds 0..5000 (30 s simulated each, both postures) run with **no**
-lost or stale acknowledged write, no second writer per epoch, and no epoch
-regression. The core's own invariants are another matter; these are
-recorded as `KnownCoreIssue` so sweeps can look past them (`--strict` turns
-them back into failures):
+Seeds 0..3000 (30 s simulated each, both postures) run with no lost or stale
+acknowledged write, no second writer per epoch, no epoch regression and no
+failed `validate()`. The simulator found four defects in the core, all fixed
+in this fork (`docs/fork/upstream-findings.md` has the root causes);
+`FIXED_FINDINGS` in `tests/seeds.rs` replays their seeds:
 
-1. **A second eviction overwrites an in-flight owner release** (`--seed 52
-   --strict`). A shed/idle eviction releases a cell (`ReleaseOwner` op A
-   in flight, slow store request). A request wakes the cell meanwhile
-   (dormant → claim E+1 → resident); `releasing` still holds A. A second
-   eviction completes and `runtime_stopped` sets `releasing = Some(B)`
-   without retiring A, so `cell_ops` keeps A with no owning slot and
-   `validate()` fails ("indexed cell op A has no owning slot"); in a debug
-   build `on_event` panics. `admit_eviction` refuses a cell with
-   `releasing.is_some()` (CellTransitioning); `begin_eviction`, used by
-   shedding and idle eviction, does not. Safety impact seen: none (the late
-   release is rejected by `release_owner`'s epoch check; A's completion is
-   ignored and its index entry leaks).
-2. **`fence()` leaves per-cell flags that `validate()` rejects** (`--seed 97
-   --strict`, `--seed 4 --strict`). A node that fences while a startup
-   ownership confirmation is in flight keeps the cell in `confirming_cells`
-   ("confirming cell .. left the owner read in Fenced"); one that fences
-   with a balancing move in progress keeps `cell.handoff` ("handoff cell ..
-   is outside the pipeline in Fenced"). The node halts right after, so the
-   effect is a debug-build panic instead of a clean `Halt`.
-3. **Stale reads after a suspension that stops the monotonic clock**
-   (`--seed 3 --strict`). `node_authoritative()` compares only monotonic
-   time with the last renewal. After a VM suspension longer than the TTL
-   (wall time advanced, monotonic did not), peers rightly treat the lease as
-   expired and take the cell over at a higher epoch, but the resumed node
-   still answers `Local` routes and releases read-only outputs until its
-   next lease timer fires (the timer path does check `now_ms >=
-   expires_ms`; `request`/`output` do not, and `RequestAt`/`OutputAt` carry
-   no wall clock). Writes stay safe: their bucket proofs fail
-   `VerifyOwnership` and their fleet proofs hit sealed followers. This
-   contradicts the comment on `node_authoritative` ("a request evaluated
-   after resume still refuses") for clocks that stop during suspend; Rust's
-   `Instant` uses `CLOCK_MONOTONIC`, which does not count system suspend.
-4. **A drain can exceed its own release ceiling** (`--seed 284 --strict`,
-   also 1358, 1442). An activation that was already claiming when
-   `ReleaseAll` arrived publishes, and the drain nominates it while the
-   batch is full: `validate()` reports "handoffs 3 exceeds release ceiling
-   2". Root cause not isolated beyond that.
+* S1 (seed 52): a second rebalancing eviction overwrote an in-flight owner
+  release. `begin_eviction` now refuses a cell with `releasing` set.
+* S2 (seeds 97, 4): `fence()` left `confirming` and `handoff` markers set.
+* S3 (seeds 3, 284): stale reads after a suspension that stopped the
+  monotonic clock. The shell's clock now counts suspended time.
+* S4 (seeds 1442, 2395, 3393, 1358): a drain exceeded its release ceiling
+  because shedding evicted a cell activated during the drain without a
+  handoff reservation.
 
 An earlier model (without the leader's own log drain) reported a lost
 acknowledged write: a fleet-acked tail stranded on followers after a reset,

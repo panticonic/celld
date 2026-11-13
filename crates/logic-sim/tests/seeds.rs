@@ -60,7 +60,11 @@ fn a_quiet_world_acknowledges_and_recovers_every_cell() {
 /// upstream's pinned failing verdicts: a checker that cannot fail these is
 /// not checking anything.
 fn caught(mutation: Mutation, expected: &[ViolationKind]) {
-    for seed in 0..200 {
+    caught_within(mutation, expected, 200);
+}
+
+fn caught_within(mutation: Mutation, expected: &[ViolationKind], seeds: u64) {
+    for seed in 0..seeds {
         let outcome = run_seed(seed, Some(mutation), false);
         if let Some(v) = outcome.safety_violation() {
             assert!(
@@ -73,7 +77,7 @@ fn caught(mutation: Mutation, expected: &[ViolationKind]) {
             return;
         }
     }
-    panic!("mutation {} was not caught in 200 seeds", mutation.name());
+    panic!("mutation {} was not caught in {seeds} seeds", mutation.name());
 }
 
 #[test]
@@ -94,9 +98,14 @@ fn mutation_ack_before_durable_is_caught() {
 
 #[test]
 fn mutation_skip_verify_ownership_is_caught() {
-    caught(
+    // Only a pause landing between the durability proof and the ownership
+    // read exposes this now that a resumed node refuses on its own clock
+    // (before, a suspension that stopped the clock exposed it often), so
+    // the search is longer. The first catch is seed 355.
+    caught_within(
         Mutation::SkipVerifyOwnership,
         &[ViolationKind::StaleAck, ViolationKind::LostAck],
+        1000,
     );
 }
 
@@ -121,6 +130,13 @@ fn mutation_restore_oldest_epoch_is_caught() {
     caught(Mutation::RestoreOldestEpoch, &[ViolationKind::LostAck]);
 }
 
+/// The shell's monotonic clock counts suspended time. If it stopped, a
+/// resumed node would serve at an epoch a peer has superseded.
+#[test]
+fn mutation_suspend_stops_monotonic_is_caught() {
+    caught(Mutation::SuspendStopsMonotonic, &[ViolationKind::StaleServe]);
+}
+
 #[test]
 fn mutation_lease_always_expired_is_caught() {
     caught(
@@ -130,17 +146,17 @@ fn mutation_lease_always_expired_is_caught() {
 }
 
 /// Seeds that once reproduced a defect in the core (see
-/// `docs/fork/upstream-findings.md`), replayed with every finding fatal.
-const FIXED_FINDINGS: &[(&str, &[u64])] = &[("S1", &[52]), ("S2", &[97, 4]), ("S4", &[1442, 2395, 3393, 1358])];
+/// `docs/fork/upstream-findings.md`), replayed.
+const FIXED_FINDINGS: &[(&str, &[u64])] = &[("S1", &[52]), ("S2", &[97, 4]), ("S3", &[3, 284]),
+    ("S4", &[1442, 2395, 3393, 1358]),
+];
 
 #[test]
 fn fixed_findings_stay_fixed() {
     let mut failures = Vec::new();
     for (finding, seeds) in FIXED_FINDINGS {
         for &seed in *seeds {
-            let mut config = SimConfig::for_seed(seed);
-            config.strict = true;
-            let outcome = run(config);
+            let outcome = run(SimConfig::for_seed(seed));
             if let Some(v) = outcome.safety_violation() {
                 failures.push(format!("{finding} seed {seed}: {:?}: {}", v.kind, v.detail));
             }

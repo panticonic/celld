@@ -193,6 +193,11 @@ impl<V> TimerSlots<V> {
         self.armed.remove(slot);
     }
 
+    /// The value of every armed slot.
+    pub(crate) fn values(&self) -> impl Iterator<Item = &V> {
+        self.armed.values().map(|(_, value)| value)
+    }
+
     /// Every slot this map still retains, across all of its bookkeeping.
     ///
     /// `TimerSlot::OperationDeadline` carries a unique `OpId`, so a per-slot

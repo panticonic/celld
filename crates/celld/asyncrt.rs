@@ -69,14 +69,194 @@ fn current_domain() -> &'static ProductionDomain {
 
 struct ProductionDomainOwner {
     handle: tokio::runtime::Handle,
-    started_at: Instant,
+    started_at: BootInstant,
 }
 
 impl ProductionDomainOwner {
     fn new(handle: tokio::runtime::Handle) -> Self {
         Self {
             handle,
-            started_at: Instant::now(),
+            started_at: BootInstant::now(),
+        }
+    }
+}
+
+/// A reading of the clock behind every `now_mono_ms` the core sees.
+///
+/// It must keep running while the machine is suspended. The core decides
+/// whether this node still holds its lease by comparing two such readings, and
+/// peers take a cell over once the lease lapses in wall time; a clock that
+/// stops during suspend lets a resumed node believe it is still authoritative
+/// and answer reads at an epoch a peer has already superseded. Rust's
+/// `Instant` does not qualify: it is `CLOCK_MONOTONIC` on Linux and
+/// `CLOCK_UPTIME_RAW` on macOS, and neither counts suspended time.
+///
+/// * Linux and Android: `CLOCK_BOOTTIME`.
+/// * macOS and iOS: `CLOCK_MONOTONIC`, which is `mach_continuous_time` there
+///   (the opposite of Linux, where it is the clock that stops).
+/// * Everything else, including Windows: `Instant`, whose Windows source
+///   (`QueryPerformanceCounter`) keeps counting through sleep on current
+///   releases. That is not exercised by a test here; the suspend watcher
+///   below reports a divergence if it ever shows up.
+#[derive(Clone, Copy, Debug)]
+struct BootInstant(Duration);
+
+impl BootInstant {
+    fn now() -> Self {
+        Self(boot_clock())
+    }
+
+    fn elapsed(self) -> Duration {
+        boot_clock().saturating_sub(self.0)
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn boot_clock() -> Duration {
+    clock_gettime(libc::CLOCK_BOOTTIME)
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn boot_clock() -> Duration {
+    clock_gettime(libc::CLOCK_MONOTONIC)
+}
+
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios"
+))]
+fn clock_gettime(clock: libc::clockid_t) -> Duration {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `ts` is a valid out-pointer and the clock ids are constants the
+    // platform defines; failure leaves zero, which reads as "no time passed".
+    let rc = unsafe { libc::clock_gettime(clock, &mut ts) };
+    if rc != 0 {
+        return Duration::ZERO;
+    }
+    Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+}
+
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios"
+)))]
+fn boot_clock() -> Duration {
+    static ORIGIN: OnceLock<Instant> = OnceLock::new();
+    ORIGIN.get_or_init(Instant::now).elapsed()
+}
+
+/// Bumped each time the watcher sees the machine resume from a suspension.
+static RESUME_GENERATION: AtomicU64 = AtomicU64::new(0);
+static RESUME_WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Smallest divergence between the suspend-inclusive clock and `Instant` that
+/// counts as a suspension. Scheduling jitter moves both clocks together.
+const SUSPEND_DETECT_MS: u128 = 100;
+const SUSPEND_POLL: Duration = Duration::from_millis(250);
+
+/// Tokio's timers run on `Instant`, which stops during a suspension, so a
+/// timer armed for a deadline on the boot clock fires late by however long
+/// the machine slept. This task watches the two clocks drift apart and wakes
+/// every sleeper and the actor's timer queue so they re-read the clock. Its
+/// own 250 ms sleep is a monotonic one, so it notices within 250 ms of resume.
+async fn watch_suspension() {
+    let boot = boot_clock();
+    let mono = Instant::now();
+    let mut drift_ms = 0u128;
+    loop {
+        tokio::time::sleep(SUSPEND_POLL).await;
+        let now_drift = boot_clock()
+            .saturating_sub(boot)
+            .as_millis()
+            .saturating_sub(mono.elapsed().as_millis());
+        if now_drift >= drift_ms.saturating_add(SUSPEND_DETECT_MS) {
+            RESUME_GENERATION.fetch_add(1, Ordering::SeqCst);
+            RESUME_WAKE.notify_waiters();
+        }
+        drift_ms = now_drift;
+    }
+}
+
+/// Observes suspend/resume. `resumed` completes once per resume that happened
+/// since the last call, including one that landed between calls.
+pub struct ResumeWatch {
+    seen: u64,
+}
+
+impl ResumeWatch {
+    pub fn new() -> Self {
+        Self {
+            seen: RESUME_GENERATION.load(Ordering::SeqCst),
+        }
+    }
+
+    pub async fn resumed(&mut self) {
+        loop {
+            let notified = RESUME_WAKE.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let generation = RESUME_GENERATION.load(Ordering::SeqCst);
+            if generation != self.seen {
+                self.seen = generation;
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+impl Default for ResumeWatch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Sleep until `deadline_ms` on this domain's clock. The wait is a Tokio
+/// sleep, constructed under the caller's runtime, that is re-aimed whenever
+/// the clock says it was wrong: after a suspension, or when the sleep fires
+/// a tick early.
+fn sleep_until_clock(
+    now_ms: impl Fn() -> u64 + Send + 'static,
+    deadline_ms: u64,
+) -> impl Future<Output = ()> + Send {
+    let remaining = move |now: u64| Duration::from_millis(deadline_ms.saturating_sub(now));
+    let sleep = tokio::time::sleep(remaining(now_ms()));
+    let mut watch = ResumeWatch::new();
+    async move {
+        let mut sleep = Box::pin(sleep);
+        loop {
+            let now = now_ms();
+            if now >= deadline_ms {
+                return;
+            }
+            let resumed = watch.resumed();
+            tokio::pin!(resumed);
+            let timer = sleep.as_mut();
+            tokio::pin!(timer);
+            let fired = std::future::poll_fn(|context| {
+                if resumed.as_mut().poll(context).is_ready() {
+                    return Poll::Ready(false);
+                }
+                timer.as_mut().poll(context).map(|()| true)
+            })
+            .await;
+            let now = now_ms();
+            if now >= deadline_ms {
+                return;
+            }
+            // Fired early (millisecond truncation) or woken by a resume:
+            // aim the same sleep at what is left.
+            let left = remaining(now).max(Duration::from_millis(u64::from(fired)));
+            sleep
+                .as_mut()
+                .reset(tokio::time::Instant::now() + left);
         }
     }
 }
@@ -120,13 +300,15 @@ impl DomainToken {
 
     pub(crate) fn sleep_until(&self, deadline_ms: u64) -> Result<Sleep, DomainClosed> {
         let owner = self.owner()?;
-        let now_ms = owner.started_at.elapsed().as_millis() as u64;
-        let wait = Duration::from_millis(deadline_ms.saturating_sub(now_ms));
+        let started_at = owner.started_at;
         // Tokio binds a sleep to the current timer driver when it constructs
         // the future. Enter this token's runtime so an ambient runtime cannot
         // capture a timer that belongs to another execution domain.
         let _entered = owner.handle.enter();
-        Ok(Box::pin(tokio::time::sleep(wait)))
+        Ok(Box::pin(sleep_until_clock(
+            move || started_at.elapsed().as_millis() as u64,
+            deadline_ms,
+        )))
     }
 
     #[track_caller]
@@ -189,10 +371,13 @@ impl<T> Future for TaskHandle<T> {
 /// Install the process runtime handle, exactly once. A second call would
 /// otherwise be ignored and leave the first runtime in place.
 pub fn set_host_handle(handle: tokio::runtime::Handle) {
+    let watcher_handle = handle.clone();
     assert!(
         PROCESS_DOMAIN.set(ProductionDomain::new(handle)).is_ok(),
         "asyncrt::set_host_handle must run exactly once"
     );
+    // Detached on purpose: it lives as long as the process.
+    drop(watcher_handle.spawn(watch_suspension()));
 }
 
 /// Return the Tokio handle for the V8 arm.
@@ -351,8 +536,7 @@ pub(crate) fn runtime_services() -> Arc<HostServices> {
 pub type Sleep = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 pub fn sleep_until(deadline_ms: u64) -> Sleep {
-    let wait = Duration::from_millis(deadline_ms.saturating_sub(mono_ms()));
-    Box::pin(tokio::time::sleep(wait))
+    Box::pin(sleep_until_clock(mono_ms, deadline_ms))
 }
 
 pub fn sleep(duration: Duration) -> Sleep {
@@ -607,4 +791,66 @@ pub mod rng {
     }
 
     impl CryptoRng for Stream {}
+}
+
+#[cfg(test)]
+mod suspend_clock_tests {
+    use super::*;
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn the_boot_clock_is_not_behind_the_monotonic_clock() {
+        // CLOCK_BOOTTIME counts everything CLOCK_MONOTONIC counts and the
+        // time spent suspended on top, so it can only be ahead.
+        let monotonic = clock_gettime(libc::CLOCK_MONOTONIC);
+        let boot = clock_gettime(libc::CLOCK_BOOTTIME);
+        assert!(boot >= monotonic, "{boot:?} < {monotonic:?}");
+    }
+
+    #[test]
+    fn the_boot_clock_advances() {
+        let start = BootInstant::now();
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(start.elapsed() >= Duration::from_millis(15));
+    }
+
+    /// A suspension moves the node clock forward without any Tokio time
+    /// passing. A sleep armed for a lease deadline must end when the clock
+    /// says so after a resume, not when its monotonic duration runs out.
+    #[tokio::test]
+    async fn a_sleep_ends_when_a_resume_moves_the_clock_past_its_deadline() {
+        let clock = Arc::new(AtomicU64::new(0));
+        let sleeper = {
+            let clock = clock.clone();
+            sleep_until_clock(move || clock.load(Ordering::SeqCst), 60_000)
+        };
+        let resumer = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            clock.store(61_000, Ordering::SeqCst);
+            RESUME_GENERATION.fetch_add(1, Ordering::SeqCst);
+            RESUME_WAKE.notify_waiters();
+        });
+        tokio::time::timeout(Duration::from_secs(5), sleeper)
+            .await
+            .expect("the sleep must notice the resume");
+        resumer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_sleep_that_fires_early_waits_out_the_rest() {
+        // The Tokio timer fires at 30 ms but the clock still reads 0: the
+        // sleep must stay pending until the clock reaches the deadline.
+        let clock = Arc::new(AtomicU64::new(0));
+        let sleeper = {
+            let clock = clock.clone();
+            sleep_until_clock(move || clock.load(Ordering::SeqCst), 30)
+        };
+        assert!(
+            tokio::time::timeout(Duration::from_millis(80), sleeper)
+                .await
+                .is_err(),
+            "the sleep ended before the clock reached the deadline"
+        );
+        drop(clock);
+    }
 }

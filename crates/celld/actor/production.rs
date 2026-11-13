@@ -14,7 +14,8 @@ impl Actor {
     pub async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Message>) {
         let mut effects = FuturesUnordered::new();
         let mut delays = DelayQueue::new();
-        let mut timer_slots = TimerSlots::<delay_queue::Key>::default();
+        let mut timer_slots = TimerSlots::<(delay_queue::Key, u64)>::default();
+        let mut resume = crate::asyncrt::ResumeWatch::new();
         let mut out = StepOutput::default();
         self.start(&mut out);
         drain_step_output(&mut out, &mut effects, &mut delays, &mut timer_slots);
@@ -29,6 +30,14 @@ impl Actor {
                 Some(completed) = effects.next(), if !effects.is_empty() => {
                     self.step(ActorInput::Completed(completed), &mut out);
                 }
+                // The delay queue runs on Tokio's clock, which stops while the
+                // machine is suspended, but `at_mono_ms` is on the clock that
+                // keeps running. After a resume, re-aim every pending timer
+                // at what the node clock says is left, so a lease that lapsed
+                // during the suspension fires now, not a lease-length later.
+                () = resume.resumed() => {
+                    reaim_delays(&mut delays, &timer_slots);
+                }
                 Some(expired) = delays.next(), if !delays.is_empty() => {
                     let arm = expired.into_inner();
                     if timer_slots.fire(&arm.slot, arm.ordinal).is_some() {
@@ -38,5 +47,16 @@ impl Actor {
             }
             drain_step_output(&mut out, &mut effects, &mut delays, &mut timer_slots);
         }
+    }
+}
+
+fn reaim_delays(
+    delays: &mut DelayQueue<TimerArm>,
+    timers: &TimerSlots<(delay_queue::Key, u64)>,
+) {
+    let now = crate::asyncrt::mono_ms();
+    for (key, at_mono_ms) in timers.values() {
+        let left = at_mono_ms.saturating_sub(now);
+        delays.reset(key, std::time::Duration::from_millis(left));
     }
 }

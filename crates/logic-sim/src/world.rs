@@ -974,21 +974,8 @@ impl World {
         let id = self.nodes[node].id.clone();
         let state = self.nodes[node].state.as_ref().expect("live");
         if let Err(error) = state.validate() {
-            // Finding 1 (README): an eviction can overwrite the release slot
-            // of a cell re-woken while its first release was in flight.
-            // Finding 2 (README): `fence` keeps a startup confirmation's
-            // index entry, which `validate` then rejects.
-            // Finding 4 (README): a drain can exceed its own release ceiling.
-            let known = error.contains("has no owning slot")
-                || (error.contains("confirming cell") && error.contains("in Fenced"))
-                || (error.contains("handoff cell") && error.contains("in Fenced"))
-                || error.contains("exceeds release ceiling");
-            let kind = if !self.cfg.strict && known {
-                ViolationKind::KnownCoreIssue
-            } else {
-                ViolationKind::CoreValidate
-            };
-            self.checker.fail(kind, now, None, format!("{id}: {error}"));
+            self.checker
+                .fail(ViolationKind::CoreValidate, now, None, format!("{id}: {error}"));
         }
         // The StepSafety census: both sides of each structural count.
         let census = state.step_safety_observer_snapshot();
@@ -2914,22 +2901,8 @@ impl World {
                     }
                 }
                 if let Some(decided) = handler.output_decided_at {
-                    // Finding 3 (README): after a suspension that stopped the
-                    // monotonic clock, `node_authoritative` still answers from
-                    // the stale monotonic reading.
-                    let ttl = self.cfg.ttl_ms;
-                    let suspended = self.nodes[node]
-                        .suspended
-                        .iter()
-                        .any(|(a, b)| *b <= decided && *b + ttl >= decided && b - a >= ttl / 3);
-                    self.checker.on_released(
-                        self.now,
-                        &cell,
-                        epoch,
-                        &node_id,
-                        decided,
-                        suspended && !self.cfg.strict,
-                    );
+                    self.checker
+                        .on_released(self.now, &cell, epoch, &node_id, decided);
                 }
             }
         }
@@ -3277,11 +3250,13 @@ impl World {
             .range(self.cfg.ttl_ms / 2, 2 * self.cfg.ttl_ms);
         let n = &mut self.nodes[node];
         n.paused_until = self.now + length;
-        if self.cfg.faults.pause_stops_mono {
+        let stops_mono = self.cfg.faults.pause_stops_mono
+            && self.cfg.mutation == Some(Mutation::SuspendStopsMonotonic);
+        if stops_mono {
             n.suspended.push((self.now, self.now + length));
         }
         let id = n.id.clone();
-        let kind = if self.cfg.faults.pause_stops_mono {
+        let kind = if stops_mono {
             "suspend (monotonic clock stops)"
         } else {
             "pause"

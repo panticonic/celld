@@ -22,7 +22,6 @@ fn main() {
     let mut mutation = None;
     let mut minimise_failures = true;
     let mut quiet = false;
-    let mut strict = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--seed" => seed = args.next().and_then(|s| s.parse().ok()).or_else(|| usage()),
@@ -40,7 +39,8 @@ fn main() {
             }
             "--no-minimise" => minimise_failures = false,
             "--quiet" => quiet = true,
-            "--strict" => strict = true,
+            // Accepted for old command lines: every finding is fatal now.
+            "--strict" => {}
             _ => usage(),
         }
     }
@@ -49,20 +49,11 @@ fn main() {
         let mut liveness = 0u64;
         let mut acks = 0u64;
         let mut restores = 0u64;
-        let mut known = 0u64;
         for seed in a..b {
-            let mut config = logic_sim::config::SimConfig::for_seed(seed).with_mutation(mutation);
-            config.strict = strict;
+            let config = logic_sim::config::SimConfig::for_seed(seed).with_mutation(mutation);
             let outcome = run(config);
             acks += outcome.acks;
             restores += outcome.restores_checked;
-            if outcome
-                .violations
-                .iter()
-                .any(|v| v.kind == logic_sim::check::ViolationKind::KnownCoreIssue)
-            {
-                known += 1;
-            }
             if let Some(v) = outcome.safety_violation() {
                 failures += 1;
                 println!("seed {seed}: {:?}: {}", v.kind, v.detail);
@@ -75,14 +66,13 @@ fn main() {
         }
         println!(
             "swept seeds {a}..{b}: {failures} safety failures, {liveness} liveness stalls, \
-             {known} runs hit an already-reported finding, {acks} acknowledged writes, \
+             {acks} acknowledged writes, \
              {restores} restores checked"
         );
         std::process::exit(if failures > 0 { 1 } else { 0 });
     }
     let seed = seed.unwrap_or_else(|| usage());
     let mut config = logic_sim::config::SimConfig::for_seed(seed).with_mutation(mutation);
-    config.strict = strict;
     config.trace = true;
     let outcome = run(config);
     println!("{}", describe(&outcome.config));

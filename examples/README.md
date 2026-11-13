@@ -22,6 +22,9 @@ supports, one service or API at a time:
 - `workflow/` — a Workflow that builds a report in one durable step
 - `rpc/` — Durable Object method calls through JS RPC
 - `dynamic-worker-tails/` — a runtime-loaded Worker with a Tail Worker
+- `residency/` — an in-memory counter kept resident by `ctx.residency.hold()`
+  past idle eviction, and evicted after `release()`; `run.sh` scripts it
+  against `celld dev`
 - `facets/` — a Durable Object facet over a class the Worker Loader starts
 - `container/` — a Durable Object that supervises a container with
   `@cloudflare/containers`; needs `npm install` and a Docker or Podman CLI

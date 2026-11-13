@@ -18,9 +18,11 @@ celld --bucket    'vibestore:///work/ws/state/blobs?index=/work/ws/state/celld/i
       --no-control-plane --listen 127.0.0.1:8080 --internal-listen 127.0.0.1:0
 ```
 
-The URL is accepted wherever celld accepts a bucket (`--bucket`, `CELLD_BUCKET`,
-`deploy`, `cell`, `kv`, `r2`, `queue`, `d1`, `diagnose`), because it is handled
-in the one place that opens a bucket, `Bucket::open`. A `vibestore://` bucket
+The URL is accepted wherever celld accepts a bucket (`--bucket`, `CELLD_BUCKET`),
+because it is handled in the one place that opens a bucket, `Bucket::open`;
+the node, `deploy` and `diagnose` were run against it, and the other
+subcommands (`cell`, `kv`, `r2`, `queue`, `d1`) reach the same function through
+`fleet::bucket_client`. A `vibestore://` bucket
 refuses `--endpoint`, static credentials and `--control-plane`.
 
 | parameter | default | meaning |
@@ -112,15 +114,23 @@ set of racers on one version wins. `PutMode::Create` fails with `AlreadyExists`,
 For a CAS-backed object the order is the contract:
 
 1. bytes durable at their address (file fsync, link, directory fsyncs);
-2. retention row `<key>@<digest>` committed to `retentions.db`;
-3. index transaction commits. **This is the commit point.**
-4. the retention row of the digest this key held before is released.
+2. the index transaction begins (`BEGIN IMMEDIATE`) and the precondition is
+   checked; a write that fails it stops here and has touched nothing;
+3. inside that transaction, the retention row `<key>@<digest>` is committed to
+   `retentions.db`;
+4. the index transaction commits. **This is the commit point.**
+5. the retention row of the digest this key held before is released.
 
-A death after 1 or 2 leaves an unreferenced blob and at most a retention row
-no key points at. A death after 3 leaves a stale row for the old digest.
-At no instant does a key point at a missing blob, and at no instant is a blob a
-key points at unretained. An inline object skips 1, 2 and 4; its single
-transaction is the whole write.
+Step 3 sits inside the index lock on purpose. The `celld dev` supervisor and
+its node are two processes over one store, and each reconciles retentions when
+it opens (below); a reconciliation takes the same lock, so it can never observe
+a retention row whose write has not yet committed and release it as stale.
+
+A death after 1 leaves an unreferenced blob. A death after 3 leaves that plus
+a retention row no key points at. A death after 4 leaves a stale row for the
+old digest. At no instant does a key point at a missing blob, and at no instant
+is a blob a key points at unretained. An inline object skips 1, 3 and 5; its
+single transaction is the whole write.
 
 **Recovery is orphan cleanup, nothing else.** On open, `Core::recover`:
 
@@ -199,4 +209,37 @@ inline and 3 MiB blobs; 5 MiB streaming; multipart; listing compared with
 of `LocalStore`'s rules page by page; the crash points; the GC contract against
 a re-implementation of `sweepUnreachableBlobs`; every refusal in the table above.
 
-End-to-end: see the section below.
+### End to end (`crates/vibestore/e2e.sh`)
+
+A debug `celld` built from this branch, one node per example (`celld deploy
+EXAMPLE --bucket vibestore://...`, then `celld --no-control-plane --bucket
+vibestore://... --listen 127.0.0.1:PORT`, `CELLD_WATCH` pointing at a scratch
+data directory), driven with `curl`. Each example was run, stopped and
+restarted, then run again after deleting the node's whole local data directory
+so every cell had to be restored from the store:
+
+| example | what was checked | result |
+| --- | --- | --- |
+| `counter` | two cells count; restart continues; restore after a local wipe continues (6, and 2 for the other cell); wipe again after a Vibestudio-style GC | pass |
+| `kv` | small value, 400 KB value (CAS-backed), delete, restart, restore after wipe, GC leaves the live value | pass |
+| `r2` | 3 MB object with `content-type`, restart, restore after wipe, delete, GC then collects the deleted blob | pass |
+| `d1` | three inserts, restart, a fourth, restore after wipe (4 rows) | pass |
+| SIGKILL | the node is `kill -9`ed during a loop of 1.5 MB R2 writes. The index passes `integrity_check`; every blob it names exists and hashes to its address; every live blob is retained; after restart every object reads (no 500); retention rows equal the live set; the GC then removes the superseded blobs and any in-flight write the kill left (4 to 7 files across runs), and nothing live | pass |
+| `celld diagnose` | the bucket's own conditional-write probe (create, reject-create, update, reject-stale) | pass |
+
+The `counter`, `d1` and small-value runs put no blob in the root at all: every
+object was under 16 KiB, so the whole store was the index. That is the intent
+(see the second change above), and the `kv` and `r2` runs are what exercise the
+CAS and the retention rows.
+
+Cost, from a release-build microbenchmark on a busy development machine with
+an ext4 NVMe disk (indicative only; every number is dominated by fsync):
+a conditional update of a 300-byte object 17 ms, a 1 MiB retained blob write
+135 ms, a 1 MiB read 1.6 ms, a `head` 0.08 ms. A write to a region-local S3
+bucket is about 90 ms, so a lease renewal here is cheaper and a large segment
+comparable.
+
+Not run: Windows, `celld dev` (it keeps its own `LocalStore`; a node on a
+`vibestore://` bucket is the single-node mode), and a live Vibestudio server
+(its GC was re-implemented in `tests/common/mod.rs` and `crates/vibestore/e2e.sh` from
+`sweepUnreachableBlobs`, not called).

@@ -138,20 +138,52 @@ impl VibeSpec {
     }
 
     /// The text after `vibestore://`: what `Bucket::name` holds, so that
-    /// `{scheme}://{name}` reads back as the spec.
+    /// `{scheme}://{name}` reads back as the spec. Parameters at their default
+    /// are omitted (the default namespace derives from the index path, so it
+    /// survives the round trip), which keeps operator-facing messages short.
     pub fn name(&self) -> String {
-        format!(
-            "{}?index={}&shared={}&namespace={}&inline={}&grace_secs={}",
-            encode_path(&self.root),
-            encode_query(&self.index.to_string_lossy()),
-            u8::from(self.shared),
-            self.namespace_id,
-            self.inline_max,
-            self.grace.as_secs()
+        let defaults = Self::resolved(
+            self.root.clone(),
+            self.root.join("celld").join("index.sqlite"),
+            true,
+            None,
+            DEFAULT_INLINE_MAX,
+            DEFAULT_GRACE,
+        );
+        let mut parameters = Vec::new();
+        if self.index != defaults.index {
+            parameters.push(format!("index={}", encode_query(&self.index.to_string_lossy())));
+        }
+        if !self.shared {
+            parameters.push("shared=0".to_string());
+        }
+        let derived = Self::resolved(
+            self.root.clone(),
+            self.index.clone(),
+            true,
+            None,
+            0,
+            DEFAULT_GRACE,
         )
+        .namespace_id;
+        if self.namespace_id != derived {
+            parameters.push(format!("namespace={}", self.namespace_id));
+        }
+        if self.inline_max != DEFAULT_INLINE_MAX {
+            parameters.push(format!("inline={}", self.inline_max));
+        }
+        if self.grace != DEFAULT_GRACE {
+            parameters.push(format!("grace_secs={}", self.grace.as_secs()));
+        }
+        let mut name = encode_path(&self.root);
+        if !parameters.is_empty() {
+            name.push('?');
+            name.push_str(&parameters.join("&"));
+        }
+        name
     }
 
-    /// The canonical, fully explicit spec.
+    /// The canonical spec: every parameter that differs from its default.
     pub fn canonical(&self) -> String {
         format!("{SCHEME}://{}", self.name())
     }
@@ -258,6 +290,22 @@ mod tests {
             VibeSpec::parse("vibestore:///data/my%20blobs?index=/data/a%20b/i.sqlite").unwrap();
         assert_eq!(spec.root, PathBuf::from("/data/my blobs"));
         assert_eq!(VibeSpec::parse(&spec.canonical()).unwrap(), spec);
+    }
+
+    #[test]
+    fn the_name_omits_defaults_and_still_round_trips() {
+        let plain = VibeSpec::parse("vibestore:///data/blobs").unwrap();
+        assert_eq!(plain.name(), "/data/blobs");
+        let indexed = VibeSpec::parse("vibestore:///data/blobs?index=/data/i.sqlite").unwrap();
+        assert_eq!(indexed.name(), "/data/blobs?index=%2Fdata%2Fi.sqlite");
+        for text in [
+            "vibestore:///data/blobs?index=/data/i.sqlite&shared=0&namespace=fleet-a&inline=0&grace_secs=5",
+            "vibestore:///data/blobs?namespace=x",
+            "vibestore:///data/blobs?inline=100",
+        ] {
+            let spec = VibeSpec::parse(text).unwrap();
+            assert_eq!(VibeSpec::parse(&spec.canonical()).unwrap(), spec, "{text}");
+        }
     }
 
     #[test]

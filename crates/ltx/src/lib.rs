@@ -13,11 +13,13 @@
 //! ltx@v0.5.2 ltx.go:66-145.
 
 pub mod bundle;
+pub mod cell_store;
 pub mod client;
 mod codec;
 pub mod compaction_level;
 pub mod compactor;
 pub mod db;
+pub mod dolt;
 pub mod error;
 pub mod host;
 pub mod ltx;
@@ -58,6 +60,8 @@ pub use host::{
 /// A SQLite database managed for replication (WAL-mode checkpoint takeover plus
 /// the WAL→LTX capture loop). Re-exported from [`crate::db::Db`].
 pub use db::Db;
+pub use cell_store::{CellStore, Engine};
+pub use dolt::DoltStore;
 
 /// SQLite checkpoint mode used by [`Db`] when it checkpoints the WAL.
 /// Re-exported from [`crate::db::CheckpointMode`].

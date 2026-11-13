@@ -285,8 +285,16 @@ globalThis.Response = class Response {
     this.status = init.status === undefined ? 200 : Number(init.status);
     this.statusText = init.statusText === undefined ? "" : String(init.statusText);
     this.headers = new Headers(init.headers);
-    if (typed && typed.type && !this.headers.has("content-type"))
-      this.headers.set("content-type", typed.type);
+    // Fetch's "extract a body": a USVString body carries
+    // `text/plain;charset=UTF-8`, as workerd sends it. Streams, ArrayBuffers
+    // and views carry none; Blob, FormData and URLSearchParams brought theirs.
+    const bodyType = typed
+      ? typed.type
+      : init.__rawBody !== true && body != null && typeof body !== "object"
+        ? "text/plain;charset=UTF-8"
+        : "";
+    if (bodyType && !this.headers.has("content-type"))
+      this.headers.set("content-type", bodyType);
     this.webSocket = init.webSocket ?? null;
     this._wsTarget = init.__wsTarget || init._wsTarget || null;
     this.ok = this.status >= 200 && this.status <= 299;
@@ -708,7 +716,7 @@ globalThis.fetch = async (input, init) => {
     : r.body !== undefined ? r.body : Uint8Array.from(r.bodyBytes || []);
   const response = new Response(
     responseBody,
-    { status: r.status, headers: r.headers },
+    { status: r.status, headers: r.headers, __rawBody: true },
   );
   response.url = req.url;
   return response;
@@ -774,7 +782,7 @@ __celld.__makeAssetsBinding = (script) => ({
       : r.body !== undefined ? r.body : Uint8Array.from(r.bodyBytes || []);
     const response = new Response(
       responseBody,
-      { status: r.status, headers: r.headers },
+      { status: r.status, headers: r.headers, __rawBody: true },
     );
     response.url = req.url;
     return response;
@@ -2368,6 +2376,7 @@ class DurableObjectFacets {
         return __wrapServiceResponse(new Response(responseBody, {
           status: response.status,
           headers: response.headers,
+          __rawBody: true,
           __wsTarget: response.wsTarget,
         }), req.url);
       });
@@ -3550,7 +3559,9 @@ __celld.__makeLoader = () => {
           ? new CelldHttpBodyStream(r.streamId)
           : r.body !== undefined ? r.body : Uint8Array.from(r.bodyBytes || []);
         return __wrapServiceResponse(
-          new Response(responseBody, { status: r.status, headers: r.headers }),
+          new Response(responseBody, {
+            status: r.status, headers: r.headers, __rawBody: true,
+          }),
           req.url);
       },
     };
@@ -3916,6 +3927,7 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
     return __finishServiceFetch(
       new Response(responseBody, {
         status: r.status, headers: r.headers, __wsTarget: r.wsTarget,
+        __rawBody: true,
       }),
       req, redirectState);
   },
@@ -4702,7 +4714,7 @@ const __reviveResponse = (marker, revive) => {
   const res = new Response(
     marker.b === null ? null : bytes ? "" : revive(marker.b), {
       status: marker["__celld$res"], statusText: marker.t,
-      headers: marker.h, cf: marker.c });
+      headers: marker.h, cf: marker.c, __rawBody: true });
   if (bytes) __adoptBody(res, marker.b);
   if (marker.e) res.type = "error";
   return res;
@@ -5587,6 +5599,7 @@ class DurableObjectNamespace {
         return new Response(body, {
           status: r.status,
           headers: r.headers,
+          __rawBody: true,
           __wsTarget: r.wsTarget,
           webSocket: r.status === 101 && r.wsTarget
             ? new WebSocket(undefined, [], r.wsTarget)

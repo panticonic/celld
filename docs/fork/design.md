@@ -725,6 +725,10 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       its own never ends. Detail in `docs/fork/upstream-findings.md` (E7).
     - **Streaming `Response.clone()` (E8).** Tees the body, as `Request.clone()`
       did; a body that was already read still refuses.
+    - **WebSocket upgrade from an alarm (E9).** A socket from `fetch()` with an
+      `Upgrade` header belongs to the object that opened it, also when opened by
+      a continuation after its event, and opens without waiting for the input
+      gate. Detail in `docs/fork/upstream-findings.md` (E9).
 
 ## 4. Determinism: fixes over the earlier plans
 

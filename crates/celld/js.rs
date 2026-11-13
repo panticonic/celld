@@ -4352,18 +4352,18 @@ fn op_with_input_gate_context(
         .flatten();
     let running = current_context().continuation_id();
     if let Some(origin) = origin {
-        let origin_live = live_io_context(scope, origin).is_some();
-        let driver_live = driver.is_none_or(|driver| live_io_context(scope, driver).is_some());
-        if !token.is_array() || !origin_live || !driver_live {
-            let origin = if origin_live {
-                origin
-            } else {
-                running.unwrap_or(origin)
-            };
-            let driver = match driver {
-                Some(driver) if driver_live => driver,
-                _ => running.unwrap_or(origin),
-            };
+        let driver_live = match driver {
+            Some(driver) => live_io_context(scope, driver).is_some(),
+            // A plain token is its own driver, once the turn that runs it
+            // takes over (below), unless its event has ended.
+            None => false,
+        };
+        if !driver_live {
+            // The origin stays what it was, live or not: it names the cell
+            // the block belongs to (an ended event still does, see
+            // `orphan_cell_context`), and its resources are its own. Only the
+            // driver has to be an event that is running.
+            let driver = running.unwrap_or(origin);
             let origin = v8::BigInt::new_from_u64(scope, origin);
             let driver = v8::BigInt::new_from_u64(scope, driver);
             let pair = v8::Array::new_with_elements(scope, &[origin.into(), driver.into()]);
@@ -7313,6 +7313,7 @@ ops! { OP_NAMES, install_op_functions,
         "__timer_alloc" => op_timer_alloc,
         "__io_context_id" => op_io_context_id,
         "__io_context_live" => op_io_context_live,
+        "__io_context_cell" => op_io_context_cell,
         "__with_input_gate_context" => op_with_input_gate_context,
         "__gate_acquire" => op_gate_acquire,
         "__gate_wait" => op_gate_wait,
@@ -10340,12 +10341,32 @@ fn op_io_context_live(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     // No token at all is not an orphan: nothing names an event that could end.
-    let live = reaction_continuation_id(scope).is_none_or(|origin| {
-        live_io_context(scope, origin).is_some()
-            && operation_continuation_id(scope)
-                .is_none_or(|driver| live_io_context(scope, driver).is_some())
-    });
+    // A critical section's pair is live while its driver is, whatever became of
+    // the event it started in.
+    let live = operation_continuation_id(scope)
+        .is_none_or(|driver| live_io_context(scope, driver).is_some());
     rv.set(v8::Boolean::new(scope, live).into());
+}
+
+/// `__io_context_cell()` — the cell the running continuation belongs to, or
+/// the empty string: the cell of its event, running or ended. For I/O that a
+/// cell owns beyond its event, as a socket does.
+fn op_io_context_cell(
+    scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let cell = reaction_continuation_id(scope)
+        .and_then(|id| {
+            let state = actor_runtime_state(scope);
+            state
+                .io_context(id)
+                .and_then(|context| context.cell_scope.get().cloned())
+                .or_else(|| state.retired_scopes.lock().unwrap().get(id))
+        })
+        .unwrap_or_default();
+    let cell = v8::String::new(scope, &cell).unwrap();
+    rv.set(cell.into());
 }
 
 /// `__io_context_id(operationDriver = false)` — return the live context id.
@@ -10402,9 +10423,13 @@ fn op_gate_acquire(
 ) {
     let cell = args.get(0).to_rust_string_lossy(scope);
     let event = NEXT_GATE_EVENT.fetch_add(1, Ordering::Relaxed);
-    let contexts = current_reaction_io_context(scope).zip(
-        operation_continuation_id(scope).and_then(|id| actor_runtime_state(scope).io_context(id)),
-    );
+    // The block's driver must be running. Its origin may have ended (a
+    // continuation that outlived its event): the driver then also stands for
+    // it, and nothing is claimed on an event that is gone.
+    let owner_context =
+        operation_continuation_id(scope).and_then(|id| live_io_context(scope, id));
+    let origin_context = current_reaction_io_context(scope).filter(|c| c.accepts_handed_ops());
+    let contexts = owner_context.map(|owner| (origin_context.unwrap_or_else(|| owner.clone()), owner));
     let Some((context, owner_context)) = contexts else {
         // A promise can retain user code after its event has retired. It must
         // not borrow the context of whichever event happens to run the stale

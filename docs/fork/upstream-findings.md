@@ -82,6 +82,7 @@ seeds.
 | E3 | A graceful shutdown with an open WebSocket waits out the full 25 s drain, then the client sees close code 1006 instead of 1001. | **Yes**, for the preserved restart that `celld dev` and `POST /shutdown?handoff=preserve` use. See below. | |
 | E5 | An alarm set far in the future (year 2100) panics the node: "invalid deadline", `actor/effects.rs:252`. Found while testing object fork. | **Yes.** See below. | |
 | E4 | static-assets: `/index.html` redirects with 307 rather than a permanent redirect. A 404 is served as `Not found` with `content-type: application/json`. | No. | |
+| E9 | `fetch(url, { headers: { Upgrade: "websocket" } })` from a Durable Object fails with "WebSocket upgrade failed: isolate stopped reading WebSocket" when it runs in a continuation that outlived its event (an alarm's detached work, a promise another request released): the object's socket is taken for a Worker's, polled by the isolate and closed when the running event ends. Separately, the same call inside `blockConcurrencyWhile` (an alarm that dials in its initialisation block) waited for the 30 s limit and reset the object. | **Yes.** See below. | |
 | E8 | `Response.clone()` of a response whose body is a stream throws "Cannot clone a streaming response before consumption". workerd tees the body. `Request.clone()` already teed. | **Yes.** `Response.clone()` tees a streaming body as `Request.clone()` does: the response keeps one branch and the clone gets the other, so either can be read first, and a `fetch()` response (a host stream) tees through the host. Scenario `clone-stream`. | |
 | E7 | A request in flight to a facet is not ended when the facet is aborted (`ctx.facets.abort`, or the parent's release): the facet's handler keeps running, the caller's call never settles, and the caller's own response is never sent even when it caught or raced the call. A handler that another event's turn settles is not noticed either while one of its own operations is pending: the driver waits on that operation alone, and for an operation that never ends the event's response is never sent. workerd rejects the pending call with the abort reason. Found by Vibestudio (retiring an object with a request in flight). Both are in upstream code (`op_facet_fetch`, the drive loop's `wake`). | **Yes.** See below. | |
 | E6 | A promise continuation that runs after the event that created it ended cannot use its Durable Object. `blockConcurrencyWhile` (and so `transaction()`) rejects with "the cell event ended before it could acquire an input gate"; `fetch`, a stub call or an RPC call starts, and its promise never settles. workerd allows all of it while the object is alive. Found by Vibestudio's agent runtime, which starts blocks from background continuations. Upstream refuses it on purpose (`RETIRED_INPUT_GATE`, `op_gate_acquire`) and drops the op of an owner that is gone. | **Yes.** See below. | |
@@ -125,6 +126,23 @@ root handler that settles in another event's turn: each cell event watches its
 handler promise (`watch_settlement`), and a settlement wakes the driver, which
 looks in (`Wake::Poll`) instead of waiting out an operation that may never end.
 Scenario `facet-abort`, example `examples/facet-abort`.
+
+**E9 detail.** Two causes. (1) Whether a socket is the object's or a Worker's was
+decided from the actor-event stack, which holds only the events whose handler
+is still running; a continuation after that has no entry, so the socket was
+request-scoped. The owner is now `__ownerScope()`: the actor event's object, or
+the cell of the event the continuation began in (`__io_context_cell`, from the
+event or from the table E6 keeps), and the p2p ownership rule uses the same
+lookup before falling back to "the isolate's only object". (2) The host opened a
+socket from `fetch()` by running a `webSocketOpen` event in its cell, which
+waits for the cell's input gate. A caller inside `blockConcurrencyWhile` holds
+that gate and awaits this upgrade, so each waited for the other until the
+block's limit. That event only marks the socket open, which the caller does
+itself with `accept()`, so a socket from `fetch()` is registered with its cell
+and no event is run. A `new WebSocket(url)` still gets its `open` event.
+Scenario `ws-alarm`, example `examples/ws-alarm`: from a request, from a
+continuation another request releases, and from an alarm that awaits the dial,
+dials in a critical section, or returns before the dial ends.
 
 **E5 detail.** The actor arms every timer in a `tokio_util` `DelayQueue`, whose
 timer wheel spans about two years, and `insert` and `reset` panic on a delay

@@ -730,7 +730,7 @@ globalThis.fetch = async (input, init) => {
 };
 const __fetchWebSocketUpgrade = __celld.__fetchWebSocketUpgrade =
   async (req) => {
-  const scope = __currentActorScope();
+  const scope = __ownerScope();
   const id = __ws_alloc();
   const socket = __makeSocket(id);
   socket._outbound = true;
@@ -3394,7 +3394,7 @@ class DurableObjectState {
       // A stale reaction can run while an unrelated live block makes this
       // actor's depth nonzero. It cannot ride that hold when either half of
       // its retained [origin, driver] pair has already retired.
-      if (__io_context_id() === "" || __io_context_id(true) === "") {
+      if (!__io_context_live()) {
         return Promise.reject(new Error(
           "the cell event ended before it could acquire an input gate",
         ));
@@ -3725,14 +3725,21 @@ const __currentActorEvent = () => {
   return undefined;
 };
 const __currentActorScope = () => __currentActorEvent()?.scope ?? "";
+// The Durable Object that owns what the running code opens beyond its event
+// (a socket, a p2p stream): the object of the actor event running it, or, for
+// a continuation that outlived its event (a promise that waited on another
+// request, an alarm's detached work), the object of the event it began in,
+// which the host remembers. A Worker's code belongs to no object and gets "".
+const __ownerScope = () => __currentActorScope() || __io_context_cell();
 // The Durable Object a callback belongs to, for I/O that a cell owns across
 // events (a p2p stream). A callback that runs after the event that created it
-// has retired (a timer, a continuation) has no actor event, but a cell's
-// isolate holds exactly one object, so that object is the one it runs for.
+// has retired (a timer, a continuation) has no actor event; the host knows the
+// object of the event it began in. When it does not (an event older than its
+// table), a cell's isolate that holds exactly one object runs it for that one.
 // An isolate with several objects (a Worker Loader's) cannot tell, and says
 // so with an empty scope: the caller then treats the I/O as its event's.
 __celld.__actorScope = () => {
-  const scope = __currentActorScope();
+  const scope = __ownerScope();
   if (scope !== "") return scope;
   let only = "";
   for (const key in __cell.instances) {
@@ -11645,7 +11652,7 @@ globalThis.WebSocket = class WebSocket extends EventTarget {
       // a hibernated cell. A Worker socket has no cell: the isolate polls it,
       // and it lives and dies with the request, which is the lifetime
       // Cloudflare gives one too.
-      const scope = __currentActorScope();
+      const scope = __ownerScope();
       this._polled = !scope;
       const requested = typeof protocols === "string"
         ? [protocols]
@@ -11770,7 +11777,7 @@ globalThis.WebSocket = class WebSocket extends EventTarget {
         __ws_bind_target(
           this._id,
           JSON.stringify(this._boundTarget),
-          __currentActorScope(),
+          __ownerScope(),
         );
       }
       this.readyState = WebSocket.READY_STATE_OPEN;

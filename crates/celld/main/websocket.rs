@@ -374,7 +374,14 @@ enum OutboundWebSocketSink {
 }
 
 impl OutboundWebSocketSink {
-    async fn open(&self, websocket: u64, protocol: String) -> anyhow::Result<()> {
+    /// Register the opened socket with its cell. `dispatch` says whether the
+    /// cell is also told, as a `webSocketOpen` event that runs its `open`
+    /// handlers. A socket from `fetch()` with an `Upgrade` header is not told:
+    /// its caller holds the upgraded response and marks the socket open itself
+    /// (`accept()`), so the event would only run the cell's input gate, which a
+    /// caller inside a `blockConcurrencyWhile` holds while it awaits this very
+    /// upgrade.
+    async fn open(&self, websocket: u64, protocol: String, dispatch: bool) -> anyhow::Result<()> {
         match self {
             Self::Cell { app, socket } => {
                 let cell = socket.cell();
@@ -389,6 +396,9 @@ impl OutboundWebSocketSink {
                 let _activity = app.activity(request, cell.to_string());
                 app.websocket_opened(cell.to_string(), websocket, WebSocketKind::Outbound)
                     .await?;
+                if !dispatch {
+                    return Ok(());
+                }
                 let runtime = app.runtime.as_ref().context("no cell runtime")?;
                 let answer = match socket {
                     SocketRoute::Cell(cell) => {
@@ -673,7 +683,11 @@ pub(crate) async fn outbound_websocket_task(
     sink.register(id);
     celld::js::ws_register(id, outbound);
     if let Err(error) = sink
-        .open(id, protocol.as_deref().unwrap_or_default().to_string())
+        .open(
+            id,
+            protocol.as_deref().unwrap_or_default().to_string(),
+            !want_response,
+        )
         .await
     {
         celld::js::ws_unregister(id);

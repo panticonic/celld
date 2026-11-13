@@ -30,6 +30,9 @@ supports, one service or API at a time:
 - `body/` — request and response bodies
 - `router/` — Worker-to-Durable-Object routing
 - `wsecho/` — WebSocket echo with hibernation
+- `ws-alarm/` — a WebSocket opened with `fetch()` and an `Upgrade` header from an
+  alarm, a critical section or a later continuation; driven by
+  `tests/e2e/scenarios/compat-ws-alarm.mjs`
 - `wsclient/` — outbound WebSocket client from a Durable Object
 - `p2p/` — two nodes exchanging streams over Iroh, dialed by node id
 - `alarm/` — a Durable Object alarm handler, including one set for the year 2100

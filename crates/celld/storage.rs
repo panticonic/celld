@@ -721,6 +721,11 @@ fn dolt_function_has_reach(name: &str) -> bool {
         .any(|word| name.contains(word))
 }
 
+/// A table name Dolt owns: `dolt_*` (system tables) and `doltlite_*`.
+fn is_dolt_table_name(lowered: &str) -> bool {
+    lowered.starts_with("dolt_") || lowered.starts_with("doltlite_")
+}
+
 fn is_dolt_function(name: &str) -> bool {
     name.starts_with("dolt") || name == "active_branch"
 }
@@ -749,11 +754,9 @@ fn authorize_dolt_sql(context: rusqlite::hooks::AuthContext<'_>) -> rusqlite::ho
         | AuthAction::Update { table_name, .. }
         | AuthAction::CreateTable { table_name }
         | AuthAction::DropTable { table_name }
-        | AuthAction::AlterTable { table_name, .. } => {
-            user && lower(table_name).starts_with("dolt_")
-        }
+        | AuthAction::AlterTable { table_name, .. } => user && is_dolt_table_name(&lower(table_name)),
         AuthAction::CreateVtable { table_name, .. } | AuthAction::DropVtable { table_name, .. } => {
-            user && lower(table_name).starts_with("dolt_")
+            user && is_dolt_table_name(&lower(table_name))
         }
         _ => false,
     };
@@ -5166,6 +5169,240 @@ pub fn bump_alarm_with_policy(scope: &str, now_ms: i64, counts_against_limit: bo
         }
     });
     publish_alarm(scope);
+}
+
+/// F6: what a Dolt cell's application SQL can read of Dolt's history and diff
+/// surface, and cannot write, under the application authorizer (`ctx.storage.sql`)
+/// and under the local-read profile (`ctx.storage.dolt.query`).
+#[cfg(test)]
+mod dolt_read_surface {
+    use super::*;
+    use serde_json::json;
+
+    fn cell(dir: &std::path::Path) -> Connection {
+        let path = dir.join("cell.db").to_string_lossy().into_owned();
+        let connection = crate::dolt_cell::open_connection(&path, celld_ltx::Engine::Dolt, None).unwrap();
+        crate::dolt_cell::attach_active_branch(&connection).unwrap();
+        schema(&connection).unwrap();
+        crate::dolt_cell::ensure_runtime(&connection, &[]).unwrap();
+        connection
+    }
+
+    fn dolt(c: &Connection, op: &str, args: serde_json::Value) -> serde_json::Value {
+        crate::dolt_cell::run_with(c, op, &args, &[]).unwrap_or_else(|error| panic!("{op}: {error:#}"))
+    }
+
+    /// Run `sql` the way `ctx.storage.sql.exec` does: through the Dolt cell's
+    /// authorizer with the application restrictions in force. The rows come
+    /// back as text; an error is the authorizer's or the engine's.
+    fn app(c: &Connection, sql: &str) -> Result<Vec<Vec<String>>, String> {
+        c.authorizer(Some(authorize_dolt_sql));
+        let result = as_user_sql(|| -> rusqlite::Result<Vec<Vec<String>>> {
+            let mut statement = c.prepare(sql)?;
+            let columns = statement.column_count();
+            let mut rows = statement.query([])?;
+            let mut out = Vec::new();
+            while let Some(row) = rows.next()? {
+                out.push(
+                    (0..columns)
+                        .map(|i| match row.get_ref(i)? {
+                            rusqlite::types::ValueRef::Null => Ok("NULL".to_string()),
+                            rusqlite::types::ValueRef::Integer(n) => Ok(n.to_string()),
+                            rusqlite::types::ValueRef::Real(f) => Ok(f.to_string()),
+                            rusqlite::types::ValueRef::Text(t) => Ok(String::from_utf8_lossy(t).into_owned()),
+                            rusqlite::types::ValueRef::Blob(_) => Ok("<blob>".to_string()),
+                        })
+                        .collect::<rusqlite::Result<Vec<_>>>()?,
+                );
+            }
+            Ok(out)
+        });
+        c.authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        result.map_err(|error| error.to_string())
+    }
+
+    fn first(rows: Result<Vec<Vec<String>>, String>) -> Vec<String> {
+        rows.unwrap().into_iter().map(|row| row.join("|")).collect()
+    }
+
+    /// `main`: c1 `{1:one}`, c2 `{1:ONE, 2:two}`; `other` from c1: `{1:uno}`.
+    fn history(c: &Connection) -> (String, String) {
+        c.execute_batch("CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT);").unwrap();
+        c.execute("INSERT INTO notes VALUES (1, 'one')", []).unwrap();
+        let c1 = dolt(c, "commit", json!({"message": "c1", "date": 1_700_000_000_000_i64}));
+        dolt(c, "branchCreate", json!({"name": "other"}));
+        c.execute("UPDATE notes SET body='ONE' WHERE id=1", []).unwrap();
+        c.execute("INSERT INTO notes VALUES (2, 'two')", []).unwrap();
+        let c2 = dolt(c, "commit", json!({"message": "c2", "date": 1_700_000_001_000_i64}));
+        dolt(c, "checkout", json!({"branch": "other"}));
+        c.execute("UPDATE notes SET body='uno' WHERE id=1", []).unwrap();
+        dolt(c, "commit", json!({"message": "other", "date": 1_700_000_002_000_i64}));
+        dolt(c, "checkout", json!({"branch": "main"}));
+        (c1.as_str().unwrap().to_string(), c2.as_str().unwrap().to_string())
+    }
+
+    #[test]
+    fn history_and_diff_are_readable_through_application_sql() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = cell(dir.path());
+        let (c1, c2) = history(&c);
+
+        // dolt_at_<t>(ref): the table as of a commit, branch or HEAD~n, without a checkout.
+        assert_eq!(first(app(&c, "SELECT id, body FROM dolt_at_notes('HEAD~1') ORDER BY id")), ["1|one"]);
+        assert_eq!(first(app(&c, &format!("SELECT id, body FROM dolt_at_notes('{c1}') ORDER BY id"))), ["1|one"]);
+        assert_eq!(first(app(&c, "SELECT id, body FROM dolt_at_notes('other') ORDER BY id")), ["1|uno"]);
+        assert_eq!(first(app(&c, "SELECT id, body FROM dolt_at_notes('main') ORDER BY id")), ["1|ONE", "2|two"]);
+        // dolt_history_<t>: every version of every row.
+        let history = first(app(&c, "SELECT id, body FROM dolt_history_notes ORDER BY id, commit_date"));
+        assert_eq!(history, ["1|one", "1|ONE", "2|two"]);
+        // dolt_diff_<t>: the row changes between commits.
+        let diff = first(app(
+            &c,
+            &format!(
+                "SELECT diff_type, from_body, to_body FROM dolt_diff_notes \
+                 WHERE to_commit = '{c2}' ORDER BY diff_type"
+            ),
+        ));
+        assert_eq!(diff, ["added|NULL|two", "modified|one|ONE"]);
+        // dolt_merge_base(a, b), a scalar function.
+        assert_eq!(first(app(&c, "SELECT dolt_merge_base('main', 'other') = dolt_hashof('HEAD~1')")), ["1"]);
+        assert_eq!(first(app(&c, &format!("SELECT dolt_merge_base('main', 'other') = '{c1}'"))), ["1"]);
+        // dolt_blame_<t>: who last changed each row.
+        // (the primary key, then the commit, its date, committer, email and message)
+        let blame = app(&c, "SELECT * FROM dolt_blame_notes ORDER BY id").unwrap();
+        assert_eq!(blame.len(), 2);
+        assert_eq!(blame[0][0], "1");
+        assert_eq!(blame[0][5], "c2", "row 1 was last changed in c2: {blame:?}");
+        assert_eq!(blame[1][5], "c2");
+        // The summary and the log.
+        assert_eq!(
+            first(app(&c, &format!("SELECT to_table_name, diff_type FROM dolt_diff_summary('{c1}', '{c2}')"))),
+            ["notes|modified"]
+        );
+        assert!(first(app(&c, "SELECT message FROM dolt_log")).contains(&"c2".to_string()));
+        assert_eq!(
+            first(app(&c, "SELECT count(*) FROM dolt_commit_ancestors WHERE parent_index = 0")).len(),
+            1
+        );
+    }
+
+    /// The reads above are also available to `ctx.storage.dolt.query`, the
+    /// local-read profile (a read of another commit's rows is a local read).
+    #[test]
+    fn history_and_diff_are_readable_through_dolt_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = cell(dir.path());
+        let (c1, _c2) = history(&c);
+        let query = |sql: &str| -> serde_json::Value {
+            dolt(&c, "query", json!({"sql": sql, "bindings": []}))
+        };
+        let text = |value: &serde_json::Value, row: usize, column: usize| -> String {
+            value["rows"][row][column]["v"].as_str().unwrap_or("<none>").to_string()
+        };
+        let at = query("SELECT body FROM dolt_at_notes('HEAD~1')");
+        assert_eq!(text(&at, 0, 0), "one", "{at}");
+        let history = query("SELECT count(*) FROM dolt_history_notes");
+        assert_eq!(history["rows"][0][0]["v"], "3", "{history}");
+        let diff = query("SELECT count(*) FROM dolt_diff_notes");
+        assert!(diff["error"].is_null(), "{diff}");
+        let blame = query("SELECT * FROM dolt_blame_notes WHERE id = 2");
+        assert_eq!(text(&blame, 0, 5), "c2", "{blame}");
+        let base = query(&format!("SELECT dolt_merge_base('main', 'other') = '{c1}'"));
+        assert!(base["error"].is_null(), "dolt_merge_base through dolt.query: {base}");
+        assert_eq!(base["rows"][0][0]["v"], "1", "{base}");
+        // Still read-only.
+        let write = query("INSERT INTO notes VALUES (9, 'x')");
+        assert_eq!(write["error"], "SQL_PROFILE_VIOLATION", "{write}");
+        let call = query("SELECT dolt_commit('-A', '-m', 'x')");
+        assert_eq!(call["error"], "SQL_PROFILE_VIOLATION", "{call}");
+    }
+
+    /// Nothing of that surface is writable, and no versioning function is
+    /// callable, whatever a statement names.
+    #[test]
+    fn the_read_surface_is_not_writable() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = cell(dir.path());
+        history(&c);
+        for sql in [
+            "INSERT INTO dolt_ignore(pattern, ignored) VALUES ('x_%', 1)",
+            "DELETE FROM dolt_ignore",
+            "UPDATE dolt_branches SET name = 'x'",
+            "DELETE FROM dolt_log",
+            "INSERT INTO dolt_history_notes(id, body) VALUES (7, 'x')",
+            "UPDATE dolt_diff_notes SET to_body = 'x'",
+            "DELETE FROM dolt_blame_notes",
+            "DROP TABLE dolt_ignore",
+            "CREATE TABLE doltlite_mine(a)",
+            "SELECT dolt_commit('-A', '-m', 'x')",
+            "SELECT dolt_checkout('other')",
+            "SELECT dolt_merge('other')",
+            "SELECT dolt_reset('--hard')",
+            "SELECT dolt_branch('x')",
+            "SELECT dolt_conflicts_resolve('--ours', 'notes')",
+            "SELECT dolt_gc()",
+            "SELECT dolt_fetch('origin')",
+        ] {
+            let error = app(&c, sql).expect_err(sql);
+            assert!(
+                error.contains("authoriz") || error.contains("may not be modified") || error.contains("reserved"),
+                "{sql}: expected a denial, got {error}"
+            );
+        }
+        // The reads that remain work, and the store is as it was.
+        assert_eq!(first(app(&c, "SELECT count(*) FROM dolt_branches")), ["2"]);
+        assert_eq!(first(app(&c, "SELECT body FROM notes ORDER BY id")), ["ONE", "two"]);
+    }
+
+    /// `dolt_conflicts_<t>` and `dolt_constraint_violations_<t>` are readable
+    /// by the merge's resolver (application SQL, inside the merge's
+    /// transaction) and not writable by it: the resolver answers rows through
+    /// the harness, which clears the tables itself.
+    #[test]
+    fn conflicts_are_readable_by_a_resolver_and_not_writable() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = cell(dir.path());
+        c.execute_batch(
+            "CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT, slug TEXT UNIQUE); \
+             INSERT INTO notes VALUES (1, 'x', 'a');",
+        )
+        .unwrap();
+        dolt(&c, "commit", json!({"message": "base"}));
+        dolt(&c, "branchCreate", json!({"name": "other"}));
+        c.execute_batch("UPDATE notes SET body = 'main' WHERE id = 1; INSERT INTO notes VALUES (2, 'm', 'dup');").unwrap();
+        dolt(&c, "commit", json!({"message": "main"}));
+        dolt(&c, "checkout", json!({"branch": "other"}));
+        c.execute_batch("UPDATE notes SET body = 'other' WHERE id = 1; INSERT INTO notes VALUES (3, 'o', 'dup');").unwrap();
+        dolt(&c, "commit", json!({"message": "other"}));
+        dolt(&c, "checkout", json!({"branch": "main"}));
+
+        c.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let begin = crate::dolt_cell::run_in_transaction(&c, "mergeBegin", &json!({"branch": "other"}), &[]).unwrap();
+        assert_eq!(begin["state"], "merging");
+        // Readable, from both sides of the merge, by plain SQL.
+        assert_eq!(
+            first(app(&c, "SELECT base_body, our_body, their_body FROM dolt_conflicts_notes")),
+            ["x|main|other"]
+        );
+        assert_eq!(first(app(&c, "SELECT num_conflicts FROM dolt_conflicts")), ["1"]);
+        assert_eq!(first(app(&c, "SELECT count(*) FROM dolt_constraint_violations_notes")), ["2"]);
+        assert_eq!(first(app(&c, "SELECT \"table\", num_violations FROM dolt_constraint_violations")), ["notes|2"]);
+        // The other side's rows, without a checkout.
+        assert_eq!(first(app(&c, "SELECT body FROM dolt_at_notes('other') WHERE id = 1")), ["other"]);
+        // Not writable.
+        for sql in [
+            "DELETE FROM dolt_conflicts_notes",
+            "UPDATE dolt_conflicts_notes SET our_body = 'x'",
+            "DELETE FROM dolt_constraint_violations_notes",
+            "SELECT dolt_conflicts_resolve('--theirs', 'notes')",
+            "SELECT dolt_commit('-A', '-m', 'x')",
+        ] {
+            let error = app(&c, sql).expect_err(sql);
+            assert!(error.contains("authoriz"), "{sql}: {error}");
+        }
+        assert_eq!(first(app(&c, "SELECT num_conflicts FROM dolt_conflicts")), ["1"]);
+        c.execute_batch("ROLLBACK").unwrap();
+    }
 }
 
 #[cfg(celld_internal_tests)]

@@ -171,6 +171,15 @@ check "keepOurs"                    "$(get "/merge-resolve?repo=mg4&name=other&m
 check "merge up to date"            "$(get "/merge-resolve?repo=mg4&name=other&mode=ours")" \
   '.result.upToDate == true and .seen == null'
 
+echo "-- F6: reading history, diff and blame without a checkout"
+H=$(get "/history?$MG&other=other")
+check "dolt_at_<t>(ref)"         "$H"   '(.asOfParent | map(.body)) == ["main-one","main-two"] and (.asOfBranch | map(.body)) == ["other-one"]'
+check "dolt_history_<t>"         "$H"   '.versionsOfRow1 >= 3'
+check "dolt_diff_<t>"            "$H"   '(.diff | length) >= 1'
+check "dolt_blame_<t>"           "$H"   '.blame[0][0] == 1 and .blame[0][5] == "semantic merge"'
+check "dolt_merge_base"          "$H"   '.mergeBase == "'"$(get "/hash?$MG&ref=other" | jq -r .hash)"'"'
+check "reads through dolt.query" "$H"   '.query.asOfParent == [["main-one"],["main-two"]] and .query.mergeBase[0][0] == .mergeBase and .query.blameRows == [["2"]]'
+check "none of it is writable"   "$H"   '.writes | (.history == "denied" and .ignore == "denied" and .branches == "denied" and .commit == "denied" and .resolve == "denied")'
 echo "-- F4/F5: class-declared local tables (doltLocal: outbox_%)"
 L="repo=lo"
 get "/add?$L&body=n1" >/dev/null

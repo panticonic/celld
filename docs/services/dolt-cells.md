@@ -296,6 +296,39 @@ Things to know:
   store: a start that names fewer patterns does not remove any, and one that
   names more adds them.
 
+## Reading history
+
+Application SQL (`ctx.storage.sql`) reads other commits and branches without a
+checkout, and cannot write any of it:
+
+| read | gives |
+| --- | --- |
+| `dolt_at_<t>('<ref>')` | table `<t>` as of a branch, tag, commit hash or `HEAD~n` |
+| `dolt_history_<t>` | every version of every row, with the commit that made it |
+| `dolt_diff_<t>` | the row changes of each commit (`from_*`, `to_*`, `diff_type`) |
+| `dolt_blame_<t>` | the commit that last changed each row (the primary key, then the commit, its date, committer, email and message); the table needs a primary key |
+| `dolt_diff_summary(from, to)`, `dolt_log`, `dolt_commit_ancestors`, `dolt_branches`, `dolt_status` | the commit graph and the changed tables |
+| `dolt_merge_base(a, b)`, `dolt_hashof(ref)` and the other `dolt_hashof_*` | commit and table hashes |
+| `dolt_conflicts_<t>`, `dolt_constraint_violations_<t>` | a merge's conflicts and violations, inside a [resolver](#merge-with-a-resolver) |
+
+```js
+// who last changed row 1, and what the table said before the last commit
+ctx.storage.sql.exec("SELECT * FROM dolt_blame_notes WHERE id = 1").one();
+ctx.storage.sql.exec("SELECT body FROM dolt_at_notes('HEAD~1') WHERE id = 1").one();
+// where main and feature diverged
+ctx.storage.sql.exec("SELECT dolt_merge_base('main', 'feature') AS base").one().base;
+```
+
+`ctx.storage.dolt.query` reads the same tables and may call `dolt_merge_base`
+and `dolt_hashof*` (the local-read profile); a replicated program
+(`dolt.execute`) may not read Dolt's history at all. Nothing here is writable,
+and no function that changes the store (`dolt_commit`, `dolt_checkout`,
+`dolt_merge`, `dolt_reset`, `dolt_branch`, `dolt_gc`, `dolt_conflicts_resolve`,
+the network functions) is callable from SQL, whatever the statement names; the
+tests in `crates/celld/storage.rs` (`dolt_read_surface`) and
+`crates/dolt-exec/tests/local_query.rs` probe each of these. Table names
+beginning `dolt_` or `doltlite_` cannot be created.
+
 ## Semantics
 
 **Output gate.** Each method that can change the store (commit, branch create

@@ -33,6 +33,7 @@ has not been run yet.
 | Fork polish: cell-owned P2P streams and `closed`, Ed25519 PKCS#8 v0, configurable node lease, far-future alarms (E5), per-class secrets (G3), e2e scenarios for every fork example | done (branch `feature/fork-polish`) | §3b.10-11, `docs/services/p2p.md`, `docs/fork/class-secrets.md`, `docs/README.md` (node lease) |
 | Vibestudio compatibility audit | done (Vibestudio branch `audit/celld-compat`, `docs/celld-compat-audit.md`) | fork bugs A1 and A2 fixed |
 | Vibestudio runtime cutover | partial, paused (Vibestudio branch `feat/celld-runtime`, `HANDOFF-celld-runtime.md`) | |
+| Dolt runtime for the Vibestudio redesign: merge resolver (F1), commit in a transaction (F2), class-declared local tables (F4), checkout independent of local state (F5), history reads (F6) | done (branch `feature/dolt-runtime-f1-f6`) | §3b.12, `docs/services/dolt-cells.md` |
 | Vibestudio Dolt redesign | design done, P0 not started (Vibestudio branch `design/dolt-redesign`, `docs/dolt-redesign.md`); questions Q1–Q5 open | |
 
 ### Single-track backlog (from 2026-11-13, in order)
@@ -65,13 +66,14 @@ has not been run yet.
      `celld dev` (docs/README.md, "Node lease timing");
    - E5, found on the way: a far-future alarm panicked the node; fixed
      (`docs/fork/upstream-findings.md`).
-5. Fork requests from the Dolt redesign, F1–F6:
-   - F1: merge with an in-transaction resolver;
-   - F2: commit at the end of a transaction;
+5. ~~Fork requests from the Dolt redesign, F1–F6~~ done (§3b.12):
+   - ~~F1: merge with an in-transaction resolver~~ `dolt.merge(name, { message, resolve })`;
+   - ~~F2: commit at the end of a transaction~~ `transactionSync(fn, { commit })`;
    - ~~F3: forks that carry facets~~ done with G1 (`facets: { [name]: { at } }`);
-   - F4: local tables;
-   - F5: cheap checkout;
-   - F6: read access to history and diff tables.
+   - ~~F4: local tables~~ `celld.durable_objects.C.doltLocal`, `FacetStartupOptions.celld.doltLocal`;
+   - ~~F5: cheap checkout~~ the engine moves local tables by catalog entry (patch 0003);
+   - ~~F6: read access to history and diff tables~~ verified and tested; `dolt.query` may call `dolt_merge_base` and `dolt_hashof*`.
+   Not done: F7 below.
    - F7: Dolt remotes between cells. Locally this is chunk transfer through
      DoltLite's `DoltliteRemote` vtable, behind a capability; across nodes,
      the same transfer over the P2P binding. It is required for
@@ -267,7 +269,9 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
    connection and working sets are per branch, so checkout copies the
    runtime tables into the target branch's working set and then flips
    `_cf_DOLT.branch` on `main`, which every open reads first (crash-safe
-   in either order of failure; cost O(runtime tables)). Rejected:
+   in either order of failure). The first version copied the tables row by
+   row, at a cost of O(runtime tables); §3b.12 replaced the copy by an engine
+   carry. Rejected:
    `dolt_nonlocal_tables` (needs ATTACH of `file/branch`, which the
    authorizer denies, and failed to open in a probe), and a sidecar SQLite
    file (two streams, no atomicity with application writes).
@@ -459,6 +463,114 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
     The JS side of a Worker, which has no cell, keeps request-scoped streams.
     The scope of a callback after its event ended (a timer) comes from the cell's
     isolate holding one object.
+
+12. **The Dolt runtime for the Vibestudio redesign (F1–F6; 2026-11-13).**
+    User-facing contract: `docs/services/dolt-cells.md`. Consumer spec:
+    Vibestudio `docs/dolt-redesign.md` §3. Decisions:
+    - **F2 first, because F1 uses it.** `transactionSync(fn, { commit })` and
+      `transaction(fn, { commit })` run `dolt_commit -A` inside the harness's
+      `BEGIN IMMEDIATE`. DoltLite's scoped `dolt_commit` commits the
+      transaction's writes and records the commit in **one root record**
+      (asserted by counting root records: a write then a commit is two), then
+      reopens the transaction, so the following `COMMIT` writes nothing. The
+      harness reaches the engine through `__dolt_op(..., true)` ->
+      `storage::dolt_tx_op`, which only runs operations written for an open
+      transaction (`dolt_cell::run_in_transaction`); every other `dolt.*`
+      method still refuses a transaction (C1). A nested transaction is a
+      savepoint and DoltLite rolls a nested `dolt_commit` back with it, so the
+      option is refused there. A function `commit(result)` renders the message
+      from what the callback wrote (the consumer's `committedTransaction`).
+    - **F1 on the same path.** `dolt.merge(name, { resolve })` is a
+      `transactionSync` whose callback runs `dolt_merge --no-commit`, reads
+      `dolt_conflicts_<t>` and `dolt_constraint_violations_<t>` into rows
+      (`base/ours/theirs` folded from the engine's prefixed columns, with the
+      change kind of each side, exact INTEGER/REAL/BLOB values), calls the
+      resolver, requires every row answered, clears the two table families,
+      and lets the transaction's `{ commit }` make the merge commit. DoltLite
+      keeps merge state *inside* a plain transaction (it rolls back in an
+      autocommit statement or a savepoint), which is why this is one
+      transaction and not a session. A rollback leaves no merge state and
+      writes no root record (tested). `takeTheirs()` is host SQL, so values
+      keep their class. Rejected: a persistent `--no-commit` session across
+      turns (GAD's own law forbids it).
+    - **F5 before F4, because F4 is its payload.** A local table is a table
+      `dolt_ignore` covers (the `_cf_*` mechanism), so F4 is a rule row plus a
+      declaration. F5 needed an engine change: DoltLite's checkout leaves
+      untracked ignored tables on the branch they were created on. Patch
+      0003 adds `dolt_checkout --carry-ignored`: before leaving, the session's
+      ignored tables are split from its working catalog with the machinery
+      merge and pull already use (`mergeSplitWorkingCatalog`), and after the
+      target's working set loads they are grafted onto it by name
+      (`mergeCopyLocalTables`, replacing the target's stale copy), in the same
+      ref mutation. No row is read or written. Rejected:
+      `dolt_nonlocal_tables` (the internal `ATTACH` of `file/main` fails to
+      open under the authorizer and in a bare connection, and a table can be
+      created only on its home branch); `dolt.onBranch(name, fn)` (still a
+      checkout, plus a ban on touching local tables in `fn`); the default
+      branch (`dolt_default_branch`) as the active-branch pointer (it moves
+      delete, GC and push semantics, and costs a root write like the pointer).
+      The pointer flip stays: switch to `main`, one write, switch back.
+    - **Checkout numbers** (release profile, LTO off for build time, one local
+      table, a local write before each checkout, alternating two branches, 200
+      checkouts per cell, this machine's NVMe whose `fsync` takes 6.4 ms;
+      `cargo test -p celld --release --lib checkout_cost -- --ignored
+      --nocapture`):
+
+| `synchronous` | local rows | checkout after a local write, p50 / p95 | checkout with nothing written, p50 / p95 |
+| --- | ---: | ---: | ---: |
+| OFF (no device flush) | 0 | 0.67 / 0.93 ms | 0.70 / 0.75 ms |
+| OFF | 1 000 | 0.66 / 0.77 ms | 0.71 / 0.77 ms |
+| OFF | 10 000 | 0.74 / 0.81 ms | 0.73 / 0.78 ms |
+| NORMAL (celld's setting) | 0 | 13.78 / 15.07 ms | 7.50 / 8.19 ms |
+| NORMAL | 1 000 | 13.83 / 15.05 ms | 7.41 / 7.84 ms |
+| NORMAL | 10 000 | 13.68 / 15.42 ms | 7.55 / 7.87 ms |
+| FULL | 10 000 | 14.14 / 16.31 ms | 7.66 / 8.18 ms |
+
+      The CPU cost is below a millisecond and flat in the number of local
+      rows (the old copy took 33 ms for 10 000 rows in a debug build). The
+      target "p95 below 2 ms with 10 000 local rows" holds for the CPU path;
+      with durable writes each root record costs one device flush, and a
+      checkout makes one (the pointer) or two (also the state of the branch it
+      leaves, when that has local writes no commit made durable). A transaction
+      with `{ commit }` leaves nothing to record. The pointer could be made
+      free only by writing it with the first write after the checkout; that is
+      not done.
+    - **F4: declaration and scope.** `doltLocal` is a `ClassCapabilities` field
+      (so the same unknown-key refusal and manifest round trip as `residency`),
+      validated by `dolt_cell::validate_local_patterns` (a pattern must not be
+      able to cover `_cf_*`, `dolt_*`, `sqlite_*`), refused on a class that is
+      not a Dolt class, and gated by `dolt-local-v1`. The patterns reach the
+      cell through `WorkerConfig::class_dolt_local` ->
+      `CellStorage.dolt_local` -> `storage::declare_dolt_local(scope, ...)`,
+      read by `finish_open` and stored with the cell, so `commit` and `checkout`
+      put the rule rows back on a branch that lacks them. **A facet is not a
+      deployment class** (it can come from a Worker Loader, which has no
+      manifest), so a facet declares them in its startup options,
+      `celld: { storage: "dolt", doltLocal: [...] }`, sent through
+      `__facet_rpc`/`__facet_fetch` and `FacetStart`; the class block does not
+      reach facets. A fork, restore or import empties the tables the
+      `dolt_ignore` rules name (`object_image::strip_identity`, and
+      `fork_image` for a facet fork), read from the store itself so the fork
+      code needs no class information; the order matters (empty, then reset
+      to `at`), because a reset to an older commit can drop the rules.
+      Known engine limits, documented: an ignored `AUTOINCREMENT` table leaks
+      its `sqlite_sequence` row into commits and makes `merge` refuse; a rule
+      row is versioned data, so a rule added by a redeploy is an uncommitted
+      `dolt_ignore` change until the branch commits. A side finding fixed on
+      the way: `dolt_patch(from, to)` fails over a range that changes
+      `dolt_ignore`, so `dolt.diff` asks for the patch table by table.
+    - **F6: verified, one gap closed.** Tests under the application
+      authorizer (`storage::dolt_read_surface`) and the local-read profile
+      (`crates/dolt-exec/tests/local_query.rs`): `dolt_at_<t>(ref)`,
+      `dolt_history_<t>`, `dolt_diff_<t>`, `dolt_blame_<t>` (needs a primary
+      key), `dolt_merge_base` and `dolt_conflicts_<t>` inside a resolver are
+      readable through `ctx.storage.sql`; none is writable, and no versioning
+      function is callable. The gap: `dolt.query` denied every Dolt function,
+      so `dolt_merge_base` and `dolt_hashof*` (read-only) are now allowed in
+      the local-read profile only. A second gap closed: application SQL could
+      create tables named `doltlite_*`.
+    - The engine digest changes with patch 0003 (it hashes the patch set), as
+      it must.
 
 ## 4. Determinism: fixes over the earlier plans
 

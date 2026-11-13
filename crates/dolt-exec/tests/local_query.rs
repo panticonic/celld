@@ -77,6 +77,38 @@ fn host_tables_are_unreadable_but_dolt_history_is_readable() {
     assert!(matches!(log.rows[0][0], SqlValue::Integer(n) if n >= 1));
 }
 
+/// F6: a local read can read a table as of another commit, its history, its
+/// diff and its blame, and find where two commits diverged, but cannot call a
+/// function that versions the store.
+#[test]
+fn local_reads_can_read_history_diff_blame_and_the_merge_base() {
+    let (_dir, conn) = fresh_dolt();
+    conn.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES (1, 'one');").unwrap();
+    conn.query_row("SELECT dolt_commit('-A', '-m', 'c1')", [], |r| r.get::<_, String>(0)).unwrap();
+    conn.query_row("SELECT dolt_branch('other')", [], |r| r.get::<_, i64>(0)).unwrap();
+    conn.execute_batch("UPDATE t SET v = 'ONE'; INSERT INTO t VALUES (2, 'two');").unwrap();
+    conn.query_row("SELECT dolt_commit('-A', '-m', 'c2')", [], |r| r.get::<_, String>(0)).unwrap();
+    let text = |sql: &str| -> Vec<Vec<SqlValue>> {
+        local_query(&conn, &q(sql), &Limits::default(), 100).unwrap_or_else(|e| panic!("{sql}: {e}")).rows
+    };
+    assert_eq!(text("SELECT v FROM dolt_at_t('HEAD~1')"), vec![vec![SqlValue::Text("one".into())]]);
+    assert_eq!(text("SELECT count(*) FROM dolt_history_t"), vec![vec![SqlValue::Integer(3)]]);
+    assert_eq!(text("SELECT count(*) FROM dolt_diff_t"), vec![vec![SqlValue::Integer(3)]]);
+    assert_eq!(text("SELECT count(*) FROM dolt_blame_t"), vec![vec![SqlValue::Integer(2)]]);
+    assert_eq!(
+        text("SELECT dolt_merge_base('main', 'other') = dolt_hashof('other')"),
+        vec![vec![SqlValue::Integer(1)]]
+    );
+    for sql in [
+        "SELECT dolt_commit('-A', '-m', 'x')",
+        "SELECT dolt_checkout('other')",
+        "SELECT dolt_reset('--hard')",
+        "SELECT dolt_gc()",
+    ] {
+        assert_eq!(local_query(&conn, &q(sql), &Limits::default(), 10).unwrap_err(), "SQL_PROFILE_VIOLATION", "{sql}");
+    }
+}
+
 #[test]
 fn multiple_statements_and_bad_sql_are_refused() {
     let (_dir, conn) = fresh_dolt();

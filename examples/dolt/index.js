@@ -47,6 +47,42 @@ export class Repo {
       }
       case "notes":
         return Response.json({ branch: dolt.branch.current(), notes: this.notes() });
+      case "history": {
+        // Reads of other commits and branches, without a checkout, through
+        // ctx.storage.sql and ctx.storage.dolt.query. Nothing of it is writable.
+        const other = q("other", "other");
+        if (!/^[A-Za-z0-9_-]+$/.test(other)) return new Response("bad branch", { status: 400 });
+        const rows = (sql) => this.sql.exec(sql).toArray();
+        const text = (result) => result.rows.map((row) => row.map((v) => (typeof v === "bigint" ? String(v) : v)));
+        const denied = (sql) => {
+          try {
+            this.sql.exec(sql).toArray();
+            return "allowed";
+          } catch (error) {
+            return "denied";
+          }
+        };
+        return Response.json({
+          asOfParent: rows("SELECT id, body FROM dolt_at_notes('HEAD~1') ORDER BY id"),
+          asOfBranch: rows(`SELECT id, body FROM dolt_at_notes('${other}') ORDER BY id`),
+          versionsOfRow1: rows("SELECT count(*) AS n FROM dolt_history_notes WHERE id = 1")[0].n,
+          diff: rows("SELECT diff_type, from_body, to_body FROM dolt_diff_notes WHERE to_commit = dolt_hashof('HEAD') ORDER BY diff_type"),
+          blame: rows("SELECT * FROM dolt_blame_notes WHERE id = 1").map((row) => Object.values(row)),
+          mergeBase: rows(`SELECT dolt_merge_base('main', '${other}') AS h`)[0].h,
+          query: {
+            asOfParent: text(dolt.query("SELECT body FROM dolt_at_notes('HEAD~1') ORDER BY id")),
+            mergeBase: text(dolt.query(`SELECT dolt_merge_base('main', '${other}')`)),
+            blameRows: text(dolt.query("SELECT count(*) FROM dolt_blame_notes")),
+          },
+          writes: {
+            history: denied("DELETE FROM dolt_history_notes"),
+            ignore: denied("INSERT INTO dolt_ignore(pattern, ignored) VALUES ('x_%', 1)"),
+            branches: denied("UPDATE dolt_branches SET name = 'x'"),
+            commit: denied("SELECT dolt_commit('-A', '-m', 'x')"),
+            resolve: denied("SELECT dolt_conflicts_resolve('--ours', 'notes')"),
+          },
+        });
+      }
       case "outbox": {
         // Local tables: written like any table, committed by no commit.
         if (q("add") != null) this.sql.exec("INSERT INTO outbox_msgs(body) VALUES (?)", q("add"));

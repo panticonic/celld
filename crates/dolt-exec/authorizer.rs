@@ -91,6 +91,22 @@ pub const CONSENSUS_DENIED_MODULES: &[&str] = &["dbstat", "sqlite_dbpage", "sqli
 /// Local SQL is not replayed, so only external effects and Dolt control are denied.
 pub const FORBIDDEN_LOCAL_READ_FUNCTIONS: &[&str] = &["active_branch", "load_extension"];
 
+/// The Dolt functions a local read may call: they only read the commit graph
+/// and name commits and tables by hash, so an application can find where two
+/// branches diverged (`dolt_merge_base`) or pin a state (`dolt_hashof`) in a
+/// read of `dolt_at_<t>(ref)`, `dolt_history_<t>`, `dolt_diff_<t>` or
+/// `dolt_blame_<t>`. Every other Dolt function is denied in every mode: a
+/// replicated program must not see per-replica history, and the versioning
+/// functions run through `ctx.storage.dolt`.
+pub const LOCAL_READ_DOLT_FUNCTIONS: &[&str] = &[
+    "dolt_hashof",
+    "dolt_hashof_table",
+    "dolt_hashof_db",
+    "dolt_hashof_catalog",
+    "dolt_hashof_index",
+    "dolt_merge_base",
+];
+
 /// Which rule set the authorizer applies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuthMode {
@@ -211,7 +227,7 @@ impl Authorizer {
         if action_code == a::FUNCTION {
             let function = if secondary.is_empty() { &object } else { &secondary };
             if is_dolt_name(function) {
-                return false;
+                return mode == AuthMode::LocalRead && LOCAL_READ_DOLT_FUNCTIONS.contains(&function.as_str());
             }
             // Only platform triggers and views may raise a policy rejection.
             if function == POLICY_VIOLATION_FUNCTION {
@@ -387,6 +403,12 @@ mod tests {
         for mode in [AuthMode::Consensus, AuthMode::LocalRead] {
             assert!(!allow(mode, true, a::FUNCTION, None, Some("dolt_commit"), None, None));
             assert!(!allow(mode, true, a::FUNCTION, None, Some("DOLTLITE_x"), None, None));
+            assert!(!allow(mode, true, a::FUNCTION, None, Some("dolt_conflicts_resolve"), None, None));
+        }
+        // The read-only ones a local read may call; a replicated program may not.
+        for function in LOCAL_READ_DOLT_FUNCTIONS {
+            assert!(allow(AuthMode::LocalRead, true, a::FUNCTION, None, Some(function), None, None));
+            assert!(!allow(AuthMode::Consensus, true, a::FUNCTION, None, Some(function), None, None));
         }
         assert!(allow(AuthMode::InternalBootstrap, true, a::FUNCTION, None, Some("dolt_commit"), None, None));
     }

@@ -39,7 +39,7 @@ export class Repo {
         const hash = dolt.commit({
           message: q("message", "commit"),
           author: q("author", undefined) ?? undefined,
-          date: q("date", undefined) ?? undefined,
+          date: q("date") == null ? undefined : Number(q("date")),
         });
         return Response.json({ hash });
       }
@@ -80,6 +80,28 @@ export class Repo {
       }
       case "gc":
         return Response.json({ gc: dolt.gc() });
+      case "exec": {
+        // Deterministic programs (Chronolog Spec 10): POST a JSON body
+        // { program, context }; the answer is the outcome plus the rows a
+        // probe query reads afterwards.
+        // JSON cannot carry a 64-bit integer, an integral REAL or bytes, so
+        // the body tags values ({ t: "int" | "real" | "blob" | ..., v }) and
+        // they are turned back into the JS values execute() maps exactly.
+        const { program, context, probe } = await request.json();
+        const value = ({ t, v }) =>
+          t === "int" ? BigInt(v)
+          : t === "real" ? Float64Array.of(v)
+          : t === "blob" ? Uint8Array.from(atob(v.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0))
+          : t === "null" ? null
+          : v;
+        for (const step of program)
+          for (const binding of step.bindings ?? []) binding.value = value(binding.value);
+        if (typeof context.actor === "string")
+          context.actor = value({ t: "blob", v: context.actor });
+        const outcome = dolt.execute(program, context);
+        const rows = probe ? this.sql.exec(probe).toArray() : [];
+        return Response.json({ outcome, rows, digest: dolt.engineDigest() });
+      }
       case "sql-versioning": {
         // Application SQL cannot reach the versioning surface.
         try {

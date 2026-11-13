@@ -1542,11 +1542,76 @@ class DoltStorage {
   hashOf(ref = "HEAD") { return this._op("hashOf", { ref: String(ref) }); }
   status() { return this._op("status", {}); }
   gc() { return this._op("gc", {}); }
-  // Reserved for the deterministic execution core (`crates/celld/dolt_exec.rs`,
-  // design section 3a): `execute(program, { nowMs, seed, actor, profile, limits })`.
-  execute() {
-    throw new Error("ctx.storage.dolt.execute is not available in this build");
+  // Deterministic execution (design section 3a; Chronolog Spec 10).
+  // program: [{ sql, bindings?: [{ index | name, value }] }] or a bare SQL
+  // string. Values keep SQLite storage classes exact: a safe-integer number
+  // or a bigint is INTEGER, any other number is REAL, a one-element
+  // Float64Array is REAL even when integral, a Uint8Array/ArrayBuffer is
+  // BLOB, a string is TEXT, null is NULL. Anything else is refused.
+  // context: { nowMs, seed, actor?: Uint8Array, schemaAdmin?, limits? }.
+  // Resolves to { outcome: "accepted" } or
+  // { outcome: "rejected", code, statementIndex }; an operational failure
+  // (I/O, corruption) throws, because the program's fate is then unknown.
+  execute(program, context = {}) {
+    if (typeof program === "string") program = [{ sql: program }];
+    if (!Array.isArray(program)) throw new TypeError("dolt.execute: program must be an array");
+    const steps = program.map((step, i) => {
+      if (typeof step === "string") step = { sql: step };
+      if (!step || typeof step.sql !== "string")
+        throw new TypeError(`dolt.execute: statement ${i} needs a sql string`);
+      const bindings = (step.bindings || []).map((binding) => {
+        const out = { value: __doltTagValue(binding.value) };
+        if (typeof binding.index === "number") out.index = binding.index;
+        else if (typeof binding.name === "string") out.name = binding.name;
+        else throw new TypeError(`dolt.execute: statement ${i} has a binding with no index or name`);
+        return out;
+      });
+      return { sql: step.sql, bindings };
+    });
+    if (context.nowMs == null || context.seed == null)
+      throw new TypeError("dolt.execute: context.nowMs and context.seed are required");
+    let actor = null;
+    if (context.actor != null) actor = __doltBase64Url(__doltBytes(context.actor, "context.actor"));
+    return this._op("execute", {
+      program: steps,
+      context: {
+        nowMs: String(BigInt(context.nowMs)),
+        seed: String(BigInt(context.seed)),
+        actor,
+        schemaAdmin: !!context.schemaAdmin,
+        limits: context.limits || {},
+      },
+    });
   }
+  engineDigest() { return this._op("engineDigest", {}); }
+}
+function __doltBytes(value, what) {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  throw new TypeError(`dolt.execute: ${what} must be bytes`);
+}
+function __doltBase64Url(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function __doltTagValue(value) {
+  if (value === null || value === undefined) return { t: "null" };
+  if (typeof value === "bigint") return { t: "int", v: String(value) };
+  if (typeof value === "number") {
+    if (Number.isSafeInteger(value) && !Object.is(value, -0)) return { t: "int", v: String(value) };
+    if (!Number.isFinite(value)) throw new TypeError("dolt.execute: a REAL binding must be finite");
+    return { t: "real", v: value };
+  }
+  if (typeof value === "string") return { t: "text", v: value };
+  if (value instanceof Float64Array && value.length === 1) {
+    if (!Number.isFinite(value[0])) throw new TypeError("dolt.execute: a REAL binding must be finite");
+    return { t: "real", v: value[0] };
+  }
+  if (value instanceof Uint8Array || value instanceof ArrayBuffer || ArrayBuffer.isView(value))
+    return { t: "blob", v: __doltBase64Url(__doltBytes(value, "a BLOB binding")) };
+  throw new TypeError(`dolt.execute: unsupported binding value ${typeof value}`);
 }
 function __readStoredValue(scope, key, read) {
   try {

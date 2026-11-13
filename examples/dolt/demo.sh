@@ -34,6 +34,7 @@ stop() {
 trap 'stop' EXIT
 
 get() { curl -sS "$BASE$1"; }
+post() { curl -sS -X POST -H 'content-type: application/json' --data "$2" "$BASE$1"; }
 check() { # check <label> <json> <jq-expression that must be true>
   if echo "$2" | jq -e "$3" >/dev/null; then
     echo "ok   $1"
@@ -76,6 +77,25 @@ check "checkout other"       "$(get "/checkout?$R&name=other")"           '.bran
 FORK=$(get "/fork?repo=demo&at=$C1")
 check "fork at first commit" "$FORK"                                      '(.fork.notes | length) == 1'
 FORK_ID=$(echo "$FORK" | jq -r .id)
+
+echo "-- deterministic execution (ctx.storage.dolt.execute)"
+CTX='"context":{"nowMs":"1700000000000","seed":"42","actor":"AAEC","schemaAdmin":true}'
+PROG='"program":[{"sql":"CREATE TABLE ledger (id INTEGER PRIMARY KEY, at TEXT, r INTEGER, who BLOB, big INTEGER, x REAL)"},{"sql":"INSERT INTO ledger(at, r, who, big, x) VALUES (datetime('"'"'now'"'"'), random(), chronolog_actor(), ?, ?)","bindings":[{"index":1,"value":{"t":"int","v":"9007199254740993"}},{"index":2,"value":{"t":"real","v":1}}]}]'
+PROBE='"probe":"SELECT at, r, hex(who) AS who, CAST(big AS TEXT) AS big, typeof(x) AS xt FROM ledger"'
+E1=$(post "/exec?repo=ex1" "{$PROG,$CTX,$PROBE}")
+E2=$(post "/exec?repo=ex2" "{$PROG,$CTX,$PROBE}")
+check "exec accepted"        "$E1"                                        '.outcome.outcome == "accepted"'
+check "pinned now"           "$E1"                                        '.rows[0].at == "2023-11-14 22:13:20"'
+check "exact int and real"   "$E1"                                        '.rows[0].big == "9007199254740993" and .rows[0].xt == "real" and .rows[0].who == "000102"'
+check "same state twice"     "{\"a\":$E1,\"b\":$E2}"                    '.a.rows == .b.rows and .a.digest == .b.digest'
+REJ='"program":[{"sql":"INSERT INTO ledger(at) VALUES (1)"},{"sql":"SELECT chronolog_assert(0, '"'"'nope'"'"')"}]'
+check "assert rejects"       "$(post "/exec?repo=ex1" "{$REJ,$CTX,\"probe\":\"SELECT count(*) AS n FROM ledger\"}")" \
+  '.outcome.outcome == "rejected" and .outcome.code == "assert:nope" and .outcome.statementIndex == 1 and .rows[0].n == 1'
+HOST='"program":[{"sql":"SELECT * FROM _cf_KV"}]'
+check "host tables denied"   "$(post "/exec?repo=ex1" "{$HOST,$CTX}")"    '.outcome.outcome == "rejected" and .outcome.code == "denied"'
+H1=$(get "/commit?repo=ex1&message=m&author=A%20%3Ca%40x%3E&date=1700000000000" | jq -r .hash)
+H2=$(get "/commit?repo=ex2&message=m&author=A%20%3Ca%40x%3E&date=1700000000000" | jq -r .hash)
+check "replica commit hashes" "{\"a\":\"$H1\",\"b\":\"$H2\"}"        '.a == .b and (.a | length) == 40'
 
 echo "-- restart (local resume)"
 stop

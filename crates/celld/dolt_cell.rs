@@ -81,8 +81,15 @@ pub(crate) fn open_connection(
             if prolly {
                 return Ok(Connection::open(path)?);
             }
+            // A new store's genesis ("Initialize data repository") commit is
+            // pinned, so every Dolt cell starts from the same root hash and
+            // two cells fed the same deterministic programs (with pinned
+            // commit dates) reach the same commit hashes.
             Ok(Connection::open_with_flags(
-                format!("file:{}?doltlite_engine=prolly", uri_path(path)),
+                crate::dolt_exec::prolly_uri(
+                    std::path::Path::new(path),
+                    Some(crate::dolt_exec::Genesis { now_ms: 0, seed: 1 }),
+                ),
                 OpenFlags::SQLITE_OPEN_READ_WRITE
                     | OpenFlags::SQLITE_OPEN_CREATE
                     | OpenFlags::SQLITE_OPEN_URI
@@ -90,18 +97,6 @@ pub(crate) fn open_connection(
             )?)
         }
     }
-}
-
-/// Percent-encode the characters a SQLite URI path treats specially.
-fn uri_path(path: &str) -> String {
-    let mut out = String::with_capacity(path.len());
-    for byte in path.bytes() {
-        match byte {
-            b'?' | b'#' | b'%' => out.push_str(&format!("%{byte:02X}")),
-            _ => out.push(byte as char),
-        }
-    }
-    out
 }
 
 /// Whether a connection's main database is a prolly store.
@@ -292,14 +287,21 @@ fn rows(connection: &Connection, sql: &str, params: &[String]) -> anyhow::Result
 pub(crate) fn mutates(op: &str) -> bool {
     matches!(
         op,
-        "commit" | "branchCreate" | "branchDelete" | "checkout" | "reset" | "merge" | "gc"
+        "commit"
+            | "branchCreate"
+            | "branchDelete"
+            | "checkout"
+            | "reset"
+            | "merge"
+            | "gc"
+            | "execute"
     )
 }
 
 /// Whether an operation can change the schema the connection sees, so
 /// cached statements must be dropped.
 pub(crate) fn changes_schema(op: &str) -> bool {
-    matches!(op, "checkout" | "reset" | "merge" | "gc")
+    matches!(op, "checkout" | "reset" | "merge" | "gc" | "execute")
 }
 
 /// Run one `ctx.storage.dolt` operation. The caller holds the cell's
@@ -392,6 +394,8 @@ pub(crate) fn run(connection: &Connection, op: &str, args: &Value) -> anyhow::Re
             let summary = call(connection, "dolt_gc", &[])?;
             Ok(summary)
         }
+        "execute" => execute(connection, args),
+        "engineDigest" => Ok(Value::String(crate::dolt_exec::engine_digest_hex())),
         other => bail!("unknown dolt operation {other:?}"),
     }
 }
@@ -917,5 +921,127 @@ mod tests {
         let (dolt, c) = cell(dir.path());
         drop(c);
         assert!(open_connection(&dolt, celld_ltx::Engine::Sqlite, None).is_err());
+    }
+}
+
+/// `ctx.storage.dolt.execute(program, context)`: one deterministic program
+/// (Chronolog Spec 10) as its own transaction, through
+/// [`crate::dolt_exec::execute`]. The arguments are the harness's tagged
+/// encoding, which keeps INTEGER, REAL and BLOB exact across JSON:
+///
+/// ```json
+/// { "program": [{ "sql": "...", "bindings": [{ "index": 1, "value": { "t": "int", "v": "9007199254740993" } }] }],
+///   "context": { "nowMs": "1700000000000", "seed": "1", "actor": "<base64url>" | null,
+///                "schemaAdmin": false, "limits": { "maxVmSteps": 1000000, ... } } }
+/// ```
+///
+/// The executor installs its own authorizer and progress handler for the
+/// program and clears them; `storage::dolt_op` reinstalls the cell's
+/// application authorizer afterwards.
+fn execute(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
+    use crate::dolt_exec::{
+        execute as run_program, ExecContext, ExecError, Limits, Outcome, Parameter, Profile,
+        Program, SqlValue, Statement,
+    };
+    use base64::Engine as _;
+
+    fn integer(value: &Value, what: &str) -> anyhow::Result<i64> {
+        match value {
+            Value::String(text) => text
+                .parse::<i64>()
+                .map_err(|_| anyhow!("{what} must be a 64-bit integer")),
+            Value::Number(number) => number
+                .as_i64()
+                .ok_or_else(|| anyhow!("{what} must be a 64-bit integer")),
+            _ => bail!("{what} must be an integer"),
+        }
+    }
+    fn sql_value(value: &Value) -> anyhow::Result<SqlValue> {
+        let tag = value["t"].as_str().ok_or_else(|| anyhow!("binding value has no type tag"))?;
+        Ok(match tag {
+            "null" => SqlValue::Null,
+            "int" => SqlValue::Integer(integer(&value["v"], "an INTEGER binding")?),
+            "real" => {
+                let real = value["v"]
+                    .as_f64()
+                    .ok_or_else(|| anyhow!("a REAL binding must be a finite number"))?;
+                anyhow::ensure!(real.is_finite(), "a REAL binding must be finite");
+                SqlValue::Real(real)
+            }
+            "text" => SqlValue::Text(
+                value["v"].as_str().ok_or_else(|| anyhow!("a TEXT binding must be a string"))?.to_string(),
+            ),
+            "blob" => SqlValue::Blob(
+                base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .decode(value["v"].as_str().unwrap_or_default())
+                    .context("a BLOB binding must be base64url")?,
+            ),
+            other => bail!("unknown binding type {other:?}"),
+        })
+    }
+
+    let steps = args["program"]
+        .as_array()
+        .ok_or_else(|| anyhow!("program must be an array of statements"))?
+        .iter()
+        .map(|step| {
+            let sql = step["sql"].as_str().ok_or_else(|| anyhow!("a statement needs `sql`"))?;
+            let mut statement = Statement::new(sql);
+            for binding in step["bindings"].as_array().into_iter().flatten() {
+                let parameter = match (&binding["index"], &binding["name"]) {
+                    (Value::Number(index), Value::Null) => Parameter::Index(
+                        index
+                            .as_u64()
+                            .filter(|index| *index >= 1)
+                            .ok_or_else(|| anyhow!("a binding index is 1-based"))?
+                            as usize,
+                    ),
+                    (Value::Null, Value::String(name)) => Parameter::Name(name.clone()),
+                    _ => bail!("a binding names exactly one of `index` or `name`"),
+                };
+                statement = statement.bind(parameter, sql_value(&binding["value"])?);
+            }
+            Ok(statement)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    let context = &args["context"];
+    let mut ctx = ExecContext::new(
+        integer(&context["nowMs"], "context.nowMs")?,
+        u64::try_from(integer(&context["seed"], "context.seed")?)
+            .map_err(|_| anyhow!("context.seed must not be negative"))?,
+    );
+    if let Some(actor) = context["actor"].as_str() {
+        ctx.actor = Some(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(actor)
+                .context("context.actor must be base64url")?,
+        );
+    }
+    ctx.profile = Profile::Consensus { schema_admin: context["schemaAdmin"].as_bool().unwrap_or(false) };
+    let limits = &context["limits"];
+    let mut chosen = Limits::default();
+    if let Some(value) = limits["maxSqlBytes"].as_u64() { chosen.max_sql_bytes = value as usize; }
+    if let Some(value) = limits["maxVmSteps"].as_u64() { chosen.max_vm_steps = value; }
+    if let Some(value) = limits["progressGranularity"].as_u64() {
+        chosen.progress_granularity = u32::try_from(value).context("limits.progressGranularity")?;
+    }
+    if let Some(value) = limits["maxValueBytes"].as_u64() {
+        chosen.max_value_bytes = u32::try_from(value).context("limits.maxValueBytes")?;
+    }
+    if let Some(value) = limits["maxSteps"].as_u64() { chosen.max_steps = value as usize; }
+    ctx.limits = chosen;
+
+    match run_program(connection, &Program::new(steps), &ctx) {
+        Ok(Outcome::Accepted) => Ok(json!({ "outcome": "accepted" })),
+        Ok(Outcome::Rejected { code, statement_index }) => Ok(json!({
+            "outcome": "rejected",
+            "code": code,
+            "statementIndex": statement_index,
+        })),
+        // Not a deterministic outcome: the program's fate is unknown, so the
+        // caller must not record one. It surfaces as a thrown error.
+        Err(error @ ExecError::Operational { .. }) => Err(anyhow!("{error}")),
+        Err(error) => Err(anyhow!("{error}")),
     }
 }

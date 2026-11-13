@@ -1221,6 +1221,83 @@ fn storage_entries_map<'s>(
     Some((map, any_tagged))
 }
 
+/// `__dolt_enabled(cell)` — whether `cell` is a Dolt cell, so the storage
+/// wrapper exposes `ctx.storage.dolt` only where it works.
+pub(super) fn op_dolt_enabled(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let cell = args.get(0).to_rust_string_lossy(scope);
+    rv.set(v8::Boolean::new(scope, storage::is_dolt(&cell)).into());
+}
+
+/// `__dolt_op(cell, op, argsJson)` — one synchronous `ctx.storage.dolt`
+/// operation; the answer is JSON. A failure throws `dolt.<op>: ...`.
+pub(super) fn op_dolt_op(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let cell = args.get(0).to_rust_string_lossy(scope);
+    let op = args.get(1).to_rust_string_lossy(scope);
+    let input: serde_json::Value =
+        match serde_json::from_str(&args.get(2).to_rust_string_lossy(scope)) {
+            Ok(input) => input,
+            Err(error) => return throw_storage_error(scope, &format!("dolt.{op}"), error),
+        };
+    match storage::dolt_op(&cell, &op, &input) {
+        Ok(output) => rv.set(v8::String::new(scope, &output.to_string()).unwrap().into()),
+        Err(error) => throw_storage_error(scope, &format!("dolt.{op}"), error),
+    }
+}
+
+/// `__dolt_fork_export(cell, target, at)` — publish a fork of the Dolt cell
+/// this turn runs in as the new cell `target`. The image is read now, in the
+/// source's turn; the upload waits behind the source's output gate, so a
+/// fork never publishes state the source could still lose. Resolves to the
+/// image size.
+pub(super) fn op_dolt_fork_export(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let cell = args.get(0).to_rust_string_lossy(scope);
+    let target = args.get(1).to_rust_string_lossy(scope);
+    let at = args.get(2).to_rust_string_lossy(scope);
+    let at = (!at.is_empty()).then_some(at);
+    let prepared = (|| -> Result<Vec<u8>, String> {
+        let class = cell.split_once(':').map(|(class, _)| class).unwrap_or("");
+        let same_class = target
+            .split_once(':')
+            .is_some_and(|(target_class, _)| target_class == class);
+        if !same_class || !celld_logic::cell::valid_cell_scope(&target) || target == cell {
+            return Err(format!("invalid fork target {target:?}"));
+        }
+        let (bytes, dir) = storage::dolt_source_bytes(&cell)?;
+        let scratch = dir.join(format!(
+            ".fork-{}.db",
+            target.replace(|c: char| !c.is_ascii_alphanumeric(), "_")
+        ));
+        let image = crate::dolt_cell::fork_image(&bytes, &scratch, at.as_deref())
+            .map_err(|error| format!("{error:#}"))?;
+        crate::dolt_cell::fork_snapshot(&image).map_err(|error| format!("{error:#}"))
+    })();
+    let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::R2);
+    let id = asyncrt::enqueue(async move {
+        let snapshot = prepared?;
+        let size = snapshot.len();
+        await_egress_gate(gate).await?;
+        let bucket = crate::r2_store::store()
+            .map_err(|_| "fork needs a fleet bucket (celld dev provides one)".to_string())?;
+        crate::dolt_cell::publish_fork(bucket, &target, snapshot)
+            .await
+            .map_err(|error| format!("{error:#}"))?;
+        Ok(serde_json::json!({ "bytes": size }).to_string())
+    });
+    rv.set(promise_for(scope, id));
+}
+
 pub(super) fn throw_storage_error(
     scope: &mut v8::PinScope,
     operation: &str,

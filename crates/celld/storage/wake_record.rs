@@ -9,7 +9,33 @@ use rusqlite::{params, Connection, OptionalExtension as _};
 /// Resetting its sequence would let an old DELETE name a new installation.
 /// A new epoch also preserves the sequence: zero then means this image has no
 /// alarm history, so an empty cell needs retirement only when a scan finds it.
-pub(crate) fn initialize(c: &Connection, scope: &str, epoch: u64) -> anyhow::Result<()> {
+/// The triggers that keep `_cf_WAKE` atomic with `_cf_ALARM`. A Dolt cell
+/// installs them as TEMP triggers: Dolt versions persistent triggers (in
+/// `dolt_schemas`), so a reset, merge or checkout could remove them and a
+/// user commit would carry them. Temp triggers live on the connection, are
+/// recreated at every open, and are re-ensured after every Dolt operation
+/// (`crate::dolt_cell`).
+pub(crate) fn trigger_sql(temp: bool) -> String {
+    let kind = if temp { "CREATE TEMP TRIGGER" } else { "CREATE TRIGGER" };
+    format!(
+        "{kind} IF NOT EXISTS _cf_WAKE_insert AFTER INSERT ON main._cf_ALARM BEGIN
+           UPDATE _cf_WAKE SET sequence=sequence+1,at_ms=NEW.at_ms WHERE scope=NEW.scope;
+         END;
+         {kind} IF NOT EXISTS _cf_WAKE_update AFTER UPDATE OF at_ms,generation ON main._cf_ALARM BEGIN
+           UPDATE _cf_WAKE SET sequence=sequence+1,at_ms=NEW.at_ms WHERE scope=NEW.scope;
+         END;
+         {kind} IF NOT EXISTS _cf_WAKE_delete AFTER DELETE ON main._cf_ALARM BEGIN
+           UPDATE _cf_WAKE SET sequence=sequence+1,at_ms=NULL WHERE scope=OLD.scope;
+         END;"
+    )
+}
+
+pub(crate) fn initialize(
+    c: &Connection,
+    scope: &str,
+    epoch: u64,
+    temp_triggers: bool,
+) -> anyhow::Result<()> {
     anyhow::ensure!(epoch > 0, "wake writer epoch must be positive");
     c.execute_batch(
         "CREATE TABLE IF NOT EXISTS _cf_WAKE (
@@ -46,8 +72,12 @@ pub(crate) fn initialize(c: &Connection, scope: &str, epoch: u64) -> anyhow::Res
         )?;
         // Triggers also cover handler consumption, retry, and transaction
         // rollback. Callback bookkeeping cannot make identity atomic with SQL.
-        c.execute_batch(
-            "CREATE TRIGGER IF NOT EXISTS _cf_WAKE_insert AFTER INSERT ON _cf_ALARM BEGIN
+        if temp_triggers {
+            c.execute_batch(&trigger_sql(true))?;
+        } else {
+            // Byte-for-byte the text earlier releases stored in sqlite_schema.
+            c.execute_batch(
+                "CREATE TRIGGER IF NOT EXISTS _cf_WAKE_insert AFTER INSERT ON _cf_ALARM BEGIN
                UPDATE _cf_WAKE SET sequence=sequence+1,at_ms=NEW.at_ms WHERE scope=NEW.scope;
              END;
              CREATE TRIGGER IF NOT EXISTS _cf_WAKE_update AFTER UPDATE OF at_ms,generation ON _cf_ALARM BEGIN
@@ -56,7 +86,8 @@ pub(crate) fn initialize(c: &Connection, scope: &str, epoch: u64) -> anyhow::Res
              CREATE TRIGGER IF NOT EXISTS _cf_WAKE_delete AFTER DELETE ON _cf_ALARM BEGIN
                UPDATE _cf_WAKE SET sequence=sequence+1,at_ms=NULL WHERE scope=OLD.scope;
              END;",
-        )?;
+            )?;
+        }
         let consistent: bool = c.query_row(
             "SELECT at_ms IS (SELECT at_ms FROM _cf_ALARM WHERE scope=?1)
              FROM _cf_WAKE WHERE scope=?1",

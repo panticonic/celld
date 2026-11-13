@@ -1,0 +1,921 @@
+// Copyright 2026 the celld fork authors. Apache-2.0 license.
+
+//! Dolt cells: the storage side of `ctx.storage.dolt`.
+//!
+//! A Dolt cell is a cell whose file is a DoltLite prolly store (created with
+//! `?doltlite_engine=prolly`). Application SQL runs on it unchanged through
+//! `ctx.storage.sql`; versioning runs only through the operations here, which
+//! the storage layer calls with the application authorizer lifted
+//! (`storage::dolt_op`). The capture half is `celld_ltx::DoltStore`.
+//!
+//! # celld's runtime tables
+//!
+//! celld keeps its own state in `_cf_*` tables (`_cf_KV`, `_cf_ALARM`,
+//! `_cf_METADATA`, `_cf_FACETS`, `_cf_WAKE`, and `_cf_DOLT` here). They live
+//! in the prolly store, so one root record commits a handler's application
+//! rows and celld's rows together and one capture replicates both. They are
+//! never versioned:
+//!
+//! - `dolt_ignore` holds `_cf_%`, so `commit` (which stages everything)
+//!   never stages them, `reset --hard` and `merge` leave them alone, and
+//!   commit hashes depend only on application tables.
+//! - A Dolt working set is per branch, and DoltLite's checkout is per
+//!   connection, so the runtime tables travel with the active branch:
+//!   [`checkout`] copies them into the target branch's working set in one
+//!   transaction, then flips the pointer `_cf_DOLT.branch` on `main`, which
+//!   is the one place an open reads first. A crash before the flip reopens
+//!   on the old branch, whose copy is still current; a crash after it opens
+//!   the new branch, whose copy is complete. Copies left on other branches
+//!   are stale and never read. The cost of a checkout is the size of the
+//!   runtime tables.
+//!
+//! Application SQL cannot reach any of this: the authorizer reserves `_cf_*`,
+//! denies writes to `dolt_*` system tables, and denies every `dolt_*`
+//! function except read-only ones (`storage.rs`).
+
+use anyhow::{anyhow, bail, Context};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use serde_json::{json, Value};
+
+/// The branch every Dolt cell is created on, and where the active-branch
+/// pointer lives.
+pub const HOME_BRANCH: &str = "main";
+const RUNTIME_PATTERN: &str = "_cf_%";
+
+/// Open a cell's database for its engine. A Dolt cell's new file is created
+/// in prolly mode; an existing file must already be of the cell's engine.
+pub(crate) fn open_connection(
+    path: &str,
+    engine: celld_ltx::Engine,
+    vfs: Option<&str>,
+) -> anyhow::Result<Connection> {
+    let magic = std::fs::File::open(path)
+        .ok()
+        .and_then(|mut file| {
+            use std::io::Read;
+            let mut head = [0u8; 16];
+            file.read(&mut head).ok().map(|n| head[..n].to_vec())
+        })
+        .unwrap_or_default();
+    let stock = magic.len() >= 16 && &magic[..16] == b"SQLite format 3\0";
+    let prolly = celld_ltx::dolt::is_chunk_store(&magic);
+    match engine {
+        celld_ltx::Engine::Sqlite => {
+            anyhow::ensure!(
+                !prolly,
+                "{path} is a Dolt cell's file but its class is a SQLite class; \
+                 a class's storage engine is fixed when it is created"
+            );
+            Ok(match vfs {
+                Some(vfs) => Connection::open_with_flags_and_vfs(path, OpenFlags::default(), vfs)?,
+                None => Connection::open(path)?,
+            })
+        }
+        celld_ltx::Engine::Dolt => {
+            anyhow::ensure!(
+                !stock,
+                "{path} is a SQLite cell's file but its class is a Dolt class; \
+                 a class's storage engine is fixed when it is created"
+            );
+            anyhow::ensure!(vfs.is_none(), "a Dolt cell never opens through a paged VFS");
+            if prolly {
+                return Ok(Connection::open(path)?);
+            }
+            Ok(Connection::open_with_flags(
+                format!("file:{}?doltlite_engine=prolly", uri_path(path)),
+                OpenFlags::SQLITE_OPEN_READ_WRITE
+                    | OpenFlags::SQLITE_OPEN_CREATE
+                    | OpenFlags::SQLITE_OPEN_URI
+                    | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )?)
+        }
+    }
+}
+
+/// Percent-encode the characters a SQLite URI path treats specially.
+fn uri_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        match byte {
+            b'?' | b'#' | b'%' => out.push_str(&format!("%{byte:02X}")),
+            _ => out.push(byte as char),
+        }
+    }
+    out
+}
+
+/// Whether a connection's main database is a prolly store.
+pub(crate) fn is_prolly(connection: &Connection) -> bool {
+    connection
+        .query_row("SELECT doltlite_engine()", [], |row| row.get::<_, String>(0))
+        .map(|engine| engine.eq_ignore_ascii_case("prolly"))
+        .unwrap_or(false)
+}
+
+fn active_branch(connection: &Connection) -> anyhow::Result<String> {
+    Ok(connection.query_row("SELECT active_branch()", [], |row| row.get(0))?)
+}
+
+fn table_exists(connection: &Connection, name: &str) -> anyhow::Result<bool> {
+    Ok(connection
+        .query_row(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?1",
+            [name],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+/// The branch the pointer on `main` names; `main` when there is none.
+fn pointed_branch(connection: &Connection) -> anyhow::Result<String> {
+    if !table_exists(connection, "_cf_DOLT")? {
+        return Ok(HOME_BRANCH.to_string());
+    }
+    Ok(connection
+        .query_row("SELECT v FROM _cf_DOLT WHERE k='branch'", [], |row| row.get::<_, String>(0))
+        .optional()?
+        .unwrap_or_else(|| HOME_BRANCH.to_string()))
+}
+
+/// Move a just-opened connection to the cell's active branch. Runs before
+/// any runtime table is read: DoltLite opens every connection on `main`.
+pub(crate) fn attach_active_branch(connection: &Connection) -> anyhow::Result<()> {
+    let target = pointed_branch(connection)?;
+    if target != active_branch(connection)? {
+        let _: i64 = connection
+            .query_row("SELECT dolt_checkout(?1)", [&target], |row| row.get(0))
+            .with_context(|| format!("reopen the Dolt cell on its active branch {target:?}"))?;
+    }
+    Ok(())
+}
+
+/// Create the Dolt runtime bookkeeping on the active branch: the pointer
+/// table and the ignore rule. Idempotent; runs after `storage::schema`.
+pub(crate) fn ensure_runtime(connection: &Connection) -> anyhow::Result<()> {
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS _cf_DOLT (k TEXT PRIMARY KEY, v TEXT NOT NULL)",
+        [],
+    )?;
+    ensure_ignore_rule(connection)
+}
+
+fn ensure_ignore_rule(connection: &Connection) -> anyhow::Result<()> {
+    let present = connection
+        .query_row(
+            "SELECT 1 FROM dolt_ignore WHERE pattern=?1 AND ignored=1",
+            [RUNTIME_PATTERN],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !present {
+        connection.execute(
+            "INSERT OR REPLACE INTO dolt_ignore(pattern, ignored) VALUES (?1, 1)",
+            [RUNTIME_PATTERN],
+        )?;
+    }
+    Ok(())
+}
+
+/// Recreate the TEMP wake triggers (see `storage::wake_record::trigger_sql`)
+/// when the active branch has the wake table.
+pub(crate) fn ensure_wake_triggers(connection: &Connection) -> anyhow::Result<()> {
+    if table_exists(connection, "_cf_WAKE")? && table_exists(connection, "_cf_ALARM")? {
+        connection.execute_batch(&crate::storage::wake_record_trigger_sql())?;
+    }
+    Ok(())
+}
+
+/// A branch name the API accepts: no leading `-` (DoltLite would read it as
+/// a flag), and a conservative character set.
+fn branch_name(value: &Value, what: &str) -> anyhow::Result<String> {
+    let name = value
+        .as_str()
+        .ok_or_else(|| anyhow!("{what} must be a string"))?;
+    anyhow::ensure!(
+        !name.is_empty()
+            && name.len() <= 200
+            && !name.starts_with('-')
+            && !name.starts_with('/')
+            && !name.contains("..")
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'/')),
+        "{what} {name:?} is not a valid branch name"
+    );
+    Ok(name.to_string())
+}
+
+/// A revision: a branch, tag, commit hash, or `HEAD`-relative spec.
+fn revision(value: &Value, what: &str) -> anyhow::Result<String> {
+    let rev = value
+        .as_str()
+        .ok_or_else(|| anyhow!("{what} must be a string"))?;
+    anyhow::ensure!(
+        !rev.is_empty()
+            && rev.len() <= 200
+            && !rev.starts_with('-')
+            && rev
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'/' | b'~' | b'^')),
+        "{what} {rev:?} is not a valid revision"
+    );
+    Ok(rev.to_string())
+}
+
+fn optional_string(args: &Value, key: &str) -> anyhow::Result<Option<String>> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => bail!("{key} must be a string"),
+    }
+}
+
+/// Run a dolt function whose argument list is built at run time.
+fn call(connection: &Connection, function: &str, args: &[String]) -> anyhow::Result<Value> {
+    let placeholders = (1..=args.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!("SELECT {function}({placeholders})");
+    let value: rusqlite::types::Value = connection
+        .query_row(&sql, rusqlite::params_from_iter(args.iter()), |row| row.get(0))
+        .map_err(|error| anyhow!("{function}: {}", sqlite_message(&error)))?;
+    Ok(match value {
+        rusqlite::types::Value::Text(text) => Value::String(text),
+        rusqlite::types::Value::Integer(n) => json!(n),
+        rusqlite::types::Value::Null => Value::Null,
+        rusqlite::types::Value::Real(f) => json!(f),
+        rusqlite::types::Value::Blob(_) => Value::Null,
+    })
+}
+
+fn sqlite_message(error: &rusqlite::Error) -> String {
+    match error {
+        rusqlite::Error::SqliteFailure(_, Some(message)) => message.clone(),
+        other => other.to_string(),
+    }
+}
+
+fn rows(connection: &Connection, sql: &str, params: &[String]) -> anyhow::Result<Vec<Value>> {
+    let mut statement = connection.prepare(sql)?;
+    let names: Vec<String> = statement
+        .column_names()
+        .iter()
+        .map(|name| name.to_string())
+        .collect();
+    let mut out = Vec::new();
+    let mut cursor = statement.query(rusqlite::params_from_iter(params.iter()))?;
+    while let Some(row) = cursor.next()? {
+        let mut object = serde_json::Map::new();
+        for (index, name) in names.iter().enumerate() {
+            let value: rusqlite::types::Value = row.get(index)?;
+            object.insert(
+                name.clone(),
+                match value {
+                    rusqlite::types::Value::Null => Value::Null,
+                    rusqlite::types::Value::Integer(n) => json!(n),
+                    rusqlite::types::Value::Real(f) => json!(f),
+                    rusqlite::types::Value::Text(text) => Value::String(text),
+                    rusqlite::types::Value::Blob(bytes) => json!({ "__celld_bytes": bytes }),
+                },
+            );
+        }
+        out.push(Value::Object(object));
+    }
+    Ok(out)
+}
+
+/// Whether an operation can change the store (and so must be proved durable
+/// before an output that follows it).
+pub(crate) fn mutates(op: &str) -> bool {
+    matches!(
+        op,
+        "commit" | "branchCreate" | "branchDelete" | "checkout" | "reset" | "merge" | "gc"
+    )
+}
+
+/// Whether an operation can change the schema the connection sees, so
+/// cached statements must be dropped.
+pub(crate) fn changes_schema(op: &str) -> bool {
+    matches!(op, "checkout" | "reset" | "merge" | "gc")
+}
+
+/// Run one `ctx.storage.dolt` operation. The caller holds the cell's
+/// connection outside any transaction, with the application authorizer
+/// lifted.
+pub(crate) fn run(connection: &Connection, op: &str, args: &Value) -> anyhow::Result<Value> {
+    match op {
+        "commit" => commit(connection, args),
+        "branchCreate" => {
+            let name = branch_name(&args["name"], "branch name")?;
+            let mut call_args = vec![name];
+            if let Some(from) = args.get("from").filter(|value| !value.is_null()) {
+                call_args.push(revision(from, "from")?);
+            }
+            call(connection, "dolt_branch", &call_args)?;
+            Ok(Value::Null)
+        }
+        "branchDelete" => {
+            let name = branch_name(&args["name"], "branch name")?;
+            anyhow::ensure!(name != HOME_BRANCH, "the {HOME_BRANCH} branch cannot be deleted");
+            anyhow::ensure!(
+                name != active_branch(connection)?,
+                "cannot delete the checked-out branch {name:?}"
+            );
+            let flag = if args.get("force").and_then(Value::as_bool).unwrap_or(false) {
+                "-D"
+            } else {
+                "-d"
+            };
+            call(connection, "dolt_branch", &[flag.to_string(), name])?;
+            Ok(Value::Null)
+        }
+        "branchList" => Ok(Value::Array(rows(
+            connection,
+            "SELECT name, hash, latest_committer AS committer, \
+             latest_commit_date AS date, latest_commit_message AS message \
+             FROM dolt_branches ORDER BY name",
+            &[],
+        )?)),
+        "currentBranch" => Ok(Value::String(active_branch(connection)?)),
+        "checkout" => {
+            let target = branch_name(&args["branch"], "branch")?;
+            if args.get("create").and_then(Value::as_bool).unwrap_or(false) {
+                call(connection, "dolt_branch", &[target.clone()])?;
+            }
+            checkout(connection, &target)?;
+            Ok(Value::String(target))
+        }
+        "reset" => {
+            let mode = if args.get("hard").and_then(Value::as_bool).unwrap_or(false) {
+                "--hard"
+            } else {
+                "--soft"
+            };
+            let mut call_args = vec![mode.to_string()];
+            if let Some(to) = args.get("to").filter(|value| !value.is_null()) {
+                call_args.push(revision(to, "to")?);
+            }
+            call(connection, "dolt_reset", &call_args)?;
+            Ok(Value::String(hash_of(connection, "HEAD")?))
+        }
+        "merge" => merge(connection, args),
+        "log" => {
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(100)
+                .min(10_000);
+            Ok(Value::Array(rows(
+                connection,
+                &format!(
+                    "SELECT commit_hash AS hash, committer, email, date, message \
+                     FROM dolt_log LIMIT {limit}"
+                ),
+                &[],
+            )?))
+        }
+        "diff" => diff(connection, args),
+        "hashOf" => {
+            let rev = revision(&args["ref"], "ref")?;
+            Ok(Value::String(hash_of(connection, &rev)?))
+        }
+        "status" => Ok(Value::Array(rows(
+            connection,
+            "SELECT table_name AS \"table\", staged, status FROM dolt_status \
+             WHERE table_name NOT LIKE '\\_cf\\_%' ESCAPE '\\'",
+            &[],
+        )?)),
+        "gc" => {
+            let summary = call(connection, "dolt_gc", &[])?;
+            Ok(summary)
+        }
+        other => bail!("unknown dolt operation {other:?}"),
+    }
+}
+
+fn hash_of(connection: &Connection, rev: &str) -> anyhow::Result<String> {
+    match call(connection, "dolt_hashof", &[rev.to_string()])? {
+        Value::String(hash) => Ok(hash),
+        other => bail!("dolt_hashof returned {other}"),
+    }
+}
+
+fn commit(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
+    let message = optional_string(args, "message")?
+        .filter(|message| !message.is_empty())
+        .ok_or_else(|| anyhow!("commit needs a non-empty message"))?;
+    // A branch created from a commit made before the rule existed lacks
+    // it; restore it so the runtime tables are never staged.
+    ensure_ignore_rule(connection)?;
+    let mut call_args = vec!["-A".to_string(), "-m".to_string(), message];
+    if let Some(author) = optional_string(args, "author")? {
+        anyhow::ensure!(
+            author.contains('<') && author.ends_with('>'),
+            "author must look like \"Name <email>\""
+        );
+        call_args.push("--author".to_string());
+        call_args.push(author);
+    }
+    if let Some(date) = args.get("date").filter(|value| !value.is_null()) {
+        let date = match date {
+            Value::String(date) => date.clone(),
+            Value::Number(ms) => {
+                let ms = ms
+                    .as_i64()
+                    .ok_or_else(|| anyhow!("date must be a string or epoch milliseconds"))?;
+                let time = chrono::DateTime::from_timestamp_millis(ms)
+                    .ok_or_else(|| anyhow!("date is out of range"))?;
+                time.format("%Y-%m-%dT%H:%M:%S").to_string()
+            }
+            _ => bail!("date must be a string or epoch milliseconds"),
+        };
+        call_args.push("--date".to_string());
+        call_args.push(date);
+    }
+    if args.get("allowEmpty").and_then(Value::as_bool).unwrap_or(false) {
+        call_args.push("--allow-empty".to_string());
+    }
+    match call(connection, "dolt_commit", &call_args)? {
+        Value::String(hash) => Ok(Value::String(hash)),
+        other => bail!("dolt_commit returned {other}"),
+    }
+}
+
+/// Merge `branch` into the active branch. Conflicts never commit: the
+/// merge runs in a transaction, and on conflict the conflicting tables are
+/// reported and the transaction rolls back, leaving the branch unchanged.
+fn merge(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
+    let branch = revision(&args["branch"], "branch")?;
+    let mut call_args = vec![branch];
+    if let Some(message) = optional_string(args, "message")? {
+        call_args.push("-m".to_string());
+        call_args.push(message);
+    }
+    connection.execute_batch("BEGIN IMMEDIATE")?;
+    let merged = call(connection, "dolt_merge", &call_args);
+    let conflicts = rows(
+        connection,
+        "SELECT \"table\", num_conflicts AS conflicts FROM dolt_conflicts",
+        &[],
+    )
+    .unwrap_or_default();
+    match merged {
+        Ok(result) if conflicts.is_empty() => {
+            connection.execute_batch("COMMIT")?;
+            let hash = match result {
+                Value::String(hash) if !hash.is_empty() => hash,
+                _ => hash_of(connection, "HEAD")?,
+            };
+            Ok(json!({ "hash": hash, "conflicts": [] }))
+        }
+        Ok(_) => {
+            connection.execute_batch("ROLLBACK")?;
+            Ok(json!({ "hash": null, "conflicts": conflicts }))
+        }
+        Err(error) => {
+            let _ = connection.execute_batch("ROLLBACK");
+            if !conflicts.is_empty() {
+                return Ok(json!({ "hash": null, "conflicts": conflicts }));
+            }
+            let message = error.to_string();
+            if message.contains("conflict") {
+                return Ok(json!({
+                    "hash": null,
+                    "conflicts": [{ "table": null, "conflicts": null, "message": message }],
+                }));
+            }
+            Err(error)
+        }
+    }
+}
+
+fn diff(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
+    let from = revision(&args["from"], "from")?;
+    let to = match args.get("to").filter(|value| !value.is_null()) {
+        Some(to) => revision(to, "to")?,
+        None => "WORKING".to_string(),
+    };
+    let table = optional_string(args, "table")?;
+    let mut params = vec![from.clone(), to.clone()];
+    let summary_sql = match &table {
+        Some(table) => {
+            params.push(table.clone());
+            "SELECT from_table_name AS fromTable, to_table_name AS toTable, \
+             diff_type AS diffType, data_change AS dataChange, \
+             schema_change AS schemaChange FROM dolt_diff_summary(?1, ?2, ?3)"
+        }
+        None => {
+            "SELECT from_table_name AS fromTable, to_table_name AS toTable, \
+             diff_type AS diffType, data_change AS dataChange, \
+             schema_change AS schemaChange FROM dolt_diff_summary(?1, ?2) \
+             WHERE coalesce(to_table_name, from_table_name) NOT LIKE '\\_cf\\_%' ESCAPE '\\'"
+        }
+    };
+    let summary = rows(connection, summary_sql, &params)?;
+    let patch = rows(
+        connection,
+        "SELECT table_name AS \"table\", diff_type AS diffType, statement \
+         FROM dolt_patch(?1, ?2) ORDER BY statement_order",
+        &[from, to],
+    )?
+    .into_iter()
+    .filter(|row| {
+        let name = row.get("table").and_then(Value::as_str).unwrap_or("");
+        !name.starts_with("_cf_")
+            && table.as_deref().is_none_or(|table| table == name)
+    })
+    .collect::<Vec<_>>();
+    Ok(json!({ "summary": summary, "patch": patch }))
+}
+
+/// One runtime table's definition and rows.
+struct RuntimeTable {
+    name: String,
+    sql: String,
+    indexes: Vec<String>,
+    rows: Vec<Vec<rusqlite::types::Value>>,
+}
+
+fn dump_runtime(connection: &Connection) -> anyhow::Result<Vec<RuntimeTable>> {
+    let mut statement = connection.prepare(
+        "SELECT name, sql FROM sqlite_schema WHERE type='table' \
+         AND name LIKE '\\_cf\\_%' ESCAPE '\\' AND sql IS NOT NULL ORDER BY name",
+    )?;
+    let tables = statement
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    let mut out = Vec::new();
+    for (name, sql) in tables {
+        let mut statement = connection.prepare(
+            "SELECT sql FROM sqlite_schema WHERE type='index' AND tbl_name=?1 AND sql IS NOT NULL",
+        )?;
+        let indexes = statement
+            .query_map([&name], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        let quoted = name.replace('"', "\"\"");
+        let mut statement = connection.prepare(&format!("SELECT * FROM \"{quoted}\""))?;
+        let columns = statement.column_count();
+        let rows = statement
+            .query_map([], |row| {
+                (0..columns)
+                    .map(|index| row.get::<_, rusqlite::types::Value>(index))
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        out.push(RuntimeTable {
+            name,
+            sql,
+            indexes,
+            rows,
+        });
+    }
+    Ok(out)
+}
+
+fn load_runtime(connection: &Connection, tables: &[RuntimeTable]) -> anyhow::Result<()> {
+    for table in tables {
+        let quoted = table.name.replace('"', "\"\"");
+        // Reuse a table the branch already has, so the branch's catalog
+        // keeps its shape: DoltLite compares catalogs to decide whether a
+        // working set is clean, and a dropped and recreated table is not.
+        let existing: Option<String> = connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE type='table' AND name=?1",
+                [&table.name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if existing.as_deref() == Some(table.sql.as_str()) {
+            connection.execute_batch(&format!("DELETE FROM \"{quoted}\""))?;
+        } else {
+            connection.execute_batch(&format!("DROP TABLE IF EXISTS \"{quoted}\""))?;
+            connection.execute_batch(&table.sql)?;
+            for index in &table.indexes {
+                connection.execute_batch(index)?;
+            }
+        }
+        if let Some(first) = table.rows.first() {
+            let placeholders = (1..=first.len())
+                .map(|index| format!("?{index}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let mut insert =
+                connection.prepare(&format!("INSERT INTO \"{quoted}\" VALUES ({placeholders})"))?;
+            for row in &table.rows {
+                insert.execute(rusqlite::params_from_iter(row.iter()))?;
+            }
+        }
+    }
+    ensure_ignore_rule(connection)
+}
+
+fn set_pointer(connection: &Connection, branch: &str) -> anyhow::Result<()> {
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS _cf_DOLT (k TEXT PRIMARY KEY, v TEXT NOT NULL)",
+        [],
+    )?;
+    connection.execute(
+        "INSERT INTO _cf_DOLT(k, v) VALUES ('branch', ?1) \
+         ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+        [branch],
+    )?;
+    Ok(())
+}
+
+fn switch(connection: &Connection, branch: &str) -> anyhow::Result<()> {
+    let _ = call(connection, "dolt_checkout", &[branch.to_string()])?;
+    Ok(())
+}
+
+/// Check out `target`, carrying celld's runtime tables along. See the module
+/// documentation for the crash argument.
+pub(crate) fn checkout(connection: &Connection, target: &str) -> anyhow::Result<()> {
+    let source = active_branch(connection)?;
+    if source == target {
+        return Ok(());
+    }
+    let tables = dump_runtime(connection)?;
+    switch(connection, target)?;
+    let copied = (|| -> anyhow::Result<()> {
+        connection.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> anyhow::Result<()> {
+            load_runtime(connection, &tables)?;
+            if target == HOME_BRANCH {
+                // On `main` the copy and the pointer commit together.
+                set_pointer(connection, HOME_BRANCH)?;
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => Ok(connection.execute_batch("COMMIT")?),
+            Err(error) => {
+                let _ = connection.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    })();
+    if let Err(error) = copied {
+        let _ = switch(connection, &source);
+        return Err(error.context(format!("carry runtime state to branch {target:?}")));
+    }
+    if target != HOME_BRANCH {
+        // Flip the pointer on `main`: the commit point of the checkout.
+        switch(connection, HOME_BRANCH)?;
+        let flipped = set_pointer(connection, target);
+        switch(connection, target)?;
+        flipped?;
+    }
+    Ok(())
+}
+
+/// The image a fork of a Dolt cell starts from: the source's chunk file at
+/// its committed cut, with the fork's active branch reset to `at` (when
+/// given) and the source's identity-bound runtime state removed: alarms and
+/// their wake records, and the id name. Everything else is copied, every
+/// branch and all history included; `_cf_KV` is application state and stays.
+///
+/// `source_bytes` is the source file read in the source's own turn, outside
+/// any transaction, so it holds only committed roots.
+pub(crate) fn fork_image(
+    source_bytes: &[u8],
+    scratch: &std::path::Path,
+    at: Option<&str>,
+) -> anyhow::Result<Vec<u8>> {
+    let cut = celld_ltx::dolt::scan_file(source_bytes)
+        .ok_or_else(|| anyhow!("the source Dolt cell holds no committed state"))?;
+    std::fs::write(scratch, &source_bytes[..cut.end as usize])?;
+    let built = (|| -> anyhow::Result<Vec<u8>> {
+        {
+            let connection = Connection::open(scratch)?;
+            anyhow::ensure!(is_prolly(&connection), "fork source is not a prolly store");
+            attach_active_branch(&connection)?;
+            if let Some(at) = at {
+                let at = revision(&Value::String(at.to_string()), "at")?;
+                call(&connection, "dolt_reset", &["--hard".to_string(), at])?;
+            }
+            for table in ["_cf_ALARM", "_cf_WAKE", "_cf_METADATA"] {
+                if table_exists(&connection, table)? {
+                    connection.execute(&format!("DELETE FROM {table}"), [])?;
+                }
+            }
+        }
+        let bytes = std::fs::read(scratch)?;
+        let cut = celld_ltx::dolt::scan_file(&bytes)
+            .ok_or_else(|| anyhow!("the fork image holds no committed state"))?;
+        Ok(bytes[..cut.end as usize].to_vec())
+    })();
+    // DoltLite may leave sidecars (a lock file) beside the scratch copy.
+    if let (Some(dir), Some(name)) = (scratch.parent(), scratch.file_name()) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            let name = name.to_string_lossy().into_owned();
+            for entry in entries.flatten() {
+                if entry.file_name().to_string_lossy().starts_with(&name) {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+    built
+}
+
+/// The whole-image LTX snapshot that opens a fork's first epoch.
+pub(crate) fn fork_snapshot(image: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let page = celld_ltx::dolt::DOLT_PAGE_SIZE as usize;
+    let commit = image.len().div_ceil(page);
+    anyhow::ensure!(
+        (commit as u32) < celld_ltx::ltx::lock_pgno(page as u32),
+        "a Dolt cell of 1 GiB or more cannot be forked yet"
+    );
+    let mut rolling: celld_ltx::Checksum = celld_ltx::CHECKSUM_FLAG;
+    let mut pages = Vec::with_capacity(commit);
+    for index in 0..commit {
+        let mut data = vec![0u8; page];
+        let start = index * page;
+        let end = (start + page).min(image.len());
+        data[..end - start].copy_from_slice(&image[start..end]);
+        let pgno = index as u32 + 1;
+        rolling = celld_ltx::CHECKSUM_FLAG | (rolling ^ celld_ltx::ltx::checksum_page(pgno, &data));
+        pages.push((pgno, data));
+    }
+    let header = celld_ltx::ltx::Header {
+        version: celld_ltx::ltx::VERSION,
+        flags: 0,
+        page_size: page as u32,
+        commit: commit as u32,
+        min_txid: celld_ltx::TXID(1),
+        max_txid: celld_ltx::TXID(1),
+        timestamp: chrono::Utc::now().timestamp_millis(),
+        pre_apply_checksum: 0,
+        wal_offset: image.len() as i64,
+        wal_size: image.len() as i64,
+        wal_salt1: celld_ltx::dolt::DOLT_LTX_TAG,
+        wal_salt2: 0,
+        node_id: 0,
+    };
+    Ok(celld_ltx::ltx::encode_file(&header, &pages, rolling)?)
+}
+
+/// Publish a fork as a new cell: claim its id with a conditional create of
+/// a released ownership record at epoch 1 (so an existing cell can never be
+/// overwritten), then upload the image as epoch 1's base snapshot. The
+/// fork's first activation acquires epoch 2 and restores from that chain,
+/// exactly as an operator-released cell does (`docs/guarantees.md`).
+pub(crate) async fn publish_fork(
+    bucket: &crate::bucket::Bucket,
+    target: &str,
+    snapshot: Vec<u8>,
+) -> anyhow::Result<()> {
+    let record = serde_json::to_vec(&json!({ "node": "", "epoch": 1 }))?;
+    let claimed = bucket
+        .put_cas(&format!("cells/{target}/own.json"), record, None)
+        .await?;
+    anyhow::ensure!(claimed.is_some(), "fork target {target} already exists");
+    let name = celld_ltx::ltx::format_filename(celld_ltx::TXID(1), celld_ltx::TXID(1));
+    bucket
+        .put(&format!("cells/{target}/ltx/e1/0000/{name}"), snapshot)
+        .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cell(dir: &std::path::Path) -> (String, Connection) {
+        let path = dir.join("cell.db").to_string_lossy().into_owned();
+        let connection = open_connection(&path, celld_ltx::Engine::Dolt, None).unwrap();
+        attach_active_branch(&connection).unwrap();
+        crate::storage::schema(&connection).unwrap();
+        ensure_runtime(&connection).unwrap();
+        (path, connection)
+    }
+
+    #[test]
+    fn runtime_tables_follow_the_active_branch_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, c) = cell(dir.path());
+        assert!(is_prolly(&c));
+        c.execute("INSERT INTO _cf_KV(scope,k,v) VALUES ('s','k','v1')", []).unwrap();
+        c.execute_batch("CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT); INSERT INTO t(b) VALUES ('x');")
+            .unwrap();
+        let first = run(&c, "commit", &json!({"message": "first"})).unwrap();
+        assert_eq!(first.as_str().unwrap().len(), 40);
+        // Runtime tables are not part of the commit.
+        let status = run(&c, "status", &json!({})).unwrap();
+        assert_eq!(status, json!([]));
+        run(&c, "checkout", &json!({"branch": "feature", "create": true})).unwrap();
+        let v: String = c.query_row("SELECT v FROM _cf_KV", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, "v1");
+        c.execute("UPDATE _cf_KV SET v='v2'", []).unwrap();
+        c.execute("INSERT INTO t(b) VALUES ('on-feature')", []).unwrap();
+        run(&c, "commit", &json!({"message": "feature work", "author": "Ann <ann@example.com>"}))
+            .unwrap();
+        drop(c);
+        // Reopen: DoltLite opens on main; the pointer brings us back.
+        let c = open_connection(&path, celld_ltx::Engine::Dolt, None).unwrap();
+        attach_active_branch(&c).unwrap();
+        assert_eq!(run(&c, "currentBranch", &json!({})).unwrap(), json!("feature"));
+        let v: String = c.query_row("SELECT v FROM _cf_KV", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, "v2");
+        // Back to main and merge.
+        run(&c, "checkout", &json!({"branch": "main"})).unwrap();
+        let v: String = c.query_row("SELECT v FROM _cf_KV", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, "v2", "runtime state moved with the checkout");
+        let n: i64 = c.query_row("SELECT count(*) FROM t", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        let merged = run(&c, "merge", &json!({"branch": "feature"})).unwrap();
+        assert_eq!(merged["conflicts"], json!([]));
+        let n: i64 = c.query_row("SELECT count(*) FROM t", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2);
+        let log = run(&c, "log", &json!({"limit": 10})).unwrap();
+        assert!(log.as_array().unwrap().len() >= 3);
+        let head = run(&c, "hashOf", &json!({"ref": "HEAD"})).unwrap();
+        assert_eq!(head, merged["hash"]);
+        // Reset hard back to the first commit keeps runtime state.
+        run(&c, "reset", &json!({"hard": true, "to": first})).unwrap();
+        let n: i64 = c.query_row("SELECT count(*) FROM t", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        let v: String = c.query_row("SELECT v FROM _cf_KV", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, "v2");
+        let diff = run(&c, "diff", &json!({"from": first, "to": head})).unwrap();
+        assert_eq!(diff["patch"].as_array().unwrap().len(), 1);
+        run(&c, "branchDelete", &json!({"name": "feature", "force": true})).unwrap();
+        let branches = run(&c, "branchList", &json!({})).unwrap();
+        assert_eq!(branches.as_array().unwrap().len(), 1);
+        assert!(run(&c, "branchDelete", &json!({"name": "main"})).is_err());
+        assert!(run(&c, "checkout", &json!({"branch": "-D"})).is_err());
+    }
+
+    #[test]
+    fn merge_conflicts_are_reported_and_not_committed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_path, c) = cell(dir.path());
+        c.execute_batch("CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT); INSERT INTO t VALUES (1,'x');")
+            .unwrap();
+        run(&c, "commit", &json!({"message": "base"})).unwrap();
+        run(&c, "branchCreate", &json!({"name": "other"})).unwrap();
+        c.execute("UPDATE t SET b='main'", []).unwrap();
+        run(&c, "commit", &json!({"message": "main side"})).unwrap();
+        run(&c, "checkout", &json!({"branch": "other"})).unwrap();
+        c.execute("UPDATE t SET b='other'", []).unwrap();
+        run(&c, "commit", &json!({"message": "other side"})).unwrap();
+        run(&c, "checkout", &json!({"branch": "main"})).unwrap();
+        let before = run(&c, "hashOf", &json!({"ref": "HEAD"})).unwrap();
+        let merged = run(&c, "merge", &json!({"branch": "other"})).unwrap();
+        assert!(merged["hash"].is_null());
+        assert!(!merged["conflicts"].as_array().unwrap().is_empty());
+        assert_eq!(run(&c, "hashOf", &json!({"ref": "HEAD"})).unwrap(), before);
+        let b: String = c.query_row("SELECT b FROM t", [], |r| r.get(0)).unwrap();
+        assert_eq!(b, "main");
+    }
+
+    #[test]
+    fn fork_image_resets_and_drops_identity_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, c) = cell(dir.path());
+        c.execute_batch("CREATE TABLE t(a INTEGER PRIMARY KEY);").unwrap();
+        c.execute("INSERT INTO t VALUES (1)", []).unwrap();
+        let first = run(&c, "commit", &json!({"message": "one"})).unwrap();
+        c.execute("INSERT INTO t VALUES (2)", []).unwrap();
+        run(&c, "commit", &json!({"message": "two"})).unwrap();
+        c.execute("INSERT INTO _cf_ALARM(scope, at_ms) VALUES ('s', 5)", []).unwrap();
+        c.execute("INSERT INTO _cf_KV(scope,k,v) VALUES ('s','k','v')", []).unwrap();
+        let source = std::fs::read(&path).unwrap();
+        let image =
+            fork_image(&source, &dir.path().join("scratch.db"), Some(first.as_str().unwrap())).unwrap();
+        let snapshot = fork_snapshot(&image).unwrap();
+        let restored = celld_ltx::ltx::decode_database_image(&snapshot).unwrap();
+        let fork = dir.path().join("fork.db");
+        std::fs::write(&fork, restored).unwrap();
+        celld_ltx::DoltStore::open(&fork, celld_ltx::LtxHost::default()).unwrap();
+        let f = Connection::open(&fork).unwrap();
+        attach_active_branch(&f).unwrap();
+        let n: i64 = f.query_row("SELECT count(*) FROM t", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        let alarms: i64 = f.query_row("SELECT count(*) FROM _cf_ALARM", [], |r| r.get(0)).unwrap();
+        assert_eq!(alarms, 0);
+        let kv: i64 = f.query_row("SELECT count(*) FROM _cf_KV", [], |r| r.get(0)).unwrap();
+        assert_eq!(kv, 1);
+        // The source is untouched.
+        let n: i64 = c.query_row("SELECT count(*) FROM t", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn engine_is_fixed_at_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stock.db").to_string_lossy().into_owned();
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch("CREATE TABLE t(a)").unwrap();
+        drop(c);
+        assert!(open_connection(&path, celld_ltx::Engine::Dolt, None).is_err());
+        let (dolt, c) = cell(dir.path());
+        drop(c);
+        assert!(open_connection(&dolt, celld_ltx::Engine::Sqlite, None).is_err());
+    }
+}

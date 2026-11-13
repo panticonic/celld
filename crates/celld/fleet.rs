@@ -929,6 +929,7 @@ async fn load_worker_at_pointer(
     let prefix = pointer.prefix.clone();
     let crons = manifest.crons.clone();
     let containers = manifest.containers.clone();
+    let residency_classes = manifest.celld.residency_classes();
     let fence_image = manifest.fence_image.clone();
     let codegen_classes = crate::deploy::declared_codegen_classes(&manifest.raw_metadata);
     Ok(LoadedDeployment {
@@ -957,6 +958,7 @@ async fn load_worker_at_pointer(
         services,
         crons,
         containers,
+        residency_classes,
         fence_image,
         codegen_classes,
     })
@@ -979,6 +981,8 @@ pub struct LoadedDeployment {
     /// `containers` from the manifest: the classes whose cells supervise a
     /// container.
     pub containers: Vec<crate::container::ContainerSpec>,
+    /// The classes the manifest's `celld` block grants `residency`.
+    pub residency_classes: Vec<String>,
     /// See `Manifest::fence_image`.
     pub fence_image: Option<String>,
     /// Classes the deployment declared `celld.durable_objects.<Class>.codegen`

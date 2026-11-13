@@ -19,7 +19,7 @@ use crate::protocol::{
     ModuleKind, ModuleRef, QueueConsumerAttachment, QueueConsumerConfig, QueueConsumerDeployment,
     Rollout, RunWorkerFirst, FEATURE_ASSETS_V1, FEATURE_CONTAINERS_V1, FEATURE_CRON_V1,
     FEATURE_D1_V1, FEATURE_KV_V1, FEATURE_PYTHON_WORKERS_V1, FEATURE_QUEUES_V1, FEATURE_R2_V1,
-    FEATURE_SQLITE_VEC_V1, FEATURE_WASM_V1, FEATURE_WORKFLOWS_V1,
+    FEATURE_RESIDENCY_V1, FEATURE_SQLITE_VEC_V1, FEATURE_WASM_V1, FEATURE_WORKFLOWS_V1,
     QUEUE_CONSUMER_ATTACHMENT_SCHEMA_VERSION,
 };
 use anyhow::{anyhow, bail, Context};
@@ -35,7 +35,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+pub mod celld_block;
 mod python;
+pub use celld_block::{CelldDeclaration, ClassCapabilities};
 
 /// Config keys we understand. Anything else is an error: refusing is
 /// compat-safe, guessing produces confusing activation failures later.
@@ -320,6 +322,8 @@ struct Project {
     has_queues: bool,
     has_r2: bool,
     containers: Vec<ContainerDecl>,
+    /// The config's `celld` block.
+    celld: CelldDeclaration,
     /// Set when `main` is a `.py` file: the Python behavior its
     /// compatibility date and flags select.
     python: Option<python::PythonCompat>,
@@ -701,6 +705,7 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
         crons: project.crons.clone(),
         containers: container_specs.clone(),
         fence_image: fence_image.clone(),
+        celld: project.celld.clone(),
         queue_consumers: project.queue_consumers,
         // Each capability the manifest depends on is named here, so a node
         // that predates it rejects the deployment up front instead of
@@ -739,6 +744,9 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
             }
             if python_runtime {
                 features.push(FEATURE_PYTHON_WORKERS_V1.to_string());
+            }
+            if !project.celld.residency_classes().is_empty() {
+                features.push(FEATURE_RESIDENCY_V1.to_string());
             }
             features
         },
@@ -1996,8 +2004,11 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
     }
 
     let containers = read_containers(object, &do_classes, &sqlite_classes)?;
-    if let Some(celld) = read_celld_block(object, &do_classes)? {
-        metadata.insert("celld".into(), celld);
+    let celld = celld_block::read(object, &do_classes)?;
+    if !celld.is_empty() {
+        // Part of the deployment's identity: granting a capability is a new
+        // deployment, the way a new binding is.
+        metadata.insert("celld".into(), json!(celld));
     }
     Ok(Project {
         script_name,
@@ -2015,71 +2026,9 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         queue_consumers,
         has_r2: !r2_buckets.is_empty(),
         containers,
+        celld,
         python,
     })
-}
-
-/// The per-class capability keys of a config's `celld.durable_objects` entry.
-/// `codegen` is read by the isolate builder; `residency` is declared here so
-/// the shared contract has one validator, and is honored by the residency
-/// hold.
-const CELLD_CLASS_KEYS: &[&str] = &["codegen", "residency"];
-
-/// The config's top-level `celld` block, the one place the fork's per-class
-/// capabilities are declared (docs/fork/design.md section 3a):
-///
-/// ```jsonc
-/// "celld": { "durable_objects": { "Class": { "codegen": true } } }
-/// ```
-///
-/// A capability is opt-in and every key is a boolean. A name that is not a
-/// user Durable Object class of this Worker, or a key celld does not model,
-/// is refused: a misspelled class would otherwise leave the capability off
-/// and the author believing it on. The block travels verbatim in the
-/// manifest's metadata, so it is part of the deployment's identity.
-fn read_celld_block(
-    object: &Map<String, Value>,
-    do_classes: &[String],
-) -> anyhow::Result<Option<Value>> {
-    let Some(value) = object.get("celld") else {
-        return Ok(None);
-    };
-    let block = value
-        .as_object()
-        .ok_or_else(|| anyhow!("config `celld` must be an object"))?;
-    if let Some(key) = block.keys().find(|key| key.as_str() != "durable_objects") {
-        bail!("config `celld` declares `{key}`, which celld does not model");
-    }
-    let Some(classes) = block.get("durable_objects") else {
-        return Ok(None);
-    };
-    let classes = classes
-        .as_object()
-        .ok_or_else(|| anyhow!("config `celld.durable_objects` must be an object"))?;
-    for (class, declaration) in classes {
-        if is_reserved_class(class) || !do_classes.iter().any(|declared| declared == class) {
-            bail!(
-                "config `celld.durable_objects` names {class:?}, which is not a Durable Object \
-                 class of this Worker; declare it in `durable_objects.bindings`"
-            );
-        }
-        let declaration = declaration
-            .as_object()
-            .ok_or_else(|| anyhow!("config `celld.durable_objects.{class}` must be an object"))?;
-        for (key, flag) in declaration {
-            if !CELLD_CLASS_KEYS.contains(&key.as_str()) {
-                bail!(
-                    "config `celld.durable_objects.{class}` declares `{key}`, which celld does \
-                     not model (known: {})",
-                    CELLD_CLASS_KEYS.join(", ")
-                );
-            }
-            if !flag.is_boolean() {
-                bail!("config `celld.durable_objects.{class}.{key}` must be true or false");
-            }
-        }
-    }
-    Ok(Some(value.clone()))
 }
 
 /// The classes a deployment's metadata declared `codegen: true` for.
@@ -3131,7 +3080,8 @@ mod celld_block_tests {
 
     fn read(config: Value, classes: &[&str]) -> anyhow::Result<Option<Value>> {
         let classes: Vec<String> = classes.iter().map(|class| class.to_string()).collect();
-        read_celld_block(config.as_object().unwrap(), &classes)
+        let block = celld_block::read(config.as_object().unwrap(), &classes)?;
+        Ok((!block.is_empty()).then(|| json!(block)))
     }
 
     #[test]

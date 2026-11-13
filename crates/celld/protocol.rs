@@ -48,6 +48,14 @@ pub struct Manifest {
     /// which a node then refuses to start containers for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fence_image: Option<String>,
+    /// The config's `"celld"` block: per-class capabilities celld grants
+    /// beyond the Workers contract (residency, and the features that share
+    /// this block). Empty when the config has none.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::deploy::CelldDeclaration::is_empty"
+    )]
+    pub celld: crate::deploy::CelldDeclaration,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_features: Vec<String>,
     /// wrangler's raw metadata, retained verbatim for anything we don't yet model.
@@ -74,7 +82,14 @@ pub const SUPPORTED_DEPLOYMENT_FEATURES: &[&str] = &[
     FEATURE_WASM_V1,
     FEATURE_WORKFLOWS_V1,
     FEATURE_PYTHON_WORKERS_V1,
+    FEATURE_RESIDENCY_V1,
 ];
+
+/// A deployment whose `celld` block grants `residency`. Required because a
+/// build without `ctx.residency` would load the manifest and let an object
+/// that depends on staying resident be evicted like any other, losing the
+/// state it was written to keep, with no error to say why.
+pub const FEATURE_RESIDENCY_V1: &str = "residency-v1";
 
 pub const FEATURE_ASSETS_V1: &str = "assets-v1";
 /// A deployment with `containers`. Required because a build without the

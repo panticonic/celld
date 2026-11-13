@@ -14,6 +14,8 @@ pub type CellId = String;
 pub type NodeId = String;
 pub type RequestId = u64;
 pub type WebSocketId = u64;
+/// One residency hold, named by the shell that minted it. Unique node-wide.
+pub type HoldId = u64;
 pub type OpId = u64;
 pub type Epoch = u64;
 
@@ -152,6 +154,14 @@ pub struct Config {
     /// pressure involved. `None` keeps every cell resident until something
     /// needs the room.
     pub idle_evict_ms: Option<u64>,
+    /// How long a revoked hold may take to wind down. A drain, a forced swap
+    /// or an operator revocation tells the application first and drops the
+    /// hold when its handlers settle, or after this long, whichever is first.
+    /// A hold can therefore delay a drain by at most this, never forever.
+    pub hold_grace_ms: u64,
+    /// Live holds one cell may carry. Handles are cheap; this only bounds what
+    /// one application can consume on its own behalf.
+    pub max_holds_per_cell: usize,
     /// Ceilings and low watermarks for load shedding.
     ///
     /// `max_resident` is a hard cap on reservations; this is the softer,
@@ -392,6 +402,13 @@ pub enum Timer {
         cell: CellId,
         generation: u64,
     },
+    /// Ends the grace period of a hold revocation: whatever holds are still
+    /// standing on `cell` are dropped. Keyed by cell and generation so a
+    /// revocation that finished first leaves a stale timer that does nothing.
+    HoldRevokeGrace {
+        cell: CellId,
+        generation: u64,
+    },
 }
 
 /// Every way a cell's state can leave this process, and the one promise the
@@ -495,6 +512,93 @@ pub enum WebSocketKind {
     /// application code at a rate the application chooses, so how much of the
     /// node it may hold is budgeted.
     Outbound,
+}
+
+/// Why a residency hold was refused. Refusal is synchronous and final: the
+/// core never grants a hold it may have to break later for budget reasons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HoldRefusal {
+    /// The node holds no authority (fenced, or not yet serving).
+    NodeUnavailable,
+    /// The cell is not resident at the epoch the caller observed, so the
+    /// isolate asking is not the one the node is running.
+    CellNotResident,
+    /// The cell is quiescing for a handoff, a drain or a swap. A hold taken
+    /// now would only be revoked.
+    CellLeaving,
+    /// One cell may carry at most this many live holds.
+    CellLimit { max: usize },
+    /// The node-wide budget of pinned cells is spent. `pinned` counts cells
+    /// pinned by any hold or outbound socket.
+    NodeBudget { pinned: usize, budget: usize },
+}
+
+impl HoldRefusal {
+    /// Stable reason code carried to the JS error's `code`.
+    pub const fn reason(&self) -> &'static str {
+        match self {
+            Self::NodeUnavailable => "node_unavailable",
+            Self::CellNotResident => "cell_not_resident",
+            Self::CellLeaving => "cell_leaving",
+            Self::CellLimit { .. } => "cell_hold_limit",
+            Self::NodeBudget { .. } => "node_hold_budget",
+        }
+    }
+}
+
+impl std::fmt::Display for HoldRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NodeUnavailable => {
+                f.write_str("residency hold refused: this node holds no authority right now")
+            }
+            Self::CellNotResident => f.write_str(
+                "residency hold refused: the cell is not resident on this node at the \
+                 observed epoch",
+            ),
+            Self::CellLeaving => f.write_str(
+                "residency hold refused: the cell is leaving this node (drain, handoff or \
+                 generation swap)",
+            ),
+            Self::CellLimit { max } => write!(
+                f,
+                "residency hold refused: a cell may carry at most {max} live holds"
+            ),
+            Self::NodeBudget { pinned, budget } => write!(
+                f,
+                "residency hold refused: the node already pins {pinned} cells and its \
+                 budget is {budget} (at most {}% of the resident ceiling is pinned by \
+                 holds and outbound WebSockets together); release a hold or retry later",
+                crate::pressure::MAX_OUTBOUND_PIN_PERCENT
+            ),
+        }
+    }
+}
+
+impl std::error::Error for HoldRefusal {}
+
+/// Why the core is revoking holds it granted. The shell tells the cell's
+/// application, waits for it to finish (or for the grace period), and the core
+/// then drops the holds. A revocation is terminal: it is the only way a hold
+/// ends other than the owner's `release()` or the cell stopping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HoldRevocation {
+    /// The node is draining: a deploy, a node stop, a spot reclaim.
+    Drain,
+    /// A forced application generation swap, or a clean reload.
+    Swap,
+    /// An operator or owner asked for the holds to end.
+    Operator,
+}
+
+impl HoldRevocation {
+    pub const fn reason(&self) -> &'static str {
+        match self {
+            Self::Drain => "drain",
+            Self::Swap => "swap",
+            Self::Operator => "operator",
+        }
+    }
 }
 
 /// How far a wake hint reaches.
@@ -712,6 +816,30 @@ pub enum Event {
     WebSocketClosed {
         cell: CellId,
         websocket: WebSocketId,
+    },
+    /// The cell's application asked to stay resident (`ctx.residency.hold()`).
+    /// `epoch` is the activation epoch the isolate observed, so a hold from a
+    /// runtime the core has already discarded cannot attach to its successor.
+    /// The verdict is read back with [`crate::State::hold_verdict`], the way
+    /// `holds_websocket` reports an outbound socket.
+    HoldAcquired {
+        cell: CellId,
+        hold: HoldId,
+        epoch: Epoch,
+    },
+    /// The application released these holds, or its handlers finished winding
+    /// down after a revocation. Idempotent: an unknown or repeated id is
+    /// ignored.
+    HoldsReleased {
+        cell: CellId,
+        holds: Vec<HoldId>,
+    },
+    /// An operator or the owner asks for every hold on `cell` to end. The
+    /// cell is told, and its holds drop when its handlers settle or the grace
+    /// period passes. The cell itself stays resident until something else
+    /// evicts it.
+    RevokeHolds {
+        cell: CellId,
     },
     AlarmObserved {
         cell: CellId,
@@ -1257,6 +1385,15 @@ pub enum Effect {
     CloseWebSocket {
         cell: CellId,
         websocket: WebSocketId,
+    },
+    /// Tell the cell's application that these holds are being revoked, then
+    /// report `Event::HoldReleased` for each once its handlers settle. The
+    /// core drops whatever is left when the grace period ends, so the shell
+    /// need not time anything itself.
+    RevokeHolds {
+        cell: CellId,
+        holds: Vec<HoldId>,
+        reason: HoldRevocation,
     },
     Halt {
         code: i32,

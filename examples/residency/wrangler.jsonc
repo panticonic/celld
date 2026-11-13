@@ -1,0 +1,14 @@
+{
+  "name": "residency",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": {
+    "bindings": [{ "name": "KERNEL", "class_name": "Kernel" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Kernel"] }],
+  "celld": {
+    "durable_objects": {
+      "Kernel": { "residency": true }
+    }
+  }
+}

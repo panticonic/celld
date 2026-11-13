@@ -130,6 +130,7 @@ the Cloudflare service.
 - [Workers](services/workers.md)
 - [Durable Objects / Cells](services/durable-objects.md)
 - [Durable Object Facets](services/durable-object-facets.md)
+- [Residency holds](services/residency.md): keep an object resident until it releases
 - [KV](services/kv.md)
 - [Queues](services/queues.md)
 - [D1](services/d1.md)

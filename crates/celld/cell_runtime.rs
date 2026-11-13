@@ -163,6 +163,18 @@ impl CellRuntime {
         self.replication.clone()
     }
 
+    /// Whether the deployment declared `residency` for the class of the root
+    /// cell `scope`: `"celld": { "durable_objects": { "<Class>": { "residency":
+    /// true } } }`. The host loop asks before the core is, because a hold the
+    /// deployment never allowed must not spend the node's pin budget.
+    pub fn residency_declared(&self, scope: &str) -> bool {
+        let class = scope.split_once(':').map_or(scope, |(class, _)| class);
+        self.generation()
+            .cell_configs
+            .get(class)
+            .is_some_and(|config| config.residency_class(class))
+    }
+
     /// Read the filesystem inventory after the core has replaced the exact
     /// clean predecessor lease generation.
     pub fn local_reload_cells(&self) -> anyhow::Result<Vec<celld_logic::LocalCell>> {

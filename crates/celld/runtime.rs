@@ -1896,6 +1896,27 @@ impl RuntimeManager {
             .await
     }
 
+    /// Tell the cell's application that the core revoked these residency holds,
+    /// and wait for its `onrevoked` handlers to settle. The answer carries no
+    /// write position: whatever the handlers wrote is proved by the durability
+    /// proof every eviction takes before the runtime stops.
+    pub async fn holds_revoked(
+        &self,
+        cell: String,
+        holds: Vec<u64>,
+        reason: &str,
+    ) -> anyhow::Result<Option<u64>> {
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        let job = CellJob::HoldsRevoked {
+            scope: cell.clone(),
+            holds,
+            reason: reason.to_string(),
+            reply,
+        };
+        self.cell_event(&cell, job, receive, "cell isolate dropped hold revocation")
+            .await
+    }
+
     /// Run `webSocketMessage` in the facet `scope` that accepted `ws_id`.
     ///
     /// The frames leave only after the facet's stream proves every write the
@@ -3354,6 +3375,7 @@ async fn drive_cell_inner(
             CellJob::WsOpen { .. } => "celld.ws_open",
             CellJob::WsMessage { .. } => "celld.ws_message",
             CellJob::WsClosed { .. } => "celld.ws_close",
+            CellJob::HoldsRevoked { .. } => "celld.residency_revoked",
             #[cfg(celld_internal_tests)]
             CellJob::SyncErrorForTest { .. } => "celld.sync_error_test",
         };

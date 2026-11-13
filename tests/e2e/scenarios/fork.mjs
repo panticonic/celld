@@ -284,13 +284,13 @@ const scripted = (example, title, command, { requires = [], slow = false } = {})
 
 const dolt = scripted(
   "dolt",
-  "dolt: commit, branch, merge, conflicts, reset, diff, fork, restart and restore (examples/dolt/demo.sh)",
+  "dolt: commit, branch, merge, conflicts, reset, diff, fork, restart and restore, and the Vibestudio runtime: commit in a transaction (F2), merge with a resolver (F1), local tables (F4), checkout with local rows (F5), history reads (F6) (examples/dolt/demo.sh)",
   (dir, t) => ({ file: path.join(dir, "demo.sh"), args: [t.celld.bin] }),
   { requires: [needs("jq")] },
 );
 const doltFacets = scripted(
   "dolt-facets",
-  "dolt facets: versioning, execute, facet fork, restart, restore and gc (examples/dolt-facets/demo.sh)",
+  "dolt facets: versioning, execute, local tables (doltLocal), facet fork, restart, restore and gc (examples/dolt-facets/demo.sh)",
   (dir, t) => ({ file: path.join(dir, "demo.sh"), args: [t.celld.bin] }),
   { requires: [needs("jq")] },
 );

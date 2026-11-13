@@ -1341,6 +1341,7 @@ mod tests {
 
     /// The number of sealed root records appended to the chunk file at
     /// `path` after the cut `from` (a commit appends chunks and one root).
+    #[allow(clippy::disallowed_methods)]
     fn roots_after(path: &str, from: celld_ltx::dolt::Cut) -> usize {
         let bytes = std::fs::read(path).unwrap();
         let mut ends = std::collections::BTreeSet::new();
@@ -1350,6 +1351,7 @@ mod tests {
         ends.len() - 1
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn cut_of(path: &str) -> celld_ltx::dolt::Cut {
         celld_ltx::dolt::scan_file(&std::fs::read(path).unwrap()).unwrap()
     }
@@ -1791,6 +1793,7 @@ mod tests {
     /// F4: a fork starts with empty local tables and keeps their schema; the
     /// identity-bound runtime state goes too.
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn a_fork_image_empties_the_declared_local_tables() {
         let dir = tempfile::tempdir().unwrap();
         let (path, c) = local_cell(dir.path());
@@ -1830,6 +1833,7 @@ mod tests {
     /// rows, so the store grows by a few chunks however much local state
     /// there is (copying 5000 rows of 100 bytes would append over 500 KB).
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn checkout_does_not_copy_local_rows() {
         let dir = tempfile::tempdir().unwrap();
         let (path, c) = local_cell(dir.path());
@@ -1859,6 +1863,7 @@ mod tests {
     /// at NORMAL).
     #[test]
     #[ignore]
+    #[allow(clippy::disallowed_methods)]
     fn checkout_cost_by_local_rows() {
         fn percentile(mut v: Vec<f64>, p: f64) -> f64 {
             v.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -1894,7 +1899,7 @@ mod tests {
                     dolt(&c, "checkout", json!({"branch": target}));
                     quiet.push(started.elapsed().as_secs_f64() * 1000.0);
                 }
-                println!(
+                eprintln!(
                     "synchronous={sync:<4} local rows {rows:>6}: checkout p50/p95 ms: \
                      after a local write {:.2}/{:.2}, no write {:.2}/{:.2}",
                     percentile(written.clone(), 0.5),

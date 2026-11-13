@@ -35,7 +35,7 @@ has not been run yet.
 | Vibestudio compatibility audit | done (Vibestudio branch `audit/celld-compat`, `docs/celld-compat-audit.md`) | fork bugs A1 and A2 fixed |
 | Vibestudio runtime cutover | partial, paused (Vibestudio branch `feat/celld-runtime`, `HANDOFF-celld-runtime.md`) | |
 | Dolt runtime for the Vibestudio redesign: merge resolver (F1), commit in a transaction (F2), class-declared local tables (F4), checkout independent of local state (F5), history reads (F6) | done (branch `feature/dolt-runtime-f1-f6`) | §3b.12, `docs/services/dolt-cells.md` |
-| Compatibility fixes from the Vibestudio cutover: continuations after their event (E6), facet abort, streaming `Response.clone()`, WebSocket upgrade from an alarm, retry and delete of an unfinished fork target, error codes, inspector titles | in progress (branch `fix/cutover-compat`), §3b.14 | |
+| Compatibility fixes from the Vibestudio cutover: continuations after their event (E6), facet abort, streaming `Response.clone()`, WebSocket upgrade from an alarm, retry and delete of an unfinished fork target, error codes, inspector titles | done (branch `fix/cutover-compat`), §3b.14, `docs/fork/upstream-findings.md` E6-E9 | |
 | Vibestudio Dolt redesign | design done, P0 not started (Vibestudio branch `design/dolt-redesign`, `docs/dolt-redesign.md`); questions Q1–Q5 open | |
 
 ### Single-track backlog (from 2026-11-13, in order)
@@ -88,7 +88,14 @@ has not been run yet.
      through the one dispatch every call to a cell uses; over P2P the wire is
      specified and carrier-neutral (`transport`, `remote.serve`), and the
      cross-workspace run on two real nodes is not part of this change.
-6. Finish the Vibestudio runtime cutover (`feat/celld-runtime`, per its handoff).
+6. ~~Compatibility fixes from the Vibestudio cutover~~ done (§3b.14): continuations
+   after their event (E6, the blocker), facet abort (E7), streaming
+   `Response.clone()` (E8), WebSocket upgrade from an alarm (E9), retry and delete
+   of an unfinished fork target, error codes, inspector titles. Not fixed: a
+   facet RPC in flight is not cancelled on abort (it rejects in JavaScript);
+   an unrelated event's failure while it drives an orphan block resets the object.
+   Remaining for the cutover: the CI/release wiring in its handoff.
+6a. Finish the Vibestudio runtime cutover (`feat/celld-runtime`, per its handoff).
 7. Vibestudio Dolt redesign, P0 onward. Q1–Q5 are answered; the GAD
    section (§5) is to be rewritten as decentralized before P5.
 8. Chronolog cleanup: port the conformance/replay fixture, then delete `chronologd`, `materializer-doltlite`, the DoltLite addon and the SSB network layer.

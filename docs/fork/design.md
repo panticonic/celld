@@ -23,7 +23,7 @@ has not been run yet.
 | Egress hook | merged | `docs/services/egress.md` |
 | Iroh P2P binding | merged | `docs/services/p2p.md` |
 | Vibestore local bucket | merged | `docs/fork/vibestore.md` |
-| Fixes for the upstream defects the harness found | in progress | `docs/fork/upstream-findings.md` |
+| Fixes for the upstream defects the harness found (S1–S4, E1, E3) | merged | `docs/fork/upstream-findings.md` |
 | V8 inspector (CDP: discovery, evaluate, CPU profiles, heap snapshots, breakpoints) | merged | `docs/services/inspector.md` |
 | Chronolog `transport-iroh` | done (Chronolog branch `feature/transport-iroh`) | |
 | Chronolog node on the fork | in progress (Chronolog branch `feature/celld-host`) | |

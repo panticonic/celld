@@ -118,6 +118,44 @@ Every `dolt.execute` call uses the same setup:
 
 This is Chronolog's `DatabaseLike` contract implemented once, natively.
 
+## 3a. Declaring fork features (shared contract for all fork work)
+
+Every fork feature is declared in one place, so features don't each invent
+their own switches.
+
+- **Dolt classes**: `migrations[].new_dolt_classes: ["Class"]`, alongside
+  `new_sqlite_classes`. The engine is fixed when the class is created.
+- **Per-class capabilities**: a top-level `"celld"` block in the wrangler
+  config:
+
+  ```jsonc
+  "celld": {
+    "durable_objects": {
+      "Class": { "codegen": true, "residency": true }
+    }
+  }
+  ```
+
+  Dynamic workers get the same keys from the Worker Loader config, under
+  `celld: { codegen, residency, egressIdentity }`. A loaded worker can
+  never be granted more than its loader holds.
+- **Node-level settings** (CLI flag plus env var, documented in `--help`):
+  `--egress-proxy URL` with `CELLD_EGRESS_PROXY`, plus the egress HMAC
+  secret; `--p2p-key-file` for the Iroh endpoint.
+- **JS surface**, all on objects that already exist:
+  - `ctx.storage.dolt` (Dolt cells only);
+  - `ctx.residency.hold()`, which returns a handle with `release()`;
+  - `env.<NS>.fork(id, opts)`;
+  - `env.<P2P binding>` for Iroh, declared like any other binding as
+    `"p2p": [{ "binding": "P2P", "alpn": "..." }]`.
+- **Deterministic execution core**: `crates/celld/dolt_exec.rs`.
+  - `execute(conn: &rusqlite::Connection, program: &Program, ctx: &ExecContext) -> Result<Outcome>`.
+  - `Program` is an ordered list of `{ sql, bindings }`, using SQLite
+    storage-class values.
+  - `ExecContext` is `{ now_ms, seed, actor, profile, limits }`.
+  - `Outcome` is `Accepted` or `Rejected { code, statement_index }`.
+  - `ctx.storage.dolt.execute` is a thin wrapper over it.
+
 ## 4. Determinism: fixes over the earlier plans
 
 Things the workerd reconstruction plan and the current Chronolog patch get

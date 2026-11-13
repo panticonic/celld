@@ -1929,7 +1929,6 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
     // name leaves the local variables below, and may not also be a binding.
     let celld = celld_block::read(object, &do_classes)?;
     celld.check_dolt_local(&dolt_classes)?;
-    celld.check_dolt_remotes(&dolt_classes)?;
     let secret_names: BTreeSet<String> = celld
         .class_secrets()
         .into_values()

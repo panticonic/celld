@@ -5,13 +5,17 @@
   "durable_objects": {
     "bindings": [
       { "name": "GRAPH", "class_name": "Graph" },
-      { "name": "PLAIN", "class_name": "Plain" }
+      { "name": "PLAIN", "class_name": "Plain" },
+      { "name": "HUB", "class_name": "Hub" }
     ]
   },
   // Both are Dolt classes. Only Graph declares doltRemotes: its objects can
   // name other objects as remotes (fetch, pull, push), and answer the holders
   // of the grants they issue. Plain has no ctx.storage.dolt.remote and
   // answers every remote request with 403.
-  "migrations": [{ "tag": "v1", "new_dolt_classes": ["Graph", "Plain"] }],
-  "celld": { "durable_objects": { "Graph": { "doltRemotes": true } } }
+  //
+  // Hub is an ordinary SQLite class whose facet is a Dolt store: a facet has
+  // the declaration of its root's class, so the hub declares it too.
+  "migrations": [{ "tag": "v1", "new_dolt_classes": ["Graph", "Plain"], "new_sqlite_classes": ["Hub"] }],
+  "celld": { "durable_objects": { "Graph": { "doltRemotes": true }, "Hub": { "doltRemotes": true } } }
 }

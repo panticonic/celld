@@ -15,8 +15,14 @@
 const AUTHOR = "Agent <agent@example.com>";
 const DATE = 1700000000000;
 
+import { DurableObject } from "cloudflare:workers";
+
 export class Graph {
   constructor(ctx, env) {
+    this.init(ctx, env);
+  }
+
+  init(ctx, env) {
     this.ctx = ctx;
     this.env = env;
     this.sql = ctx.storage.sql;
@@ -144,6 +150,37 @@ export class Graph {
   }
 }
 
+// The facet's class: the same operations as a Graph, on a class that no binding
+// names and that extends DurableObject, so that `ctx.exports` offers it as a
+// class to run as a facet.
+export class Member extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.init(ctx, env);
+  }
+}
+for (const name of Object.getOwnPropertyNames(Graph.prototype)) {
+  if (name !== "constructor") Member.prototype[name] = Graph.prototype[name];
+}
+
+// A supervisor (an ordinary SQLite class that declared `doltRemotes`, so that
+// its facets have the capability) whose one facet is a Graph: a Dolt facet
+// that holds a remote to the shared graph and pushes to it.
+export class Hub {
+  constructor(ctx, env) {
+    this.ctx = ctx;
+    this.env = env;
+  }
+
+  async fetch(request) {
+    const facet = this.ctx.facets.get("member", () => ({
+      class: this.ctx.exports.Member,
+      celld: { storage: "dolt" },
+    }));
+    return facet.fetch(request);
+  }
+}
+
 // A Dolt class that never declared `doltRemotes`.
 export class Plain {
   constructor(ctx) {
@@ -182,6 +219,12 @@ export default {
         }),
       );
       return Response.json({ grant: granted.id, token: granted.token, remote: await remote.json() });
+    }
+    if (url.pathname.startsWith("/hub/")) {
+      // An operation on the hub's facet, which is a Dolt cell of its own.
+      return env.HUB.get(env.HUB.idFromName("hub")).fetch(
+        new Request("https://graph/" + url.pathname.slice(5) + url.search, request),
+      );
     }
     if (url.pathname === "/plain") {
       return env.PLAIN.get(env.PLAIN.idFromName("p")).fetch("https://plain/");

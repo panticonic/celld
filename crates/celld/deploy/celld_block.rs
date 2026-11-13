@@ -45,9 +45,10 @@ pub struct ClassCapabilities {
     /// tables").
     #[serde(default, rename = "doltLocal", skip_serializing_if = "Option::is_none")]
     pub dolt_local: Option<Vec<String>>,
-    /// `ctx.storage.dolt.remote`, `fetch`, `pull` and `push` for a Dolt class,
-    /// and answering the requests of those who hold a grant from one of its
-    /// objects (`docs/services/dolt-remotes.md`).
+    /// `ctx.storage.dolt.remote`, `fetch`, `pull` and `push` for the Dolt
+    /// cells of a class, and for the Dolt facets of an object of it, and
+    /// answering the requests of those who hold a grant from one of its Dolt
+    /// cells (`docs/services/dolt-remotes.md`).
     #[serde(default, rename = "doltRemotes", skip_serializing_if = "Option::is_none")]
     pub dolt_remotes: Option<bool>,
 }
@@ -120,20 +121,6 @@ impl CelldDeclaration {
             .filter(|(_, caps)| caps.dolt_remotes())
             .map(|(class, _)| class.clone())
             .collect()
-    }
-
-    /// Refuse `doltRemotes` on a class that is not a Dolt class: there is no
-    /// history to fetch or push.
-    pub fn check_dolt_remotes(&self, dolt_classes: &[String]) -> anyhow::Result<()> {
-        for class in self.dolt_remotes_classes() {
-            if !dolt_classes.iter().any(|dolt| *dolt == class) {
-                bail!(
-                    "config `celld.durable_objects.{class}.doltRemotes` is declared for a class \
-                     that is not a Dolt class; name {class:?} in `migrations[].new_dolt_classes`"
-                );
-            }
-        }
-        Ok(())
     }
 
     /// The classes declared `residency: true`, in name order.

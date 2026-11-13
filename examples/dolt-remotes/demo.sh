@@ -151,6 +151,17 @@ check "fork of an agent"       "$(get "/fork?from=agent-a&to=agent-c")"   '.id |
 check "no remote, no grant, no tracking branch inherited" "$(state agent-c)" '.remotes == [] and .grants == [] and .tracking == []'
 check "it has the history"     "{\"a\":\"$(head_of agent-a)\",\"c\":\"$(head_of agent-c)\"}" '.a == .c'
 
+echo "-- a Dolt facet of a supervisor is a holder too"
+HUB_TOKEN=$(get "/grant?g=gad&label=hub&push=hub/*&branches=main" | jq -r .token)
+check "the facet has the capability"  "$(get "/hub/has-remote-api")"      '.remote == true and .fetch == "function"'
+check "the facet adds a remote"       "$(get "/hub/remote-add-raw?name=origin&ref=Graph:$GAD_ID&token=$HUB_TOKEN")" '.name == "origin"'
+check "the facet fetches the graph"   "$(get "/hub/fetch?branches=main")"  '.branches.main | length == 40'
+get "/hub/set?id=7&body=from-the-facet" >/dev/null
+FACET=$(get "/hub/commit?message=facet-work" | jq -r .hash)
+check "the facet pushes a branch of its own" "$(get "/hub/push?branch=main&to=hub/main")" ".hash == \"$FACET\" and .created == true"
+check "the graph holds it"            "$(state gad)"                      ".branches[\"hub/main\"] == \"$FACET\""
+check "and nothing else moved"        "$(state gad)"                      ".branches.main == \"$(head_of agent-a)\""
+
 echo "-- restart"
 H=$(head_of gad)
 stop
@@ -174,7 +185,7 @@ check "restored agent-a"       "{\"h\":\"$(head_of agent-a)\"}"           ".h ==
 check "restored agent-b"       "{\"h\":\"$(head_of agent-b)\"}"           ".h == \"$HB\""
 check "replicas agree"         "{\"g\":\"$(head_of gad)\",\"a\":\"$(head_of agent-a)\",\"b\":\"$(head_of agent-b)\"}" '.g == .a and .a == .b'
 check "restored tracking branches" "$(state agent-a)"                     ".tracking == $TRACK_A"
-check "restored grants"        "$(state gad)"                             '.grants | length == 3'
+check "restored grants"        "$(state gad)"                             '.grants | length == 4'
 get "/set?g=agent-a&id=6&body=after-restore" >/dev/null
 L2=$(get "/commit?g=agent-a&message=after-restore" | jq -r .hash)
 check "push after a restore"   "$(get "/push?g=agent-a&branch=main")"     ".hash == \"$L2\""

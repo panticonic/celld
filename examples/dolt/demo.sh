@@ -77,6 +77,7 @@ check "checkout other"       "$(get "/checkout?$R&name=other")"           '.bran
 FORK=$(get "/fork?repo=demo&at=$C1")
 check "fork at first commit" "$FORK"                                      '(.fork.notes | length) == 1'
 FORK_ID=$(echo "$FORK" | jq -r .id)
+check "fork keeps the kv data" "$(get "/byid/$FORK_ID/kv")"            '.kv == "runtime-state"'
 
 echo "-- deterministic execution (ctx.storage.dolt.execute)"
 CTX='"context":{"nowMs":"1700000000000","seed":"42","actor":"AAEC","schemaAdmin":true}'

@@ -1,0 +1,13 @@
+{
+  "name": "object-fork",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "durable_objects": {
+    "bindings": [{ "name": "WORKSPACE", "class_name": "Workspace" }]
+  },
+  // The workspace is an ordinary SQLite class. Its facets are a SQLite
+  // store ("notes", which has a facet of its own, "attachments") and a Dolt
+  // store ("ledger"); env.WORKSPACE.fork() and .restore() carry all of them.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Workspace"] }]
+}

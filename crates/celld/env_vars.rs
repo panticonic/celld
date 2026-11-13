@@ -232,6 +232,7 @@ pub fn validate() -> anyhow::Result<()> {
 
     for name in [
         "CELLD_CLOUD",
+        "CELLD_INSPECTOR_ALLOW_NON_LOOPBACK",
         "CELLD_LTX_COMPACTION",
         "CELLD_LTX_PAGED",
         "CELLD_NO_IMPLICIT_DEADLINES",

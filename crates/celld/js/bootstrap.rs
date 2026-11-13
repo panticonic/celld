@@ -708,7 +708,19 @@ pub(super) fn build_env(scope: &mut v8::PinScope, config: &WorkerConfig) -> Resu
             ));
         }
         for (name, value) in vars {
-            lines.push_str(&format!("e[{:?}] = {:?};\n", name, value));
+            // Emitted as JSON string literals, which are valid JavaScript (a
+            // Rust `{:?}` escape such as `\u{1f600}` is not).
+            let key = serde_json::to_string(name).expect("a string serializes");
+            match value {
+                crate::engine_api::VarValue::Text(text) => lines.push_str(&format!(
+                    "e[{key}] = {};\n",
+                    serde_json::to_string(text).expect("a string serializes")
+                )),
+                crate::engine_api::VarValue::Json(json) => lines.push_str(&format!(
+                    "e[{key}] = JSON.parse({});\n",
+                    serde_json::to_string(json).expect("a string serializes")
+                )),
+            }
         }
         if let Some(name) = asset_binding {
             lines.push_str(&format!(
@@ -971,6 +983,7 @@ pub(super) struct EmbeddedStartup {
     pub props_sc: Vec<u8>,
     pub path: std::path::PathBuf,
     pub restored: bool,
+    pub engine: celld_ltx::Engine,
 }
 
 pub(super) fn adopt_embedded_cell(
@@ -988,6 +1001,7 @@ pub(super) fn adopt_embedded_cell(
         &startup.path,
         startup.restored,
         compat.sqlite_vec,
+        startup.engine,
     )
     .context("facet storage open failed")?;
     let alarm = finish_cell_adoption(tc, cell, true)?;

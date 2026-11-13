@@ -933,7 +933,12 @@ impl State {
     /// lease lapsed must answer `false` here even if `Timer::NodeLeaseFence`
     /// has not fired yet: the timer is the liveness backstop that halts the
     /// process, never the safety mechanism. A suspended VM's timer fires
-    /// late, but a request evaluated after resume still refuses. The `<` /
+    /// late, but a request evaluated after resume still refuses -- provided
+    /// the shell's `now_mono_ms` keeps counting while the machine is
+    /// suspended (`asyncrt::mono_ms` reads `CLOCK_BOOTTIME` on Linux), since
+    /// peers measure the same lapse in wall time. A clock that stops during
+    /// suspend breaks this (logic-sim's `suspend-stops-monotonic` mutation).
+    /// The `<` /
     /// `>=` polarity matches the fence timer at `handle_timer`, so the
     /// predicate and the timer cannot disagree.
     pub fn node_authoritative(&self) -> bool {
@@ -5054,6 +5059,9 @@ impl State {
             }
         }
         self.cells.insert(id, cell);
+        // A release in flight blocks evicting a woken cell (`begin_eviction`),
+        // so shedding that was refused for it can proceed now.
+        self.pump_capacity(effects);
     }
 
     /// Finish one shutdown handoff after a successor acquired the cell. The
@@ -5949,6 +5957,15 @@ impl State {
         let Phase::Resident { epoch } = cell.phase else {
             return Err(EvictRefusal::CellTransitioning);
         };
+        // A cell woken while its owner release is still in flight is resident
+        // again, but `releasing` still names that write. Finishing a second
+        // rebalancing eviction would overwrite the slot, orphaning the first
+        // operation's index entry. `admit_eviction` refuses this state for an
+        // explicit eviction; every caller reaches that rule here. The release
+        // is bounded by its deadline, and its completion pumps capacity.
+        if cell.releasing.is_some() {
+            return Err(EvictRefusal::CellTransitioning);
+        }
         if !cell
             .alarm
             .as_ref()
@@ -5960,6 +5977,20 @@ impl State {
         // batch reserves more cells than permits, and the pump promotes
         // them as permits return.
         if self.eviction_permits.len() >= self.eviction_ceiling() {
+            return Err(EvictRefusal::ConcurrencyLimit);
+        }
+        // A draining node bounds everything leaving it by `max_releases`
+        // (`pump_release`), and a nomination spends that bound by marking the
+        // cell quiescing before it gets here. Any other caller -- demand or
+        // pressure shedding, idle eviction, an explicit eviction -- holds no
+        // reservation, so it must find room itself. Without this, a cell
+        // activated while draining (admitted behind a waiter as capacity
+        // freed) was shed on top of a full batch of releases and adoptions.
+        // The cell is not lost: `pump_release` nominates it when a slot frees.
+        if self.draining
+            && !cell.quiescing
+            && self.handoffs_in_flight() >= self.config.max_releases
+        {
             return Err(EvictRefusal::ConcurrencyLimit);
         }
         let op = self.cell_op(id);
@@ -6800,6 +6831,11 @@ impl State {
         self.capacity_waiters.clear();
         self.quiescing_cells.clear();
         self.adopting_cells.clear();
+        // A startup ownership confirmation is moot once authority is gone:
+        // its owner read now completes into a fenced cell, and a late
+        // `LocalCellsRead` must not start another round.
+        self.confirming = false;
+        self.confirming_cells.clear();
         self.active_requests.clear();
         self.active_cells.clear();
         self.admitted_gates.clear();
@@ -6876,6 +6912,13 @@ impl State {
             set_phase(&mut self.occupied, &mut cell, Phase::Fenced);
             cell.waiting_for = None;
             cell.waiting_activation = None;
+            // `Fenced` is outside both pipelines these markers describe: a
+            // startup confirmation waits on an owner read, and a balancing
+            // move (`handoff`) lives in `Dormant` while releasing or in
+            // `Adopting`. The indexes were cleared above; clear the cells to
+            // match.
+            cell.confirming = false;
+            cell.handoff = false;
             cell.alarm = None;
             cell.alarm_wake = false;
             cell.websockets.clear();

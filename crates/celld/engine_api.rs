@@ -311,10 +311,20 @@ pub struct WorkerConfigOptions {
     pub queue_bindings: Vec<QueueBinding>,
     pub queue_consumers: Vec<crate::protocol::QueueConsumerConfig>,
     pub workflow_bindings: Vec<WorkflowBinding>,
-    pub vars: Vec<(String, String)>,
+    pub vars: Vec<(String, VarValue)>,
     pub node: String,
     pub modules: Vec<(String, ModuleSource)>,
     pub compat: Compat,
+}
+
+/// One `vars` entry. Wrangler accepts any JSON value: a string is a text
+/// binding (`plain_text`), anything else a JSON binding (`json`), which the
+/// Worker sees as the parsed value.
+#[derive(Clone, Debug, PartialEq)]
+pub enum VarValue {
+    Text(String),
+    /// The value's JSON text.
+    Json(String),
 }
 
 /// A handler that failed inside its turn, with the positions that turn

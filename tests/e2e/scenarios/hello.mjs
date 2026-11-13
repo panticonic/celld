@@ -8,11 +8,10 @@ export default {
   steps: [
     hello("/"),
     hello("/a/b?c=d"),
-    // workerd gives `new Response("text")` a `content-type: text/plain;charset=UTF-8`
-    // header. celld sends none (verified with curl -i against dev 0.6.3 / unified-fork).
-    get("/", { status: 200, headers: { "content-type": /^text\/plain/ } }, {
+    // Fetch's "extract a body": `new Response("text")` is `text/plain;charset=UTF-8`, as in
+    // workerd. (Upstream celld 0.6.3 sent no content-type; fixed in the fork.)
+    get("/", { status: 200, headers: { "content-type": "text/plain;charset=UTF-8" } }, {
       name: "string body gets default content-type text/plain",
-      knownFail: "celld omits the default text/plain content-type for string bodies (workerd sets it)",
     }),
     restart(),
     hello("/after-restart"),

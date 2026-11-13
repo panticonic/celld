@@ -671,6 +671,7 @@ async fn dispatch_facet(app: AppHandle, req: celld::js::FacetReq) {
             FacetReq::Open { reply, .. } => drop(reply.send(Err(error()))),
             FacetReq::Delete { reply, .. } => drop(reply.send(Err(error()))),
             FacetReq::Prove { reply, .. } => drop(reply.send(Err(error()))),
+            FacetReq::Fork { reply, .. } => drop(reply.send(Err(error()))),
         }
         return;
     };
@@ -679,8 +680,9 @@ async fn dispatch_facet(app: AppHandle, req: celld::js::FacetReq) {
             root,
             epoch,
             names,
+            engine,
             reply,
-        } => drop(reply.send(runtime.open_facet(&root, epoch, &names).await)),
+        } => drop(reply.send(runtime.open_facet(&root, epoch, &names, engine).await)),
         FacetReq::Delete {
             root,
             epoch,
@@ -692,6 +694,18 @@ async fn dispatch_facet(app: AppHandle, req: celld::js::FacetReq) {
             epoch,
             reply,
         } => drop(reply.send(runtime.prove_facet(&stream, epoch).await)),
+        FacetReq::Fork {
+            root,
+            epoch,
+            source,
+            target,
+            at,
+            reply,
+        } => drop(reply.send(
+            runtime
+                .fork_facet(&root, epoch, &source, &target, at.as_deref())
+                .await,
+        )),
     }
 }
 
@@ -3734,6 +3748,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
         "host runtime initialized"
     );
     celld::startup::raise_file_limit();
+    celld::inspector::start_if_configured().await?;
     let max_resident = celld::env_vars::optional("CELLD_MAX_RESIDENT_CELLS")?
         // celld has no resident ceiling unless the operator configures one.
         // The clean-sheet prototype originally defaulted to eight, which
@@ -5304,6 +5319,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
     let mut process_deadline_fired = false;
     let mut handoff = tokio::time::interval(std::time::Duration::from_millis(50));
     let mut containers_reaped = false;
+    let mut websockets_told = false;
     let drained = if shutdown_mode == ShutdownMode::Handoff && !handoff_started {
         false
     } else {
@@ -5378,6 +5394,22 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
             // SDK's RPC transport is one such socket). The containers are
             // destroyed at exit anyway; destroying them once every request
             // has answered ends those sockets now.
+            // A client socket never ends on its own either, and its transport
+            // cannot survive the process, so a preserved restart that waits
+            // for it waits out the whole drain deadline and then drops it
+            // abnormally (1006). Once every request has answered, tell each
+            // open socket this node is going away (1001), as Cloudflare does
+            // when it restarts a Durable Object, and let the close handshake
+            // finish. A SIGTERM (handoff) shutdown needs none of this: it
+            // closes each cell's sockets with 1012 when the cell is nominated.
+            if !websockets_told
+                && shutdown_mode == ShutdownMode::Preserve
+                && requests_drained
+                && core_drained
+            {
+                websockets_told = true;
+                celld::js::ws_close_all(1001, "going away");
+            }
             if !containers_reaped
                 && shutdown_mode == ShutdownMode::Preserve
                 && requests_drained

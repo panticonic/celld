@@ -44,20 +44,13 @@ pub enum ViolationKind {
     /// The modelled world contradicted itself (a simulator bug, not a
     /// protocol bug).
     ModelError,
-    /// A `State::validate` failure the simulator has already reported and
-    /// minimised (see README, "Findings"). Recorded, but it does not stop a
-    /// run unless `--strict` asks it to, so a sweep can look past it.
-    KnownCoreIssue,
 }
 
 impl ViolationKind {
     /// Safety violations are the ones a mutation must produce and a clean
     /// run must never produce. Liveness is reported, but judged separately.
     pub fn is_safety(self) -> bool {
-        !matches!(
-            self,
-            ViolationKind::Liveness | ViolationKind::KnownCoreIssue
-        )
+        !matches!(self, ViolationKind::Liveness)
     }
 }
 
@@ -351,7 +344,6 @@ impl Checker {
         epoch: Epoch,
         node: &str,
         decided_at: u64,
-        after_suspension: bool,
     ) {
         let successor = self
             .grants
@@ -360,13 +352,8 @@ impl Checker {
             .find(|(_, (_, granted))| granted + self.skew_tolerance_ms < decided_at)
             .map(|((_, e), (n, granted))| (*e, n.clone(), *granted));
         if let Some((e, n, granted)) = successor {
-            let kind = if after_suspension {
-                ViolationKind::KnownCoreIssue
-            } else {
-                ViolationKind::StaleServe
-            };
             self.fail(
-                kind,
+                ViolationKind::StaleServe,
                 time,
                 Some(cell),
                 format!(

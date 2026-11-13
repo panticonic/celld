@@ -2602,10 +2602,34 @@ impl LtxRepl {
         // The paged VFS (this activation) takes precedence over the fault VFS.
         let vfs_name = paged_vfs_name.clone().or_else(|| self.vfs_name.clone());
         let truncate_pages = self.truncate_pages_for_cell(cell);
+        let from_remote = remote_restore.is_some();
         // Capture must finish opening before the application's SQLite connection
         // or schema setup runs. An earlier write can hide a torn WAL header and
         // let capture resume from a stale LTX cursor after a crash.
         let (db, mut seed, marker) = asyncrt::blocking(move || {
+            // A stream's engine is fixed when it is created, and its file
+            // (local, or just restored from the bucket) records it. The LTX
+            // store must never capture a chunk store as SQLite pages; the
+            // Dolt store refuses a stock file itself.
+            if engine == celld_ltx::Engine::Sqlite {
+                let mut head = [0u8; 8];
+                let prolly = std::fs::File::open(&dst_)
+                    .and_then(|mut file| std::io::Read::read_exact(&mut file, &mut head))
+                    .is_ok()
+                    && celld_ltx::dolt::is_chunk_store(&head);
+                if prolly {
+                    return Err(anyhow!(
+                        "{} is a Dolt store; a stream's storage engine is fixed when it is created",
+                        dst_.display()
+                    ));
+                }
+            }
+            // A chunk file restored from LTX pages carries the 4 KiB hole
+            // the LTX format leaves at SQLite's lock page (1 GiB); a local
+            // eviction snapshot or a resumed file is the live file itself.
+            if engine == celld_ltx::Engine::Dolt && from_remote {
+                celld_ltx::dolt::unmap_restored_image(&dst_)?;
+            }
             let open_db = |ltx_host: LtxHost| -> celld_ltx::Result<Box<dyn CellStore>> {
                 match (engine, vfs_name.as_deref()) {
                     (celld_ltx::Engine::Dolt, _) => {

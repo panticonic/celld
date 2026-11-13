@@ -285,8 +285,16 @@ globalThis.Response = class Response {
     this.status = init.status === undefined ? 200 : Number(init.status);
     this.statusText = init.statusText === undefined ? "" : String(init.statusText);
     this.headers = new Headers(init.headers);
-    if (typed && typed.type && !this.headers.has("content-type"))
-      this.headers.set("content-type", typed.type);
+    // Fetch's "extract a body": a USVString body carries
+    // `text/plain;charset=UTF-8`, as workerd sends it. Streams, ArrayBuffers
+    // and views carry none; Blob, FormData and URLSearchParams brought theirs.
+    const bodyType = typed
+      ? typed.type
+      : init.__rawBody !== true && body != null && typeof body !== "object"
+        ? "text/plain;charset=UTF-8"
+        : "";
+    if (bodyType && !this.headers.has("content-type"))
+      this.headers.set("content-type", bodyType);
     this.webSocket = init.webSocket ?? null;
     this._wsTarget = init.__wsTarget || init._wsTarget || null;
     this.ok = this.status >= 200 && this.status <= 299;
@@ -708,7 +716,7 @@ globalThis.fetch = async (input, init) => {
     : r.body !== undefined ? r.body : Uint8Array.from(r.bodyBytes || []);
   const response = new Response(
     responseBody,
-    { status: r.status, headers: r.headers },
+    { status: r.status, headers: r.headers, __rawBody: true },
   );
   response.url = req.url;
   return response;
@@ -774,7 +782,7 @@ __celld.__makeAssetsBinding = (script) => ({
       : r.body !== undefined ? r.body : Uint8Array.from(r.bodyBytes || []);
     const response = new Response(
       responseBody,
-      { status: r.status, headers: r.headers },
+      { status: r.status, headers: r.headers, __rawBody: true },
     );
     response.url = req.url;
     return response;
@@ -2424,6 +2432,18 @@ class DurableObjectFacets {
         if (meta === undefined)
           throw new TypeError(
             "FacetStartupOptions.class must be a DurableObjectClass.");
+        // celld fork: `celld: { storage: "dolt" }` makes the facet a Dolt
+        // facet. Namespaced under `celld` (docs/fork/design.md section 3a) so a
+        // future workerd `FacetStartupOptions` key cannot collide with it.
+        // The engine is fixed when the facet is created: the host refuses
+        // a later start that names the other one.
+        const fork = options.celld;
+        if (fork !== undefined && (fork === null || typeof fork !== "object"))
+          throw new TypeError("FacetStartupOptions.celld must be an object.");
+        const storage = fork?.storage === undefined ? "sqlite" : fork.storage;
+        if (storage !== "sqlite" && storage !== "dolt")
+          throw new TypeError(
+            'FacetStartupOptions.celld.storage must be "sqlite" or "dolt".');
         const { id: loader } = await meta.loadPromise;
         const id = options.id === undefined ? this._state.id : options.id;
         // Keep the ID kind and name in one clone. A string round-trip erases
@@ -2431,7 +2451,7 @@ class DurableObjectFacets {
         const idSc = __sc_encode(id instanceof DurableObjectId
           ? [id._className, id.toString(), id.name] : String(id));
         // Keep the load alive after the startup callback and class are gone.
-        return [loader, meta.name, idSc, meta.propsSc, meta];
+        return [loader, meta.name, idSc, meta.propsSc, meta, storage];
       });
     const invoke = async (operation) => {
       if (record.aborted) throw record.error;
@@ -2443,26 +2463,26 @@ class DurableObjectFacets {
     const session = {
       get: () => Promise.reject(new Error(
         "Awaitable properties on facets are not supported yet.")),
-      call: (path, args) => invoke(async ([loader, className, id, propsSc]) => {
+      call: (path, args) => invoke(async ([loader, className, id, propsSc, , storage]) => {
         if (path.length !== 1)
           throw new Error(
             "Pipelined property paths on facets are not supported yet.");
         return __rpcDes(await __facet_rpc(
           loader, className, this._state._scope, record.owner, name, id,
-          propsSc, path[0], __rpcOut(args, false)));
+          propsSc, path[0], __rpcOut(args, false), storage));
       }),
     };
     // Arrow closures retain the manager because `target.fetch`'s method
     // receiver is the target object, not the DurableObjectFacets instance.
     const manager = this;
     target.fetch = async function(input, init) {
-      return invoke(async ([loader, className, id, propsSc]) => {
+      return invoke(async ([loader, className, id, propsSc, , storage]) => {
         const req = new Request(input, init);
         const headers = JSON.stringify(req.headers.__celldHeaderList);
         const { body, streamId } = await __subrequestBody(req);
         const response = JSON.parse(await __facet_fetch(
           loader, className, manager._state._scope, record.owner, name, id,
-          propsSc, req.url, req.method, body, headers, streamId));
+          propsSc, req.url, req.method, body, headers, streamId, storage));
         const responseBody = response.streamId !== undefined
           ? new CelldHttpBodyStream(response.streamId)
           : response.body !== undefined ? response.body
@@ -2473,6 +2493,7 @@ class DurableObjectFacets {
         return __wrapServiceResponse(new Response(responseBody, {
           status: response.status,
           headers: response.headers,
+          __rawBody: true,
           __wsTarget: response.wsTarget,
         }), req.url);
       });
@@ -2520,6 +2541,37 @@ class DurableObjectFacets {
     // Keep a failed delete as the name's barrier. Clearing it would let the
     // next get reload the image which the failed operation did not delete.
     barrier.then(clear, () => {});
+  }
+  // celld fork: copy the Dolt facet `source` (every branch and its history)
+  // into the new Dolt facet `target`, with the target's checked-out branch
+  // reset to `options.at` when given. `target` must not exist and must not
+  // be running; a `get(target)` waits until the fork settles. `source` may be
+  // running: the fork reads its newest commit.
+  fork(source, target, options) {
+    source = this._validName(source);
+    target = this._validName(target);
+    if (this._state._facetDepth >= 3)
+      throw new Error(
+        "Facet nesting depth limit exceeded. The maximum depth including the root Durable Object is 4.");
+    if (source === target)
+      throw new TypeError("A facet cannot be forked onto itself.");
+    if (options !== undefined && (options === null || typeof options !== "object"))
+      throw new TypeError("facets.fork options must be an object.");
+    const at = options?.at;
+    if (at !== undefined && typeof at !== "string")
+      throw new TypeError("facets.fork options.at must be a string.");
+    if (this._running.has(target))
+      throw new Error("The fork target facet is running; delete it first.");
+    const barrier = Promise.all([
+      this._barriers.get(source), this._barriers.get(target),
+    ]).then(() => __facet_fork(this._state._scope, source, target, at))
+      .then((result) => JSON.parse(result));
+    const held = barrier.then(() => {}, () => {});
+    this._barriers.set(target, held);
+    held.then(() => {
+      if (this._barriers.get(target) === held) this._barriers.delete(target);
+    });
+    return barrier;
   }
   _release() {
     // The host closes these facets during give-back. Queuing _abort here
@@ -3655,7 +3707,9 @@ __celld.__makeLoader = () => {
           ? new CelldHttpBodyStream(r.streamId)
           : r.body !== undefined ? r.body : Uint8Array.from(r.bodyBytes || []);
         return __wrapServiceResponse(
-          new Response(responseBody, { status: r.status, headers: r.headers }),
+          new Response(responseBody, {
+            status: r.status, headers: r.headers, __rawBody: true,
+          }),
           req.url);
       },
     };
@@ -3802,8 +3856,16 @@ __celld.__makeLoader = () => {
         throw new TypeError(
           `Unknown celld option ${JSON.stringify(key)}; celld accepts ` +
           `${known.join(", ")}.`);
-      if (typeof celld[key] !== "boolean")
+      if (key === "egressIdentity") {
+        // The identity this loaded worker presents to the node's egress
+        // proxy, appended to its loader's (docs/services/egress.md).
+        if (typeof celld[key] !== "string" || celld[key].length === 0 ||
+            new TextEncoder().encode(celld[key]).length > 512)
+          throw new TypeError(
+            "celld.egressIdentity must be a non-empty string of at most 512 bytes.");
+      } else if (typeof celld[key] !== "boolean") {
         throw new TypeError(`celld.${key} must be a boolean.`);
+      }
     }
     if (celld.residency === true) {
       const colon = caller === undefined ? -1 : caller.indexOf(":");
@@ -4021,6 +4083,7 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
     return __finishServiceFetch(
       new Response(responseBody, {
         status: r.status, headers: r.headers, __wsTarget: r.wsTarget,
+        __rawBody: true,
       }),
       req, redirectState);
   },
@@ -4807,7 +4870,7 @@ const __reviveResponse = (marker, revive) => {
   const res = new Response(
     marker.b === null ? null : bytes ? "" : revive(marker.b), {
       status: marker["__celld$res"], statusText: marker.t,
-      headers: marker.h, cf: marker.c });
+      headers: marker.h, cf: marker.c, __rawBody: true });
   if (bytes) __adoptBody(res, marker.b);
   if (marker.e) res.type = "error";
   return res;
@@ -5692,6 +5755,7 @@ class DurableObjectNamespace {
         return new Response(body, {
           status: r.status,
           headers: r.headers,
+          __rawBody: true,
           __wsTarget: r.wsTarget,
           webSocket: r.status === 101 && r.wsTarget
             ? new WebSocket(undefined, [], r.wsTarget)

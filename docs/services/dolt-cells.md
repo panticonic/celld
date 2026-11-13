@@ -132,13 +132,23 @@ The cost is one copy of the source's file on the source's node and one whole
 upload; a fork shares no storage with its source. Copy-on-write forks over
 shared chunks are planned.
 
+## Dolt facets
+
+A facet of any object can be a Dolt store too:
+`ctx.facets.get(name, () => ({ class, celld: { storage: "dolt" } }))`.
+It has the whole API above, including `execute`, and `ctx.facets.fork()`
+copies one into a new facet. See
+[Durable Object Facets](durable-object-facets.md#dolt-facets) and the
+[dolt-facets example](../../examples/dolt-facets).
+
 ## Limits
 
-- A chunk file must stay below 1 GiB to be captured (the replication format
-  reserves the page at 1 GiB). A capture past it fails and the output gate
-  refuses to acknowledge; run `gc()` to compact.
+- The replication format never carries SQLite's lock page (the 4 KiB page
+  at 1 GiB), so a chunk file's pages are numbered past it, and a restore
+  removes the hole it leaves. A chunk file can grow past 1 GiB. Two costs
+  remain: a capture after `gc()` and a restore read the whole file into
+  memory, and DoltLite's own GC buffer limits live data to about 2 GiB.
 - A Dolt cell never restores paged; its chain downloads whole.
-- `ctx.storage.dolt.execute()` (deterministic programs) is reserved and
-  throws in this build.
 - Managed (control-plane) deployments do not accept Dolt classes yet.
-- Facets of a Dolt object are ordinary SQLite facets.
+- `env.NS.fork()` copies the root object's file only: the fork starts with
+  no facets.

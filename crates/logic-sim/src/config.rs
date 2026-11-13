@@ -33,10 +33,15 @@ pub enum Mutation {
     RestoreOldestEpoch,
     /// Peers read every node lease as already expired.
     LeaseAlwaysExpired,
+    /// The node's monotonic clock stops during a suspension (`pause_stops_mono`
+    /// pauses): the shell's clock before it was changed to include suspended
+    /// time. The shipped shell's clock keeps running, so without this
+    /// mutation a suspension is only a long pause.
+    SuspendStopsMonotonic,
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 7] = [
+    pub const ALL: [Mutation; 8] = [
         Mutation::NonConditionalOwnerCas,
         Mutation::AckBeforeDurable,
         Mutation::SkipVerifyOwnership,
@@ -44,6 +49,7 @@ impl Mutation {
         Mutation::FollowerIgnoresSeal,
         Mutation::RestoreOldestEpoch,
         Mutation::LeaseAlwaysExpired,
+        Mutation::SuspendStopsMonotonic,
     ];
 
     pub fn name(self) -> &'static str {
@@ -55,6 +61,7 @@ impl Mutation {
             Mutation::FollowerIgnoresSeal => "follower-ignores-seal",
             Mutation::RestoreOldestEpoch => "restore-oldest-epoch",
             Mutation::LeaseAlwaysExpired => "lease-always-expired",
+            Mutation::SuspendStopsMonotonic => "suspend-stops-monotonic",
         }
     }
 
@@ -90,8 +97,10 @@ pub struct Faults {
     pub skew_ms: u64,
     /// Mean time between process pauses (ms); 0 disables them.
     pub pause_every_ms: u64,
-    /// Whether a pause stops the monotonic clock (a VM suspension) rather
-    /// than only the process (a SIGSTOP or a long GC).
+    /// Whether a pause is a VM suspension rather than only a stopped process
+    /// (a SIGSTOP or a long GC). The shell's monotonic clock counts suspended
+    /// time (`asyncrt::mono_ms`), so both look alike to the core; only
+    /// `Mutation::SuspendStopsMonotonic` makes the clock stop.
     pub pause_stops_mono: bool,
     /// Probability a store request fails or loses its response.
     pub store_fail: f64,
@@ -137,8 +146,6 @@ pub struct SimConfig {
     pub mutation: Option<Mutation>,
     /// Record a human-readable trace (slower; on for replays).
     pub trace: bool,
-    /// Treat already-reported core findings as failures too.
-    pub strict: bool,
 }
 
 impl SimConfig {
@@ -180,7 +187,6 @@ impl SimConfig {
             faults,
             mutation: None,
             trace: false,
-            strict: false,
         }
     }
 

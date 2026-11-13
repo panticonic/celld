@@ -230,7 +230,7 @@ pub(crate) fn drain_step_output(
     out: &mut StepOutput,
     effects: &mut FuturesUnordered<EffectFuture>,
     delays: &mut DelayQueue<TimerArm>,
-    timers: &mut TimerSlots<delay_queue::Key>,
+    timers: &mut TimerSlots<(delay_queue::Key, u64)>,
 ) {
     for job in out.effects.drain(..) {
         match job {
@@ -250,7 +250,8 @@ pub(crate) fn drain_step_output(
             arm.at_mono_ms.saturating_sub(crate::asyncrt::mono_ms()),
         );
         let key = delays.insert(arm.clone(), delay);
-        if let Some(displaced) = timers.install(&arm, key) {
+        // The deadline rides along so a resume can re-aim the delay.
+        if let Some((displaced, _)) = timers.install(&arm, (key, arm.at_mono_ms)) {
             delays.remove(&displaced);
         }
     }

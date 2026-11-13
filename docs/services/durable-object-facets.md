@@ -80,6 +80,57 @@ must go through the supervisor. Use a separate Durable Object, addressed with
 [`idFromName()`](durable-objects.md#identity-and-addressing), when children
 must run on different nodes.
 
+## Dolt facets
+
+A facet can be a [Dolt cell](dolt-cells.md) instead of a SQLite database: a
+DoltLite prolly store with `ctx.storage.dolt` (commits, branches, merge,
+diff, `execute`, `gc`). This is a feature of the celld fork. The startup
+options choose the engine:
+
+```js
+const ws = this.ctx.facets.get("workspace", () => ({
+  class: worker.getDurableObjectClass("Workspace"),
+  celld: { storage: "dolt" }, // or "sqlite", the default
+}));
+```
+
+workerd's `FacetStartupOptions` has only `class` and `id`. The fork's key
+sits under `celld`, as every fork feature does
+([design §3a](../fork/design.md)), so a key workerd adds later cannot
+collide with it.
+
+- **The engine is fixed when the facet is created.** The facet's file
+  records it, so a later start that names the other engine fails (the call
+  throws `...storage engine is fixed when it is created...`) and leaves
+  the data alone. This holds when the file is local and when the stream is
+  restored from the bucket: the restore refuses before anything captures
+  the file. Omitting `celld.storage` on an existing Dolt facet names
+  `"sqlite"` and is refused too, so pass the option on every start.
+- **Everything else is a facet's.** A Dolt facet has its own file and
+  replication stream under the root, like a SQLite facet. It restores from
+  the bucket with the root, survives abort (`ctx.facets.abort()` keeps the
+  store, and the checked-out branch persists), and `ctx.facets.delete()`
+  removes it with its stream. Its outputs wait for its stream like a SQLite
+  facet's. A Dolt operation that changes the store (commit, checkout,
+  merge, reset, branch, gc, execute) is a write, so the facet's reply waits
+  until its stream proves it.
+
+`ctx.facets.fork(source, target, { at })` copies the Dolt facet `source`,
+with every branch and its history, into a new Dolt facet `target` of the
+same parent, with the target's checked-out branch reset to `at` when it is
+given. It resolves to `{ bytes }` once the copy is durable.
+
+- The target must not exist, locally or in the bucket, and must not be
+  running. Delete it first to replace it. A `get(target)` waits for the
+  fork to finish.
+- The source may be running. The fork reads its newest commit and proves
+  the source's stream past that read before it writes the target, so a fork
+  never starts from state the source could still lose.
+- Only a Dolt facet can be forked. The copy is a whole file. No storage is
+  shared with the source.
+- `env.NS.fork()` of a Dolt root object copies the root only: the new
+  object starts with no facets.
+
 ## WebSockets in a facet
 
 A facet can accept a WebSocket: its `fetch()` returns a `101` response with the
@@ -106,8 +157,10 @@ closes it with `1011`.
 - A Durable Object binding cannot supply a facet class. A class with a storage
   migration cannot supply one either, because `ctx.exports` holds that class as
   a namespace.
-- Each facet has a separate SQLite database, which celld replicates as a
-  separate stream under the bucket prefix of the root Durable Object.
+- Each facet has a separate database (SQLite, or Dolt with
+  `celld: { storage: "dolt" }`), which celld replicates as a separate
+  stream under the bucket prefix of the root Durable Object.
+- `ctx.facets.fork()` and the `celld` startup option are fork features.
 - A facet cannot set an alarm. `storage.setAlarm()` throws inside a facet, so
   the root object must hold the schedule.
 - A facet socket does not hibernate. It keeps the root cell resident until the

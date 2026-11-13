@@ -908,15 +908,7 @@ pub fn open_with_fault_vfs_for_test(scope: &str, path: &str) -> anyhow::Result<(
     )
 }
 
-fn finish_open(
-    scope: &str,
-    c: Connection,
-    epoch: u64,
-    replicated_wake: bool,
-    sqlite_vec: bool,
-    engine: celld_ltx::Engine,
-    backing: StorageBacking,
-) -> anyhow::Result<()> {
+fn disable_lookaside(c: &Connection) -> anyhow::Result<()> {
     // SQLite's default lookaside arena reserves 48 KiB for every connection.
     // A worker keeps one connection for every resident cell, so the arenas
     // consume 48 MiB per 1,024 cells even when the application does no SQL.
@@ -938,6 +930,19 @@ fn finish_open(
         result == rusqlite::ffi::SQLITE_OK,
         "failed to disable SQLite lookaside"
     );
+    Ok(())
+}
+
+fn finish_open(
+    scope: &str,
+    c: Connection,
+    epoch: u64,
+    replicated_wake: bool,
+    sqlite_vec: bool,
+    engine: celld_ltx::Engine,
+    backing: StorageBacking,
+) -> anyhow::Result<()> {
+    disable_lookaside(&c)?;
     if sqlite_vec {
         register_vec0_extension(&c)?;
     }
@@ -1227,13 +1232,30 @@ pub(crate) fn open_embedded(
     path: &std::path::Path,
     restored: bool,
     sqlite_vec: bool,
+    engine: celld_ltx::Engine,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(parent.facet_path.len() < 3, "Facet nesting depth limit exceeded. The maximum depth including the root Durable Object is 4.");
     let mut facet_path = parent.facet_path.clone();
     facet_path.push(name.to_string());
     let stream = crate::engine_api::facet_cell(&parent.root_scope, &facet_path);
-    let mut connection = Connection::open(path)?;
-    let empty = connection.query_row("PRAGMA page_count", [], |row| row.get::<_, u64>(0))? == 0;
+    // The facet's file records its engine: a start that names the other
+    // engine is refused here, whether the file was resident or restored.
+    let path_str = path.to_string_lossy();
+    let mut connection = crate::dolt_cell::open_connection(&path_str, engine, None)
+        .map_err(|error| {
+            anyhow::anyhow!("{error:#}: {}", crate::js::facet_engine_mismatch(engine))
+        })?;
+    // Before any statement: a prolly store keeps lookaside slots in use.
+    disable_lookaside(&connection)?;
+    if engine == celld_ltx::Engine::Dolt {
+        anyhow::ensure!(
+            crate::dolt_cell::is_prolly(&connection),
+            "a Dolt facet's database did not open as a prolly store"
+        );
+        crate::dolt_cell::attach_active_branch(&connection)?;
+    }
+    let empty = engine == celld_ltx::Engine::Sqlite
+        && connection.query_row("PRAGMA page_count", [], |row| row.get::<_, u64>(0))? == 0;
     if !restored && empty {
         let legacy = serde_json::to_string(&facet_path)?;
         let root = Connection::open(&parent.root_path)?;
@@ -1257,6 +1279,9 @@ pub(crate) fn open_embedded(
         }
     }
     schema(&connection)?;
+    if engine == celld_ltx::Engine::Dolt {
+        crate::dolt_cell::ensure_runtime(&connection)?;
+    }
     // Each run of a facet has its own scope, so a continuation from an
     // aborted instance cannot enter its replacement. The database is one
     // logical facet, so its rows move to this run's scope before
@@ -1272,7 +1297,7 @@ pub(crate) fn open_embedded(
         parent.epoch,
         false,
         sqlite_vec,
-        celld_ltx::Engine::Sqlite,
+        engine,
         StorageBacking::Embedded {
             stream,
             opening: NEXT_FACET_OPENING.fetch_add(1, Ordering::Relaxed),
@@ -4495,6 +4520,11 @@ pub(crate) fn wake_record_trigger_sql() -> String {
     wake_record::trigger_sql(true)
 }
 
+/// The storage engine of `scope`'s open database.
+pub(crate) fn engine_of(scope: &str) -> Option<celld_ltx::Engine> {
+    dbs(|d| d.borrow().get(scope).map(|cell| cell.engine))
+}
+
 /// Whether `scope`'s open database is a Dolt cell.
 pub fn is_dolt(scope: &str) -> bool {
     dbs(|d| {
@@ -4521,7 +4551,8 @@ pub fn dolt_op(scope: &str, op: &str, args: &serde_json::Value) -> Result<serde_
         };
         if cell.engine != celld_ltx::Engine::Dolt {
             return Err("ctx.storage.dolt is only available on Dolt cells \
-                        (declare the class in migrations[].new_dolt_classes)"
+                        (declare the class in migrations[].new_dolt_classes) \
+                        and Dolt facets (FacetStartupOptions.celld.storage)"
                 .to_string());
         }
         if !cell.connection.is_autocommit() {

@@ -19,7 +19,7 @@ use crate::protocol::{
     ModuleKind, ModuleRef, QueueConsumerAttachment, QueueConsumerConfig, QueueConsumerDeployment,
     Rollout, RunWorkerFirst, FEATURE_ASSETS_V1, FEATURE_CONTAINERS_V1, FEATURE_CRON_V1,
     FEATURE_D1_V1, FEATURE_KV_V1, FEATURE_PYTHON_WORKERS_V1, FEATURE_QUEUES_V1, FEATURE_R2_V1,
-    FEATURE_SQLITE_VEC_V1, FEATURE_WASM_V1, FEATURE_WORKFLOWS_V1,
+    FEATURE_DOLT_CELLS_V1, FEATURE_SQLITE_VEC_V1, FEATURE_WASM_V1, FEATURE_WORKFLOWS_V1,
     QUEUE_CONSUMER_ATTACHMENT_SCHEMA_VERSION,
 };
 use anyhow::{anyhow, bail, Context};
@@ -312,6 +312,8 @@ struct Project {
     metadata: Value,
     do_classes: Vec<String>,
     sqlite_classes: Vec<String>,
+    /// The subset of `sqlite_classes` declared by `new_dolt_classes`.
+    dolt_classes: Vec<String>,
     crons: Vec<String>,
     has_workflows: bool,
     has_kv: bool,
@@ -504,11 +506,13 @@ impl Built {
                     Some("durable_object_namespace") => {
                         let class = binding.get("class_name").and_then(Value::as_str)?;
                         let sqlite = self.manifest.sqlite_classes.iter().any(|c| c == class);
+                        let dolt = self.manifest.dolt_classes.iter().any(|c| c == class);
                         Some((
                             format!("env.{name} ({class})"),
-                            match sqlite {
-                                true => "Durable Object (SQLite)".to_string(),
-                                false => "Durable Object".to_string(),
+                            match (dolt, sqlite) {
+                                (true, _) => "Durable Object (Dolt)".to_string(),
+                                (false, true) => "Durable Object (SQLite)".to_string(),
+                                (false, false) => "Durable Object".to_string(),
                             },
                         ))
                     }
@@ -687,6 +691,7 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
         main_module: project.entry.as_ref().map(|_| module_name.clone()),
         do_classes: project.do_classes,
         sqlite_classes: project.sqlite_classes,
+        dolt_classes: project.dolt_classes.clone(),
         modules: modules
             .iter()
             .map(|(name, bytes)| ModuleRef {
@@ -732,6 +737,9 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
             }
             if sqlite_vec {
                 features.push(FEATURE_SQLITE_VEC_V1.to_string());
+            }
+            if !project.dolt_classes.is_empty() {
+                features.push(FEATURE_DOLT_CELLS_V1.to_string());
             }
             if !wasm_names.is_empty() {
                 features.push(FEATURE_WASM_V1.to_string());
@@ -1386,7 +1394,7 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         bail!("an asset-only project cannot set `assets.run_worker_first`");
     }
 
-    let mut sqlite_classes = read_sqlite_classes(object)?;
+    let (mut sqlite_classes, dolt_classes) = read_class_migrations(object)?;
     if let Some(class) = sqlite_classes.iter().find(|class| is_reserved_class(class)) {
         bail!("`{class}` is a runtime class; remove it from `migrations`");
     }
@@ -1988,9 +1996,19 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         metadata.insert("queue_consumers".into(), json!(queue_consumers));
     }
     if !sqlite_classes.is_empty() {
-        metadata.insert(
-            "migrations".into(),
-            json!({ "new_sqlite_classes": sqlite_classes }),
+        let mut migrations = json!({ "new_sqlite_classes": sqlite_classes });
+        if !dolt_classes.is_empty() {
+            migrations["new_dolt_classes"] = json!(dolt_classes);
+        }
+        metadata.insert("migrations".into(), migrations);
+    }
+    if let Some(class) = dolt_classes
+        .iter()
+        .find(|class| !do_classes.iter().any(|declared| declared == *class))
+    {
+        bail!(
+            "Dolt class {class:?} is not a Durable Object class of this Worker; \
+             declare it in `durable_objects.bindings`"
         );
     }
 
@@ -2004,6 +2022,7 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         metadata: Value::Object(metadata),
         do_classes,
         sqlite_classes,
+        dolt_classes,
         crons,
         has_workflows: !workflows.is_empty(),
         has_kv: !kv_namespaces.is_empty(),
@@ -2353,23 +2372,41 @@ fn read_crons(project: &Map<String, Value>) -> anyhow::Result<Vec<String>> {
     Ok(crons)
 }
 
-fn read_sqlite_classes(project: &Map<String, Value>) -> anyhow::Result<Vec<String>> {
+/// The config's class migrations: every storage-backed class (SQLite and
+/// Dolt, in declaration order) and the Dolt subset.
+///
+/// `new_dolt_classes` sits beside `new_sqlite_classes` in the same
+/// migration list. A Dolt class is a SQLite-API class (it has
+/// `ctx.storage.sql`) whose cells are DoltLite prolly stores, so it is also
+/// reported among the SQLite classes, and the Dolt list is the engine tag.
+/// A class is introduced once, by one key: its engine is fixed when it is
+/// created, so naming it under both keys (in one migration or two) is
+/// refused rather than reinterpreted.
+fn read_class_migrations(
+    project: &Map<String, Value>,
+) -> anyhow::Result<(Vec<String>, Vec<String>)> {
     let Some(value) = project.get("migrations") else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     };
     let migrations = value
         .as_array()
         .ok_or_else(|| anyhow!("config `migrations` must be an array"))?;
     let mut tags = BTreeSet::new();
-    let mut classes = BTreeSet::new();
+    let mut classes = BTreeMap::new();
     let mut result = Vec::new();
+    let mut dolt = Vec::new();
     for (index, migration) in migrations.iter().enumerate() {
         let migration = migration
             .as_object()
             .ok_or_else(|| anyhow!("config `migrations[{index}]` must be an object"))?;
         let unsupported = migration
             .keys()
-            .filter(|key| !matches!(key.as_str(), "tag" | "new_sqlite_classes"))
+            .filter(|key| {
+                !matches!(
+                    key.as_str(),
+                    "tag" | "new_sqlite_classes" | "new_dolt_classes"
+                )
+            })
             .cloned()
             .collect::<Vec<_>>();
         if !unsupported.is_empty() {
@@ -2389,25 +2426,36 @@ fn read_sqlite_classes(project: &Map<String, Value>) -> anyhow::Result<Vec<Strin
         if !tags.insert(tag.to_string()) {
             bail!("config has duplicate migration tag {tag:?}");
         }
-        let Some(value) = migration.get("new_sqlite_classes") else {
-            continue;
-        };
-        let new_classes = value.as_array().ok_or_else(|| {
-            anyhow!("config `migrations[{index}].new_sqlite_classes` must be an array")
-        })?;
-        for (class_index, class) in new_classes.iter().enumerate() {
-            let class = class.as_str().filter(|class| !class.is_empty()).ok_or_else(|| {
-                anyhow!(
-                    "config `migrations[{index}].new_sqlite_classes[{class_index}]` must be a non-empty string"
-                )
-            })?;
-            if !classes.insert(class.to_string()) {
-                bail!("SQLite class {class:?} is introduced by more than one migration");
+        for (key, engine) in [("new_sqlite_classes", "SQLite"), ("new_dolt_classes", "Dolt")] {
+            let Some(value) = migration.get(key) else {
+                continue;
+            };
+            let new_classes = value
+                .as_array()
+                .ok_or_else(|| anyhow!("config `migrations[{index}].{key}` must be an array"))?;
+            for (class_index, class) in new_classes.iter().enumerate() {
+                let class = class.as_str().filter(|class| !class.is_empty()).ok_or_else(|| {
+                    anyhow!(
+                        "config `migrations[{index}].{key}[{class_index}]` must be a non-empty string"
+                    )
+                })?;
+                if let Some(previous) = classes.insert(class.to_string(), engine) {
+                    if previous != engine {
+                        bail!(
+                            "class {class:?} is introduced as both a {previous} and a {engine} \
+                             class; a class's storage engine is fixed when it is created"
+                        );
+                    }
+                    bail!("{engine} class {class:?} is introduced by more than one migration");
+                }
+                result.push(class.to_string());
+                if engine == "Dolt" {
+                    dolt.push(class.to_string());
+                }
             }
-            result.push(class.to_string());
         }
     }
-    Ok(result)
+    Ok((result, dolt))
 }
 
 fn read_asset_project(

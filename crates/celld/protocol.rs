@@ -23,6 +23,12 @@ pub struct Manifest {
     pub do_classes: Vec<String>,
     /// Subset of `do_classes` that are SQLite-backed (from migrations).
     pub sqlite_classes: Vec<String>,
+    /// Subset of `sqlite_classes` whose cells are Dolt cells: a DoltLite
+    /// prolly store with commits, branches and merge
+    /// (`migrations[].new_dolt_classes`). A class's engine is fixed when the
+    /// class is created; see `docs/services/dolt-cells.md`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dolt_classes: Vec<String>,
     pub modules: Vec<ModuleRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assets: Option<AssetManifestRef>,
@@ -67,6 +73,7 @@ pub const SUPPORTED_DEPLOYMENT_FEATURES: &[&str] = &[
     FEATURE_CONTAINERS_V1,
     FEATURE_CRON_V1,
     FEATURE_D1_V1,
+    FEATURE_DOLT_CELLS_V1,
     FEATURE_KV_V1,
     FEATURE_QUEUES_V1,
     FEATURE_SQLITE_VEC_V1,
@@ -77,6 +84,10 @@ pub const SUPPORTED_DEPLOYMENT_FEATURES: &[&str] = &[
 ];
 
 pub const FEATURE_ASSETS_V1: &str = "assets-v1";
+/// A deployment with Dolt classes (`migrations[].new_dolt_classes`).
+/// Required because a node without the Dolt engine would create a stock
+/// SQLite file for the class, and the class's engine is fixed at creation.
+pub const FEATURE_DOLT_CELLS_V1: &str = "dolt-cells-v1";
 /// A deployment with `containers`. Required because a build without the
 /// container engine would load the manifest, build a `ctx` with no
 /// `container`, and fail only when the object first touches it.

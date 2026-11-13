@@ -30,6 +30,8 @@ pub mod replica;
 pub mod replica_compactor;
 pub mod replica_url;
 pub mod wal;
+#[cfg(windows)]
+mod winfs;
 
 /// The unstable implementation API supports external verification tools.
 ///

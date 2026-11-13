@@ -10,6 +10,25 @@ Facts are from source reads of celld `8702f6d`, DoltLite 0.11.29 (pinned in
 Chronolog) and Chronolog `simplify-core` `a8e5954`. Anything marked *spike*
 has not been run yet.
 
+## Status (2026-11-13)
+
+| Piece | State | Where |
+| --- | --- | --- |
+| DoltLite 0.51.11 as the only SQLite | merged | `vendor/libsqlite3-sys` |
+| Test harness: E2E, fleet fault injection, simulator | merged | `tests/e2e`, `tests/fleet`, `crates/logic-sim` |
+| Dolt cells: storage, replication, `ctx.storage.dolt`, fork | merged | `docs/services/dolt-cells.md` |
+| Deterministic execution: per-connection context patch, executor, `dolt.execute`, engine digest | merged | `crates/dolt-exec`, patch 0002 |
+| Codegen confinement, `--no-implicit-deadlines` | merged | `docs/fork/codegen.md`, `docs/fork/deadlines.md` |
+| Residency hold | merged | `docs/services/residency.md` |
+| Egress hook | merged | `docs/services/egress.md` |
+| Iroh P2P binding | merged | `docs/services/p2p.md` |
+| Vibestore local bucket | merged | `docs/fork/vibestore.md` |
+| Fixes for the upstream defects the harness found | in progress | `docs/fork/upstream-findings.md` |
+| V8 inspector, Windows port | in progress | |
+| Chronolog `transport-iroh` | done (Chronolog branch `feature/transport-iroh`) | |
+| Chronolog node on the fork | in progress (Chronolog branch `feature/celld-host`) | |
+| Vibestudio compatibility audit | in progress (Vibestudio branch `audit/celld-compat`) | |
+
 ## 1. Goal
 
 There is one runtime, and it has two kinds of cell:

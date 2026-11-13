@@ -203,10 +203,18 @@ impl FileSystem for DirectFileSystem {
     }
 
     fn sync_all(&self, path: &Path) -> io::Result<()> {
+        // Windows cannot fsync a read-only handle or a directory the Unix way.
+        #[cfg(windows)]
+        return crate::winfs::sync_path(path);
+        #[cfg(not(windows))]
         std::fs::File::open(path)?.sync_all()
     }
 
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        // MoveFileEx replace + write-through, then a flush of the result.
+        #[cfg(windows)]
+        return crate::winfs::rename(from, to);
+        #[cfg(not(windows))]
         std::fs::rename(from, to)
     }
 

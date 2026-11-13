@@ -90,6 +90,7 @@ pub fn install_signer() -> anyhow::Result<String> {
     Ok(public_key)
 }
 
+#[cfg_attr(not(unix), allow(dead_code))] // only the Unix re-exec path reads it
 pub(crate) fn reexec_signer_secret() -> anyhow::Result<String> {
     let signer = INSTALLED_SIGNER
         .get()

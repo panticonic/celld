@@ -1,0 +1,4 @@
+# The DoltLite pin and patch set are hashed into the engine digest and
+# applied by a line-based patcher: keep them LF on every platform.
+vendor/libsqlite3-sys/doltlite/** text eol=lf
+*.patch text eol=lf

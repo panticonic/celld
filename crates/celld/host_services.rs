@@ -149,7 +149,9 @@ impl HostServices {
                 let open_fds = std::fs::read_dir("/proc/self/fd")
                     .map(|entries| entries.count() as u64)
                     .unwrap_or_default();
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(windows)]
+                let open_fds = crate::winos::open_handle_count();
+                #[cfg(not(any(target_os = "linux", windows)))]
                 let open_fds = 0;
 
                 #[cfg(unix)]
@@ -164,7 +166,9 @@ impl HostServices {
                         0
                     }
                 };
-                #[cfg(not(unix))]
+                #[cfg(windows)]
+                let fd_limit = crate::winos::HANDLE_LIMIT;
+                #[cfg(not(any(unix, windows)))]
                 let fd_limit = 0;
 
                 HostMetricsSample {
@@ -236,7 +240,13 @@ fn process_cpu_ticks() -> Option<u64> {
     Some(fields.get(11)?.parse::<u64>().ok()? + fields.get(12)?.parse::<u64>().ok()?)
 }
 
-#[cfg(not(target_os = "linux"))]
+/// On Windows a "tick" is 100 ns (see `clock_ticks_per_second`).
+#[cfg(windows)]
+fn process_cpu_ticks() -> Option<u64> {
+    crate::winos::process_cpu_100ns()
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 fn process_cpu_ticks() -> Option<u64> {
     None
 }
@@ -250,7 +260,12 @@ fn clock_ticks_per_second() -> u64 {
         .unwrap_or(100)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn clock_ticks_per_second() -> u64 {
+    10_000_000
+}
+
+#[cfg(not(any(unix, windows)))]
 fn clock_ticks_per_second() -> u64 {
     100
 }

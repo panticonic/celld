@@ -59,6 +59,7 @@ pub(crate) mod dolt_cell;
 pub mod drain_token;
 pub mod engine_api;
 pub mod env_vars;
+pub mod fsname;
 #[cfg(celld_internal_tests)]
 #[allow(clippy::disallowed_methods)]
 #[doc(hidden)]
@@ -106,6 +107,8 @@ pub mod wake_entry;
 pub mod wake_format;
 pub mod ws_client;
 pub mod ws_registry;
+#[cfg(windows)]
+pub mod winos;
 
 #[cfg(all(test, celld_internal_tests))]
 mod composed_simulation {

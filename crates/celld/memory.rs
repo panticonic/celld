@@ -156,7 +156,14 @@ pub fn resident_bytes() -> u64 {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// The working set: the pages of this process currently in physical memory,
+/// the Windows counterpart of the Linux and macOS resident set.
+#[cfg(windows)]
+pub fn resident_bytes() -> u64 {
+    crate::winos::working_set_bytes()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub fn resident_bytes() -> u64 {
     0
 }
@@ -164,6 +171,14 @@ pub fn resident_bytes() -> u64 {
 /// The pages jemalloc holds but nothing uses: `stats.resident` less
 /// `stats.allocated`. The statistics are cached, so the epoch must advance
 /// first. A failure gives zero, which makes the sample equal to RSS.
+#[cfg(windows)]
+pub fn allocator_slack_bytes() -> u64 {
+    // The system heap exposes no allocated-versus-resident split, so the
+    // sample equals the working set, as the doc above describes for a failure.
+    0
+}
+
+#[cfg(not(windows))]
 pub fn allocator_slack_bytes() -> u64 {
     if tikv_jemalloc_ctl::epoch::advance().is_err() {
         return 0;
@@ -197,6 +212,12 @@ pub struct AllocatorStats {
 
 /// The allocator statistics after one epoch advance, or `None` when jemalloc
 /// cannot answer, so a broken allocator does not break `/state`.
+#[cfg(windows)]
+pub fn allocator_stats() -> Option<AllocatorStats> {
+    None
+}
+
+#[cfg(not(windows))]
 pub fn allocator_stats() -> Option<AllocatorStats> {
     tikv_jemalloc_ctl::epoch::advance().ok()?;
     Some(AllocatorStats {
@@ -325,6 +346,13 @@ fn trim_c_heap() {}
 /// logged rather than raised. It matters to an operator: without the thread,
 /// retention is never purged, and the absolute cap in `PressureConfig` is the
 /// only thing between the process and a kill by the operating system.
+#[cfg(windows)]
+pub fn tune_allocator() {
+    // The Windows build uses the system allocator (jemalloc has no MSVC
+    // support); the heap returns freed pages by itself.
+}
+
+#[cfg(not(windows))]
 pub fn tune_allocator() {
     if let Err(error) = tikv_jemalloc_ctl::background_thread::write(true) {
         tracing::warn!(

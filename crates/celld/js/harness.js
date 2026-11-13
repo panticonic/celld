@@ -1501,6 +1501,118 @@ class DoltStorage {
       list() { return dolt._op("branchList", {}); },
       current() { return dolt._op("currentBranch", {}); },
     });
+    // Dolt remotes between cells (docs/services/dolt-remotes.md) exist only
+    // for a class that declared `celld.durable_objects.<Class>.doltRemotes`;
+    // a facet has the declaration of the class of its id.
+    if (__cell.doltRemotes[storage._state?.id?._className] === true) {
+      this.remote = Object.freeze({
+        add(name, remote) {
+          if (remote === null || typeof remote !== "object")
+            throw new TypeError("dolt.remote.add: expected { id, token }");
+          let ref = remote.ref;
+          if (remote.id instanceof DurableObjectId) ref = remote.id._scope();
+          else if (typeof remote.id === "string") ref = remote.id;
+          return dolt._blob("remoteAdd", {
+            name: String(name), ref: ref == null ? null : String(ref),
+            token: remote.token == null ? null : String(remote.token),
+          });
+        },
+        remove(name) { return dolt._blob("remoteRemove", { name: String(name) }); },
+        list() { return dolt._blob("remoteList", {}); },
+        // The remote-tracking branches fetches brought: [{ name: "origin/main", hash }].
+        branches() { return dolt._blob("remoteBranches", {}); },
+        // The source's side: let a holder fetch and push.
+        grant(options = {}) {
+          return dolt._blob("grant", {
+            label: options.label ?? null, fetch: !!options.fetch,
+            push: options.push ?? [], branches: options.branches ?? [],
+            peer: options.peer ?? null, expiresAt: options.expiresAt ?? null,
+          });
+        },
+        grants() { return dolt._blob("grants", {}); },
+        revoke(id) { return dolt._blob("revoke", { id: String(id) }); },
+        // The source's handler for a carrier of your own: one request in, one
+        // response out (a refusal is a response).
+        serve(request, options = {}) {
+          return dolt._blob("remoteServe", { peer: options.peer ?? null },
+            __doltBytes(request, "request"));
+        },
+      });
+    }
+  }
+  _blob(op, args, bytes) {
+    this._storage._assertTransactionActive("dolt." + op);
+    if (this._storage._transactionControl)
+      throw new Error("ctx.storage.dolt cannot run inside a storage transaction");
+    if (this._state && this._state._aborted)
+      throw new Error("the Durable Object was reset; this event's storage is closed");
+    try {
+      const out = __dolt_blob_op(this._scope, op, JSON.stringify(args), bytes ?? null);
+      return typeof out === "string" ? JSON.parse(out) : out;
+    } catch (error) {
+      const code = /\[(ERR_[A-Z_]+)\]/.exec(String(error && error.message));
+      if (code !== null && error && typeof error === "object") error.code = code[1];
+      throw error;
+    }
+  }
+  _needRemotes(method) {
+    if (this.remote === undefined)
+      throw new Error(
+        "dolt." + method + ": Dolt remotes need `celld.durable_objects.<Class>.doltRemotes: true` " +
+        "in the deployment config");
+  }
+  // The carrier of a request to the remote `name`: the caller's own
+  // (`options.transport`, an async function from request bytes to response
+  // bytes) or an internal request to the source's Durable Object.
+  _carrier(name, options) {
+    if (options.transport !== undefined) {
+      if (typeof options.transport !== "function")
+        throw new TypeError("dolt: `transport` must be an async function (bytes) => bytes");
+      return async (bytes) => __doltBytes(await options.transport(bytes), "the transport's response");
+    }
+    const { ref } = this._blob("remoteTarget", { name: String(name) });
+    return (bytes) => __doltRemoteCarrier(ref, bytes);
+  }
+  // fetch(name, { branches?, transport? }) brings the branches the remote's
+  // grant shows (or those matching `branches`, patterns with `*`) into the
+  // remote-tracking branches `name/branch`, and changes nothing else.
+  // Resolves to { remote, branches: { branch: hash }, bytes }.
+  async fetch(name, options = {}) {
+    this._needRemotes("fetch");
+    const carrier = this._carrier(name, options);
+    const request = this._blob("remoteRequest", {
+      name: String(name), op: "fetch", branches: options.branches ?? [],
+    });
+    const response = await carrier(request);
+    return this._blob("remoteApply", { name: String(name), op: "fetch" }, response);
+  }
+  // push(name, branch, { to?, transport? }): the remote moves `to` (default
+  // the same name) to this cell's committed `branch`, if that is a
+  // fast-forward and the grant allows it. Resolves to
+  // { branch, hash, created, unchanged }; a refusal throws with `code`
+  // ERR_DOLT_NON_FAST_FORWARD (fetch, merge, push again),
+  // ERR_DOLT_TARGET_DIRTY or ERR_DOLT_REMOTE_FORBIDDEN.
+  async push(name, branch, options = {}) {
+    this._needRemotes("push");
+    const carrier = this._carrier(name, options);
+    const refs = await carrier(this._blob("remoteRequest", { name: String(name), op: "refs" }));
+    const request = this._blob("remoteRequest", {
+      name: String(name), op: "push", branch: String(branch),
+      to: options.to == null ? null : String(options.to),
+    }, refs);
+    const response = await carrier(request);
+    return this._blob("remoteApply", { name: String(name), op: "push" }, response);
+  }
+  // pull(name, branch, { resolve?, message?, author?, date?, transport? })
+  // is fetch and then merge of `name/branch` into the checked-out branch, with
+  // the F1 resolver when `resolve` is given. Resolves to the merge's result
+  // plus `fetched`.
+  async pull(name, branch, options = {}) {
+    this._needRemotes("pull");
+    const { transport, ...mergeOptions } = options;
+    const fetched = await this.fetch(name, { branches: [String(branch)], transport });
+    const merged = this.merge(String(name) + "/" + String(branch), mergeOptions);
+    return { ...merged, fetched };
   }
   _op(op, args) {
     this._storage._assertTransactionActive("dolt." + op);
@@ -6281,6 +6393,48 @@ const __objectExportHere = async (scope, url) => {
     return new Response(String(error && error.message || error), { status: 409 });
   }
 };
+// ---- Dolt remotes between cells (docs/services/dolt-remotes.md) ------------
+// The built-in carrier of the three requests (refs, fetch, push): an internal
+// POST to the source's Durable Object, answered here by the runtime before the
+// object's instance, through the same dispatch as any stub call (so a cell on
+// another node is reached over the inter-node channel). The body is one
+// request, the response one response, in the framing `dolt_remote.rs` defines.
+const __DOLT_REMOTE_URL = "https://celld.internal/__celld/dolt-remote";
+const __doltRemoteCarrier = async (ref, bytes) => {
+  const separator = ref.indexOf(":");
+  const namespace = makeNamespace(ref.slice(0, separator));
+  const stub = namespace.get(namespace.idFromString(ref.slice(separator + 1)));
+  const response = await stub.fetch(__DOLT_REMOTE_URL, { method: "POST", body: bytes });
+  const body = new Uint8Array(await response.arrayBuffer());
+  if (response.status !== 200) {
+    const error = new Error("dolt.remote: " + new TextDecoder().decode(body));
+    error.code = response.headers.get("x-celld-code") ?? "ERR_DOLT_REMOTE_FAILED";
+    throw error;
+  }
+  return body;
+};
+const __doltRemoteServeHere = async (scope, body, bodyStreamId) => {
+  const refuse = (status, code, message) =>
+    new Response(message, { status, headers: { "x-celld-code": code } });
+  try {
+    await __settleRestore(scope);
+    const className = scope.slice(0, scope.indexOf(":"));
+    if (__cell.doltRemotes[className] !== true)
+      return refuse(403, "ERR_DOLT_REMOTE_FORBIDDEN",
+        "the class " + className + " does not serve Dolt remotes " +
+        "(celld.durable_objects." + className + ".doltRemotes)");
+    if (!__dolt_enabled(scope))
+      return refuse(404, "ERR_DOLT_REMOTE_NOT_FOUND", "the object is not a Dolt cell");
+    const bytes = bodyStreamId !== null
+      ? new Uint8Array(await new Response(new CelldHttpBodyStream(bodyStreamId)).arrayBuffer())
+      : body;
+    // In this object's own turn, on its own connection: what it reads is
+    // committed, and the response leaves through its output gate.
+    return new Response(__dolt_blob_op(scope, "remoteServe", "{}", bytes), { status: 200 });
+  } catch (error) {
+    return refuse(500, "ERR_DOLT_REMOTE_FAILED", String(error && error.message || error));
+  }
+};
 const __objectAdoptHere = async (scope, url) => {
   const params = new URL(url).searchParams;
   const staging = String(params.get("from") ?? "");
@@ -6320,6 +6474,14 @@ const __dispatchTo = __celld.__dispatchTo = async (
   // `env.NS.fork()` asks the source object to publish its own image, and
   // `env.NS.restore()` asks the target to adopt a staging copy. Both are
   // answered by the runtime, never by the object's fetch handler.
+  if (method === "POST" && url === __DOLT_REMOTE_URL) {
+    const actorEvent = __beginActorEvent(scope);
+    try {
+      return await __doltRemoteServeHere(scope, body, bodyStreamId);
+    } finally {
+      __endActorEvent(actorEvent);
+    }
+  }
   if (method === "POST" && typeof url === "string") {
     const internal = url.startsWith("https://celld.internal" + __OBJECT_EXPORT_PATH + "?")
       ? __objectExportHere
@@ -6993,6 +7155,8 @@ const __cell = __celld.__cell = {
   workflows: {},
   containers: {},
   residency: {},
+  // Class name -> true, from the deployment's `celld` block (`doltRemotes`).
+  doltRemotes: {},
   // Class name -> { NAME: value }, from the deployment's `celld` block.
   classSecrets: {},
   instances: {},

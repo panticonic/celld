@@ -525,6 +525,26 @@ pub(super) fn inject_residency(
     Ok(())
 }
 
+/// `__cell.doltRemotes`: the classes whose cells may use Dolt remotes
+/// (`ctx.storage.dolt.remote`, `fetch`, `pull`, `push`) and are answered when a
+/// peer holding one of their grants asks. A Dolt facet has the declaration of
+/// its root's class, which the harness reads from the root's scope.
+pub(super) fn inject_dolt_remotes(
+    scope: &mut v8::PinScope,
+    config: &super::WorkerConfig,
+) -> Result<()> {
+    let cell = cell_state(scope)?;
+    let map = v8::Object::new(scope);
+    let value = v8::Boolean::new(scope, true);
+    for class in &config.dolt_remotes_classes {
+        let key = v8::String::new(scope, class).ok_or_else(|| anyhow!("dolt remotes class"))?;
+        map.set(scope, key.into(), value.into());
+    }
+    let key = v8::String::new(scope, "doltRemotes").unwrap();
+    cell.set(scope, key.into(), map.into());
+    Ok(())
+}
+
 /// `__cell.classSecrets`: for each class that declares secrets, the values it
 /// alone sees. Built with V8 values, not source text, so a secret is in no
 /// script the isolate compiles or the inspector lists.

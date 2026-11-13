@@ -560,6 +560,7 @@ impl Generation {
                 containers,
                 residency_classes,
                 dolt_local,
+                dolt_remotes_classes,
                 class_secrets,
                 fence_image: fence,
                 codegen_classes,
@@ -581,6 +582,7 @@ impl Generation {
                     .with_containers(containers)
                     .with_residency_classes(residency_classes)
                     .with_dolt_local(dolt_local)
+                    .with_dolt_remotes_classes(dolt_remotes_classes)
                     .with_class_secrets(class_secrets)
                     .with_deployment(&version)
                     .with_generation(id),

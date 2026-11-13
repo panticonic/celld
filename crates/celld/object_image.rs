@@ -379,6 +379,9 @@ pub(crate) fn strip_identity(connection: &Connection, scope: &str) -> anyhow::Re
     // The tables a Dolt class declared local belong to the identity too.
     if crate::dolt_cell::is_prolly(connection) {
         crate::dolt_cell::empty_local_tables(connection)?;
+        // A new identity holds no remote, has granted nothing, and carries
+        // no tracking branch of remotes it never had (`dolt_remote.rs`).
+        crate::dolt_remote::strip(connection)?;
     }
     if table_exists(connection, "_cf_KV")?
         && columns(connection, "_cf_KV")?.iter().any(|c| c == "scope")

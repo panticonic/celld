@@ -93,7 +93,14 @@ pub const SUPPORTED_DEPLOYMENT_FEATURES: &[&str] = &[
     FEATURE_RESIDENCY_V1,
     FEATURE_CLASS_SECRETS_V1,
     FEATURE_DOLT_LOCAL_V1,
+    FEATURE_DOLT_REMOTES_V1,
 ];
+
+/// A deployment whose `celld` block declares `doltRemotes`. Required because a
+/// build that does not know them would load the manifest and run the class
+/// without `ctx.storage.dolt.remote`, and would refuse (as an unknown
+/// internal request) the fetches and pushes its peers send.
+pub const FEATURE_DOLT_REMOTES_V1: &str = "dolt-remotes-v1";
 
 /// A deployment whose `celld` block declares class secrets. Required because
 /// a build that does not know them would load the manifest and run the class

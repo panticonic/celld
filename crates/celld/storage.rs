@@ -4637,6 +4637,63 @@ pub fn dolt_op(scope: &str, op: &str, args: &serde_json::Value) -> Result<serde_
     result
 }
 
+/// Run one Dolt remote operation (`crate::dolt_remote`): the operations that
+/// take or answer bytes (a pack, a request, a response) as well as JSON. It
+/// is `dolt_op` for those: synchronous, in the handler's turn, outside any
+/// storage transaction, and a change counts as a write for the output gate
+/// (a fetch installs a pack, a push moves a branch, a grant is a row), so the
+/// next output waits for a durability proof.
+pub(crate) fn dolt_blob_op(
+    scope: &str,
+    op: &str,
+    args: &serde_json::Value,
+    input: &[u8],
+) -> Result<crate::dolt_remote::Output, String> {
+    require_sql_healthy(scope)?;
+    if !crate::dolt_remote::handles(op) {
+        return Err(format!("unknown dolt operation {op:?}"));
+    }
+    let result = dbs(|d| {
+        let mut dbs = d.borrow_mut();
+        let Some(cell) = dbs.get_mut(scope) else {
+            return Err(format!("no database for {scope}"));
+        };
+        if cell.engine != celld_ltx::Engine::Dolt {
+            return Err("ctx.storage.dolt is only available on Dolt cells \
+                        (declare the class in migrations[].new_dolt_classes) \
+                        and Dolt facets (FacetStartupOptions.celld.storage)"
+                .to_string());
+        }
+        if !cell.connection.is_autocommit() {
+            return Err("a Dolt operation cannot run inside a storage transaction".to_string());
+        }
+        let mutates = crate::dolt_remote::mutates(op, args, input);
+        if mutates {
+            // Counted before it runs: a failed fetch can still have moved refs.
+            cell.dolt_mutations += 1;
+        }
+        let connection = &cell.connection;
+        let result = without_sql_authorizer(connection, || {
+            let result = crate::dolt_remote::run(connection, op, args, input);
+            if cell.replicated_wake && mutates {
+                if let Err(error) = crate::dolt_cell::ensure_wake_triggers(connection) {
+                    return Err(error.context("restore the wake triggers"));
+                }
+            }
+            result
+        });
+        if crate::dolt_remote::changes_schema(op, input) {
+            connection.flush_prepared_statement_cache();
+        }
+        result.map_err(|error| format!("{error:#}"))
+    });
+    if crate::dolt_remote::changes_schema(op, input) {
+        close_sql_statement_cache(scope);
+        cells(|c| c.schema_cookies.borrow_mut().remove(scope));
+    }
+    result
+}
+
 /// Run one `ctx.storage.dolt` operation inside the caller's open storage
 /// transaction (`transactionSync(fn, { commit })`, `dolt.merge` with a
 /// resolver). The harness opened the transaction, so the connection must not

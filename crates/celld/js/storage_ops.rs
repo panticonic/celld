@@ -1261,6 +1261,45 @@ pub(super) fn op_dolt_op(
     }
 }
 
+/// `__dolt_blob_op(cell, op, argsJson, bytes?)` — a Dolt remote operation
+/// (`crate::dolt_remote`) that takes or answers bytes. The answer is a JSON
+/// string or a `Uint8Array`, as the operation says. A failure throws
+/// `dolt.<op>: ...`.
+pub(super) fn op_dolt_blob_op(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let cell = args.get(0).to_rust_string_lossy(scope);
+    let op = args.get(1).to_rust_string_lossy(scope);
+    let input: serde_json::Value =
+        match serde_json::from_str(&args.get(2).to_rust_string_lossy(scope)) {
+            Ok(input) => input,
+            Err(error) => return throw_storage_error(scope, &format!("dolt.{op}"), error),
+        };
+    let bytes = if args.get(3).is_null_or_undefined() {
+        Vec::new()
+    } else {
+        match view_bytes(args.get(3)) {
+            Some(bytes) => bytes,
+            None => {
+                return throw_storage_error(
+                    scope,
+                    &format!("dolt.{op}"),
+                    "the input is not a typed array",
+                )
+            }
+        }
+    };
+    match storage::dolt_blob_op(&cell, &op, &input, &bytes) {
+        Ok(crate::dolt_remote::Output::Json(value)) => {
+            rv.set(v8::String::new(scope, &value.to_string()).unwrap().into())
+        }
+        Ok(crate::dolt_remote::Output::Bytes(out)) => rv.set(bytes_value(scope, out)),
+        Err(error) => throw_storage_error(scope, &format!("dolt.{op}"), error),
+    }
+}
+
 pub(super) fn throw_storage_error(
     scope: &mut v8::PinScope,
     operation: &str,

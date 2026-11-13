@@ -1993,6 +1993,9 @@ pub struct WorkerConfig {
     /// Empty for a loaded worker (a Dolt facet declares its own in its startup
     /// options).
     pub dolt_local: std::collections::BTreeMap<String, Vec<String>>,
+    /// The Dolt classes the deployment declared `doltRemotes` for: the classes
+    /// whose cells have `ctx.storage.dolt.remote` and answer remote requests.
+    pub dolt_remotes_classes: Vec<String>,
     /// The opened secrets of the classes that declared
     /// `"celld": { "durable_objects": { "Class": { "secrets": [...] } } }`.
     /// Empty for a loaded worker.
@@ -2145,6 +2148,7 @@ impl WorkerConfig {
             containers: Vec::new(),
             residency_classes: Vec::new(),
             dolt_local: Default::default(),
+            dolt_remotes_classes: Vec::new(),
             class_secrets: Default::default(),
             residency_grant: None,
             generation: 0,
@@ -2182,6 +2186,11 @@ impl WorkerConfig {
 
     pub fn with_dolt_local(mut self, declared: std::collections::BTreeMap<String, Vec<String>>) -> Self {
         self.dolt_local = declared;
+        self
+    }
+
+    pub fn with_dolt_remotes_classes(mut self, classes: Vec<String>) -> Self {
+        self.dolt_remotes_classes = classes;
         self
     }
 
@@ -6191,6 +6200,7 @@ impl Worker {
             inject_workflows(scope, script_name, &config.workflow_bindings)?;
             inject_containers(scope, &config.containers)?;
             inject_residency(scope, &config)?;
+            inject_dolt_remotes(scope, &config)?;
             inject_class_secrets(scope, &config)?;
             inject_kv_limits(scope)?;
             bootstrap::inject_deadline_policy(scope)?;
@@ -7036,6 +7046,7 @@ ops! { OP_NAMES, install_op_functions,
         "__sql_database_size" => storage_ops::op_sql_database_size,
         "__dolt_enabled" => storage_ops::op_dolt_enabled,
         "__dolt_op" => storage_ops::op_dolt_op,
+        "__dolt_blob_op" => storage_ops::op_dolt_blob_op,
         "__object_export" => object_ops::op_object_export,
         "__object_quiesced" => object_ops::op_object_quiesced,
         "__object_restore_begin" => object_ops::op_object_restore_begin,
@@ -13064,7 +13075,7 @@ mod v8_strings;
 use bootstrap::{
     adopt_cell, adopt_embedded_cell, begin_event_context, build_env, end_event_context,
     harness_env, inject_compatibility_flags, inject_containers, inject_crons, inject_kv_limits,
-    inject_class_secrets, inject_namespace_keys, inject_queue_config, inject_residency,
+    inject_class_secrets, inject_dolt_remotes, inject_namespace_keys, inject_queue_config, inject_residency,
     inject_routing,
     inject_storage_compatibility, inject_workflows, install_harness, install_prelude,
     populate_cf_exports, register_class, register_entrypoints, validate_workflow_classes,

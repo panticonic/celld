@@ -45,11 +45,20 @@ pub struct ClassCapabilities {
     /// tables").
     #[serde(default, rename = "doltLocal", skip_serializing_if = "Option::is_none")]
     pub dolt_local: Option<Vec<String>>,
+    /// `ctx.storage.dolt.remote`, `fetch`, `pull` and `push` for a Dolt class,
+    /// and answering the requests of those who hold a grant from one of its
+    /// objects (`docs/services/dolt-remotes.md`).
+    #[serde(default, rename = "doltRemotes", skip_serializing_if = "Option::is_none")]
+    pub dolt_remotes: Option<bool>,
 }
 
 impl ClassCapabilities {
     pub fn residency(&self) -> bool {
         self.residency == Some(true)
+    }
+
+    pub fn dolt_remotes(&self) -> bool {
+        self.dolt_remotes == Some(true)
     }
 }
 
@@ -104,6 +113,29 @@ impl CelldDeclaration {
         Ok(())
     }
 
+    /// The classes declared `doltRemotes: true`, in name order.
+    pub fn dolt_remotes_classes(&self) -> Vec<String> {
+        self.durable_objects
+            .iter()
+            .filter(|(_, caps)| caps.dolt_remotes())
+            .map(|(class, _)| class.clone())
+            .collect()
+    }
+
+    /// Refuse `doltRemotes` on a class that is not a Dolt class: there is no
+    /// history to fetch or push.
+    pub fn check_dolt_remotes(&self, dolt_classes: &[String]) -> anyhow::Result<()> {
+        for class in self.dolt_remotes_classes() {
+            if !dolt_classes.iter().any(|dolt| *dolt == class) {
+                bail!(
+                    "config `celld.durable_objects.{class}.doltRemotes` is declared for a class \
+                     that is not a Dolt class; name {class:?} in `migrations[].new_dolt_classes`"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// The classes declared `residency: true`, in name order.
     pub fn residency_classes(&self) -> Vec<String> {
         self.durable_objects
@@ -130,7 +162,7 @@ pub fn read(
         .map_err(|error| anyhow!("{error}"))
         .context(
             "config `celld` is invalid (known: `durable_objects`, whose classes take \
-             `residency`, `codegen`, `secrets` and `doltLocal`)",
+             `residency`, `codegen`, `secrets`, `doltLocal` and `doltRemotes`)",
         )?;
     for (class, caps) in &declaration.durable_objects {
         if crate::deploy::is_reserved_class(class) {

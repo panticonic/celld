@@ -181,3 +181,45 @@ fn a_corrupt_or_short_pack_installs_nothing() {
     )
     .unwrap();
 }
+
+#[test]
+fn tracking_branches_can_be_moved_onto_branches_and_removed() {
+    let (_dir, a, b) = pair();
+    a.execute("INSERT INTO notes VALUES (2, 'two')", []).unwrap();
+    let tip = commit(&a, "two");
+    let delta = pack(&a, "main", &text(&b, "SELECT dolt_pack_haves()"));
+    call(&b, "SELECT dolt_remote('add', 'src', 'celld:C:1')");
+    call(&b, &format!("SELECT dolt_pack_fetch('src', {})", blob_literal(&delta)));
+    call(&b, &format!("SELECT dolt_pack_fetch('pushed-1', {})", blob_literal(&delta)));
+    let base = text(&b, "SELECT dolt_hashof('main')");
+    assert_eq!(text(&b, &format!("SELECT dolt_merge_base('{base}', '{tip}')")), base);
+    // A new branch at a fetched commit, then moved forward.
+    call(&b, &format!("SELECT dolt_branch('feature', '{base}')"));
+    call(&b, &format!("SELECT dolt_branch('-f', 'feature', '{tip}')"));
+    assert_eq!(text(&b, "SELECT dolt_hashof('feature')"), tip);
+    // The active branch moves with a hard reset.
+    call(&b, &format!("SELECT dolt_reset('--hard', '{tip}')"));
+    assert_eq!(text(&b, "SELECT dolt_hashof('main')"), tip);
+    assert_eq!(
+        b.query_row("SELECT count(*) FROM notes", [], |row| row.get::<_, i64>(0)).unwrap(),
+        2
+    );
+    // Removing the remote removes its tracking branches.
+    call(&b, "SELECT dolt_remote('remove', 'src')");
+    let tracked: Vec<String> = b
+        .prepare("SELECT name FROM dolt_remote_branches ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(tracked, vec!["remotes/pushed-1/main"]);
+    // A tracking branch with no remote entry goes when its remote is
+    // declared and removed (there is no flag that deletes one directly).
+    call(&b, "SELECT dolt_remote('add', 'pushed-1', 'celld:pushed')");
+    call(&b, "SELECT dolt_remote('remove', 'pushed-1')");
+    let left: i64 = b
+        .query_row("SELECT count(*) FROM dolt_remote_branches", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(left, 0);
+}

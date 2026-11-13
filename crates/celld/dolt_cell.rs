@@ -123,11 +123,11 @@ pub(crate) fn is_prolly(connection: &Connection) -> bool {
         .unwrap_or(false)
 }
 
-fn active_branch(connection: &Connection) -> anyhow::Result<String> {
+pub(crate) fn active_branch(connection: &Connection) -> anyhow::Result<String> {
     Ok(connection.query_row("SELECT active_branch()", [], |row| row.get(0))?)
 }
 
-fn table_exists(connection: &Connection, name: &str) -> anyhow::Result<bool> {
+pub(crate) fn table_exists(connection: &Connection, name: &str) -> anyhow::Result<bool> {
     Ok(connection
         .query_row(
             "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?1",
@@ -286,7 +286,7 @@ pub(crate) fn ensure_wake_triggers(connection: &Connection) -> anyhow::Result<()
 
 /// A branch name the API accepts: no leading `-` (DoltLite would read it as
 /// a flag), and a conservative character set.
-fn branch_name(value: &Value, what: &str) -> anyhow::Result<String> {
+pub(crate) fn branch_name(value: &Value, what: &str) -> anyhow::Result<String> {
     let name = value
         .as_str()
         .ok_or_else(|| anyhow!("{what} must be a string"))?;
@@ -330,7 +330,7 @@ fn optional_string(args: &Value, key: &str) -> anyhow::Result<Option<String>> {
 }
 
 /// Run a dolt function whose argument list is built at run time.
-fn call(connection: &Connection, function: &str, args: &[String]) -> anyhow::Result<Value> {
+pub(crate) fn call(connection: &Connection, function: &str, args: &[String]) -> anyhow::Result<Value> {
     let placeholders = (1..=args.len())
         .map(|index| format!("?{index}"))
         .collect::<Vec<_>>()
@@ -348,14 +348,14 @@ fn call(connection: &Connection, function: &str, args: &[String]) -> anyhow::Res
     })
 }
 
-fn sqlite_message(error: &rusqlite::Error) -> String {
+pub(crate) fn sqlite_message(error: &rusqlite::Error) -> String {
     match error {
         rusqlite::Error::SqliteFailure(_, Some(message)) => message.clone(),
         other => other.to_string(),
     }
 }
 
-fn rows(connection: &Connection, sql: &str, params: &[String]) -> anyhow::Result<Vec<Value>> {
+pub(crate) fn rows(connection: &Connection, sql: &str, params: &[String]) -> anyhow::Result<Vec<Value>> {
     let mut statement = connection.prepare(sql)?;
     let names: Vec<String> = statement
         .column_names()
@@ -894,7 +894,7 @@ pub(crate) fn run_with(
     }
 }
 
-fn hash_of(connection: &Connection, rev: &str) -> anyhow::Result<String> {
+pub(crate) fn hash_of(connection: &Connection, rev: &str) -> anyhow::Result<String> {
     match call(connection, "dolt_hashof", &[rev.to_string()])? {
         Value::String(hash) => Ok(hash),
         other => bail!("dolt_hashof returned {other}"),
@@ -1114,6 +1114,7 @@ pub(crate) fn fork_image(
             // The class's local tables are read back from the rules, which a
             // reset to an older commit can drop, so they are emptied first.
             empty_local_tables(&connection)?;
+            crate::dolt_remote::strip(&connection)?;
             if let Some(at) = at {
                 reset_hard(&connection, at)?;
             }

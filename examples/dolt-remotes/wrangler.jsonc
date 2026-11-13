@@ -1,0 +1,17 @@
+{
+  "name": "dolt-remotes",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": {
+    "bindings": [
+      { "name": "GRAPH", "class_name": "Graph" },
+      { "name": "PLAIN", "class_name": "Plain" }
+    ]
+  },
+  // Both are Dolt classes. Only Graph declares doltRemotes: its objects can
+  // name other objects as remotes (fetch, pull, push), and answer the holders
+  // of the grants they issue. Plain has no ctx.storage.dolt.remote and
+  // answers every remote request with 403.
+  "migrations": [{ "tag": "v1", "new_dolt_classes": ["Graph", "Plain"] }],
+  "celld": { "durable_objects": { "Graph": { "doltRemotes": true } } }
+}

@@ -4196,6 +4196,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                     containers: Vec::new(),
                     residency_classes: Vec::new(),
                     dolt_local: Default::default(),
+                    dolt_remotes_classes: Vec::new(),
                     class_secrets: Default::default(),
                     fence_image: None,
                     // The local-script equivalent of `celld.durable_objects`.

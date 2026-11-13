@@ -1,0 +1,79 @@
+name: Windows
+
+# Verifies the x86_64-pc-windows-msvc port on a real Windows runner. The port
+# is documented in docs/fork/windows.md; everything marked "untested" there is
+# exercised here. `cargo xwin check` on Linux proves only that it compiles.
+
+on:
+  push:
+    branches:
+      - feature/windows
+      - unified-fork
+  pull_request:
+    paths:
+      - "crates/**"
+      - "vendor/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_VERSION: 1.98.1
+  CARGO_TERM_COLOR: always
+  # The DoltLite amalgamation is one 21 MB C file; a debug build of it is fine.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  windows:
+    name: Build, test and smoke (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Long paths for checkout
+        run: git config --system core.longpaths true
+
+      - uses: actions/checkout@v6
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install $env:RUST_VERSION --profile minimal --target x86_64-pc-windows-msvc
+          rustup default $env:RUST_VERSION
+          rustc -vV
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The build needs no sh, patch or sha256sum: the DoltLite fetch, hash
+      # check and patching run in libsqlite3-sys's build script. curl.exe and
+      # clang-cl (for the C amalgamation) are on the runner image.
+      - name: Build celld
+        run: cargo build -p celld --locked
+
+      - name: Engine and spike tests
+        run: cargo test -p celld-dolt-exec -p doltlite-spike --locked
+
+      - name: Windows port unit tests
+        run: cargo test -p celld --lib --locked -- fsname
+
+      - name: Smoke, examples/hello
+        run: ./.github/windows-smoke.ps1 -Example hello -Expect 'Hello from cells'
+
+      - name: Smoke, examples/counter (Durable Object, SQLite cell)
+        run: ./.github/windows-smoke.ps1 -Example counter -Counter
+
+      # A hard kill of the supervisor must take the node with it (job object)
+      # and the next start must see the counter the first run committed.
+      # Informative until a first Windows run has confirmed the semantics.
+      - name: Smoke, counter survives a hard kill
+        continue-on-error: true
+        run: ./.github/windows-smoke.ps1 -Example counter -Counter -Restart

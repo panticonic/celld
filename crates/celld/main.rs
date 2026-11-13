@@ -51,6 +51,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 // acquisition. On a 16-core host jemalloc measured 20% more hello-world
 // throughput than glibc (mimalloc 11%), and returned the ~7% of the machine
 // that arena-lock sleeps reported as idle.
+//
+// Windows (MSVC) keeps the system allocator: jemalloc does not support it.
+#[cfg(not(windows))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
@@ -3873,6 +3876,8 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
         .or_else(|| std::env::var_os("CELLD_WATCH"))
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join(format!("celld-{}", std::process::id())));
+    // Windows: absolute, verbatim and length-checked (see `fsname::data_root`).
+    let data_dir = celld::fsname::data_root(data_dir)?;
     let mut deploy_agent = None;
     // The channel `POST /reload` and a managed notification nudge the pointer
     // watcher through. Without a deployment bucket the receiver is dropped
@@ -4839,8 +4844,8 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
     // A SIGTERM (systemd stop, `docker stop`, a Kubernetes pod delete) or a
     // SIGINT begins the same graceful shutdown as `POST /shutdown`, so the
     // orchestrator's ordinary stop drains and hands off instead of killing.
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    // On Windows the console control events stand in (`TerminationSignals`).
+    let mut termination = celld::startup::TerminationSignals::install()?;
     let (connection_drain_tx, connection_drain) = watch::channel(false);
     let shutdown_timing = celld::env_vars::shutdown_timing()?;
     let drain_ms = shutdown_timing.drain_no_progress_ms;
@@ -4988,8 +4993,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                 }));
             }
             mode = shutdown_rx.recv() => break mode.unwrap_or(ShutdownMode::Handoff),
-            _ = sigterm.recv() => break ShutdownMode::Handoff,
-            _ = sigint.recv() => break ShutdownMode::Handoff,
+            _ = termination.recv() => break ShutdownMode::Handoff,
             code = fence_rx.recv() => {
                 exit_flushed(code.unwrap_or(3));
             }

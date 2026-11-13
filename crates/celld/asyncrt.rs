@@ -234,9 +234,17 @@ pub fn fs() -> Arc<dyn celld_ltx::FileSystem> {
 }
 
 /// Return the maximum component length for the filesystem at `path`.
+#[cfg(unix)]
 pub fn filesystem_name_max(path: &std::path::Path) -> std::io::Result<Option<i64>> {
     let directory = std::fs::File::open(path)?;
     nix::unistd::fpathconf(&directory, nix::unistd::PathconfVar::NAME_MAX).map_err(Into::into)
+}
+
+/// Windows reports the volume's maximum component length in UTF-16 units. A
+/// cell scope is ASCII, so units and bytes agree.
+#[cfg(windows)]
+pub fn filesystem_name_max(path: &std::path::Path) -> std::io::Result<Option<i64>> {
+    crate::winos::volume_max_component_length(path).map(|length| Some(i64::from(length)))
 }
 
 pub fn wall_ms() -> i64 {

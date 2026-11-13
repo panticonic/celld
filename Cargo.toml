@@ -180,6 +180,20 @@ urlpattern = "=0.4.2"
 v8 = "152.1"
 # 1.0.10 drops the emSign ECC root, whose intermediate CA keys are public.
 webpki-roots = "1.0.10"
+# Windows port (docs/fork/windows.md): process memory, job objects, console
+# control events, file flushing and ACLs. Windows targets only.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }
 
 # DoltLite spike: the only SQLite in the binary is the DoltLite amalgamation.
 # rusqlite 0.31's `bundled` build of libsqlite3-sys 0.28 compiles it instead of

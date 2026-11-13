@@ -251,7 +251,7 @@ impl CellRuntime {
         self.facets
             .delete(
                 self.replication.as_ref(),
-                |cell| self.data_dir.join(cell),
+                |cell| self.data_dir.join(&*crate::fsname::cell_path(cell)),
                 root,
                 epoch,
                 names,
@@ -272,7 +272,7 @@ impl CellRuntime {
         // releases.
         let epoch = if self.replication.is_some() { epoch } else { 1 };
         self.data_dir
-            .join(cell)
+            .join(&*crate::fsname::cell_path(cell))
             .join("ltx")
             .join(format!("e{epoch}"))
             .join("db.sqlite")

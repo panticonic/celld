@@ -726,6 +726,15 @@ async fn start_node(
         .env("CELLD_INTERNAL_DEV_STORE", &store.database)
         .env("CELLD_WATCH", state.join("runtime"))
         .env("CELLD_NODE", format!("dev-{}", &project_hash[..12]))
+        // A stable p2p node id for the project, so peers can keep dialing the
+        // same id across `celld dev` restarts. An operator's own
+        // CELLD_P2P_KEY_FILE wins.
+        .env(
+            "CELLD_P2P_KEY_FILE",
+            std::env::var_os("CELLD_P2P_KEY_FILE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| state.join("p2p.key")),
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());

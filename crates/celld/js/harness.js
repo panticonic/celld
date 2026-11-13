@@ -5527,6 +5527,11 @@ const __dispatchTo = __celld.__dispatchTo = async (
   try {
     const dispatch = (async () => {
       const inst = await _readyInstance(scope);
+      // An inbound p2p stream arrives as an internal request carrying a
+      // one-time claim; it goes to `onp2pstream`, not to `fetch`. See p2p.js.
+      const accepted = __celld.__p2pAccept(
+        inst, url, scope, (fn) => __ctxRun(undefined, fn));
+      if (accepted !== undefined) return await accepted;
       return await __ctxRun(undefined, () => inst.fetch(
         __makeRequest(
           url,

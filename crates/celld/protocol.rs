@@ -76,6 +76,7 @@ pub const SUPPORTED_DEPLOYMENT_FEATURES: &[&str] = &[
     FEATURE_CRON_V1,
     FEATURE_D1_V1,
     FEATURE_KV_V1,
+    FEATURE_P2P_V1,
     FEATURE_QUEUES_V1,
     FEATURE_SQLITE_VEC_V1,
     FEATURE_R2_V1,
@@ -130,6 +131,12 @@ pub const FEATURE_WORKFLOWS_V1: &str = "workflows-v1";
 /// because its reserved class is in `do_classes` and the loader refuses a
 /// class it does not know.
 pub const FEATURE_KV_V1: &str = "kv-v1";
+
+/// A deployment with `p2p` bindings. A node without the Iroh endpoint would
+/// build an `env` with no binding on it and fail when the application first
+/// reaches for it, and would never accept the ALPN, so a peer's dial would
+/// fail on a node the developer is not watching.
+pub const FEATURE_P2P_V1: &str = "p2p-v1";
 
 /// A deployment with a Queue producer or consumer. A node without the broker
 /// would otherwise omit a producer binding or silently stop consuming.

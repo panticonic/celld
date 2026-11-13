@@ -18,8 +18,9 @@ use crate::protocol::{
     asset_blob_key, AssetConfig, AssetEntry, AssetIndex, AssetManifestRef, DeployPointer, Manifest,
     ModuleKind, ModuleRef, QueueConsumerAttachment, QueueConsumerConfig, QueueConsumerDeployment,
     Rollout, RunWorkerFirst, FEATURE_ASSETS_V1, FEATURE_CONTAINERS_V1, FEATURE_CRON_V1,
-    FEATURE_D1_V1, FEATURE_KV_V1, FEATURE_PYTHON_WORKERS_V1, FEATURE_QUEUES_V1, FEATURE_R2_V1,
-    FEATURE_RESIDENCY_V1, FEATURE_SQLITE_VEC_V1, FEATURE_WASM_V1, FEATURE_WORKFLOWS_V1,
+    FEATURE_D1_V1, FEATURE_KV_V1, FEATURE_P2P_V1, FEATURE_PYTHON_WORKERS_V1, FEATURE_QUEUES_V1,
+    FEATURE_R2_V1, FEATURE_RESIDENCY_V1, FEATURE_SQLITE_VEC_V1, FEATURE_WASM_V1,
+    FEATURE_WORKFLOWS_V1,
     QUEUE_CONSUMER_ATTACHMENT_SCHEMA_VERSION,
 };
 use anyhow::{anyhow, bail, Context};
@@ -55,6 +56,7 @@ const SUPPORTED_KEYS: &[&str] = &[
     "vars",
     "d1_databases",
     "kv_namespaces",
+    "p2p",
     "queues",
     "workflows",
     "r2_buckets",
@@ -318,6 +320,7 @@ struct Project {
     crons: Vec<String>,
     has_workflows: bool,
     has_kv: bool,
+    has_p2p: bool,
     queue_consumers: Vec<QueueConsumerConfig>,
     has_queues: bool,
     has_r2: bool,
@@ -548,6 +551,10 @@ impl Built {
                         let bucket = binding.get("bucket_name").and_then(Value::as_str)?;
                         Some((format!("env.{name} (R2)"), bucket.to_string()))
                     }
+                    Some("p2p") => {
+                        let alpn = binding.get("alpn").and_then(Value::as_str)?;
+                        Some((format!("env.{name} (P2P)"), format!("Iroh {alpn}")))
+                    }
                     Some("worker_loader") => Some((
                         format!("env.{name} (Worker Loader)"),
                         "Dynamic Workers".to_string(),
@@ -729,6 +736,9 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
             }
             if project.has_kv {
                 features.push(FEATURE_KV_V1.to_string());
+            }
+            if project.has_p2p {
+                features.push(FEATURE_P2P_V1.to_string());
             }
             if project.has_queues {
                 features.push(FEATURE_QUEUES_V1.to_string());
@@ -1593,6 +1603,7 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         do_classes.push(KV_CLASS.to_string());
         sqlite_classes.push(KV_CLASS.to_string());
     }
+    let has_p2p = read_p2p(object, &sqlite_classes, &mut bindings)?;
     let queues = match object.get("queues") {
         None => None,
         Some(Value::Object(queues)) => Some(queues),
@@ -2022,6 +2033,7 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         crons,
         has_workflows: !workflows.is_empty(),
         has_kv: !kv_namespaces.is_empty(),
+        has_p2p,
         has_queues: !queue_producers.is_empty() || !queue_consumers.is_empty(),
         queue_consumers,
         has_r2: !r2_buckets.is_empty(),
@@ -2616,6 +2628,91 @@ fn optional_asset_mode(
     Ok(value.to_string())
 }
 
+/// The `p2p` bindings: `{ "binding", "alpn", "accept": { "class", "name" } }`.
+///
+/// `accept` names the one Durable Object that receives the inbound streams of
+/// the binding's ALPN, by class and by the name its `getByName` would take. It
+/// is optional: a binding without it can dial out and accepts nothing.
+/// Returns whether any binding was declared.
+fn read_p2p(
+    object: &Map<String, Value>,
+    sqlite_classes: &[String],
+    bindings: &mut Vec<Value>,
+) -> anyhow::Result<bool> {
+    let entries = match object.get("p2p") {
+        None => return Ok(false),
+        Some(Value::Array(entries)) => entries.as_slice(),
+        Some(_) => bail!("config `p2p` must be an array"),
+    };
+    let mut accepted_alpns = BTreeSet::new();
+    for entry in entries {
+        let fields = entry
+            .as_object()
+            .ok_or_else(|| anyhow!("config `p2p` entries must be objects"))?;
+        if let Some(key) = fields
+            .keys()
+            .find(|key| !matches!(key.as_str(), "binding" | "alpn" | "accept"))
+        {
+            bail!(
+                "p2p binding declares `{key}`, which celld does not model; \
+                 celld models `binding`, `alpn` and `accept`"
+            );
+        }
+        let binding = fields
+            .get("binding")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("p2p binding has no `binding`"))?;
+        if !valid_binding(binding) {
+            bail!("invalid p2p binding name: {binding:?}");
+        }
+        let alpn = fields
+            .get("alpn")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("p2p binding {binding} has no `alpn`"))?;
+        if !crate::p2p::valid_alpn(alpn) {
+            bail!(
+                "p2p binding {binding} has an invalid `alpn` {alpn:?}: use 1 to 255 of \
+                 letters, digits and `- _ . / : +`"
+            );
+        }
+        let mut encoded = json!({ "type": "p2p", "name": binding, "alpn": alpn });
+        if let Some(accept) = fields.get("accept") {
+            let accept = accept
+                .as_object()
+                .ok_or_else(|| anyhow!("p2p binding {binding}: `accept` must be an object"))?;
+            if let Some(key) = accept
+                .keys()
+                .find(|key| !matches!(key.as_str(), "class" | "name"))
+            {
+                bail!("p2p binding {binding}: `accept` declares `{key}`; celld models `class` and `name`");
+            }
+            let class = accept
+                .get("class")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("p2p binding {binding}: `accept` has no `class`"))?;
+            let name = accept
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| anyhow!("p2p binding {binding}: `accept` has no `name`"))?;
+            if !sqlite_classes.iter().any(|known| known == class) {
+                bail!(
+                    "p2p binding {binding} accepts into class {class:?}, which is not in \
+                     `migrations[].new_sqlite_classes`"
+                );
+            }
+            // One ALPN has one acceptor on a node, so two bindings in one
+            // config cannot both claim it.
+            if !accepted_alpns.insert(alpn.to_string()) {
+                bail!("two p2p bindings accept the same `alpn` {alpn:?}");
+            }
+            encoded["accept"] = json!({ "class": class, "name": name });
+        }
+        bindings.push(encoded);
+    }
+    Ok(!entries.is_empty())
+}
+
 fn valid_binding(binding: &str) -> bool {
     binding.len() <= 128
         && binding
@@ -3067,6 +3164,72 @@ fn strip_jsonc(source: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod p2p_config {
+    use super::*;
+
+    fn read(config: Value, classes: &[&str]) -> anyhow::Result<(bool, Vec<Value>)> {
+        let classes: Vec<String> = classes.iter().map(|class| class.to_string()).collect();
+        let mut bindings = Vec::new();
+        let declared = read_p2p(config.as_object().unwrap(), &classes, &mut bindings)?;
+        Ok((declared, bindings))
+    }
+
+    #[test]
+    fn a_binding_with_accept_is_encoded_for_the_manifest() {
+        let (declared, bindings) = read(
+            json!({ "p2p": [{
+                "binding": "P2P", "alpn": "chronolog/1",
+                "accept": { "class": "Node", "name": "node" }
+            }] }),
+            &["Node"],
+        )
+        .unwrap();
+        assert!(declared);
+        assert_eq!(
+            bindings,
+            vec![json!({
+                "type": "p2p", "name": "P2P", "alpn": "chronolog/1",
+                "accept": { "class": "Node", "name": "node" }
+            })]
+        );
+        let parsed = crate::p2p::Binding::from_manifest(&bindings[0]).unwrap();
+        assert_eq!(parsed.accept.unwrap().name, "node");
+    }
+
+    #[test]
+    fn a_dial_only_binding_needs_no_class() {
+        let (_, bindings) =
+            read(json!({ "p2p": [{ "binding": "P2P", "alpn": "x/1" }] }), &[]).unwrap();
+        assert!(bindings[0].get("accept").is_none());
+    }
+
+    #[test]
+    fn mistakes_are_refused() {
+        let bad = |config: Value| read(config, &["Node"]).unwrap_err().to_string();
+        assert!(bad(json!({ "p2p": {} })).contains("must be an array"));
+        assert!(bad(json!({ "p2p": [{ "binding": "P2P" }] })).contains("no `alpn`"));
+        assert!(bad(json!({ "p2p": [{ "binding": "1x", "alpn": "a" }] }))
+            .contains("invalid p2p binding"));
+        assert!(
+            bad(json!({ "p2p": [{ "binding": "P", "alpn": "a b" }] })).contains("invalid `alpn`")
+        );
+        assert!(
+            bad(json!({ "p2p": [{ "binding": "P", "alpn": "a", "relay": "x" }] }))
+                .contains("does not model")
+        );
+        assert!(bad(json!({ "p2p": [{
+            "binding": "P", "alpn": "a", "accept": { "class": "Other", "name": "n" }
+        }] }))
+        .contains("not in"));
+        assert!(bad(json!({ "p2p": [
+            { "binding": "P", "alpn": "a", "accept": { "class": "Node", "name": "n" } },
+            { "binding": "Q", "alpn": "a", "accept": { "class": "Node", "name": "n" } },
+        ] }))
+        .contains("same `alpn`"));
+    }
 }
 
 #[cfg(all(test, celld_internal_tests))]

@@ -135,6 +135,7 @@ the Cloudflare service.
 - [Queues](services/queues.md)
 - [D1](services/d1.md)
 - [R2](services/r2.md)
+- [P2P (Iroh)](services/p2p.md)
 - [Workflows](services/workflows.md)
 - [Cron Triggers](services/cron-triggers.md)
 - [Static assets](services/static-assets.md)

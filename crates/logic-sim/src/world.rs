@@ -823,6 +823,8 @@ impl World {
             owner_log_recovery_attempts: 30,
             alarm_resident_ms: 5_000,
             idle_evict_ms: self.cfg.idle_evict_ms,
+            hold_grace_ms: 5_000,
+            max_holds_per_cell: 16,
             pressure: Default::default(),
         };
         n.state = Some(State::new(n.id.clone(), config));
@@ -1306,7 +1308,9 @@ impl World {
             Effect::Complete { request, result } => {
                 self.on_complete(node, request, result, immediate)
             }
-            Effect::CompleteWorker { .. } | Effect::CloseWebSocket { .. } => {}
+            Effect::CompleteWorker { .. }
+            | Effect::CloseWebSocket { .. }
+            | Effect::RevokeHolds { .. } => {}
             Effect::Halt { .. } => {
                 self.nodes[node].shell.halting = true;
             }
@@ -3412,6 +3416,7 @@ fn timer_slot(timer: &Timer) -> String {
         Timer::OwnerLogRecoveryRetry { cell, generation } => {
             format!("recovery:{cell}:{generation}")
         }
+        Timer::HoldRevokeGrace { cell, generation } => format!("holdgrace:{cell}:{generation}"),
     }
 }
 

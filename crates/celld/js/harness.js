@@ -1951,6 +1951,63 @@ class DurableObjectStorage {
     if (control.pending.size === 0) control.rollback();
     control.rolledBack = true;
   }
+  // celld extension: a synchronous transaction whose begin and end are
+  // separate calls, for adapters (a node:sqlite `DatabaseSync` shim) that
+  // receive BEGIN and COMMIT as separate statements. It is transactionSync()
+  // without the callback: the handle must be committed or rolled back in the
+  // same turn, LIFO with any other transaction, and it is rolled back (and
+  // the error logged) if it is still open when the turn's microtasks run.
+  beginTransactionSync() {
+    this._assertTransactionActive("beginTransactionSync");
+    const root = this._transactionRoot;
+    if (this._transactionDepth === 0 && root._activeSyncTransaction !== null)
+      return root._activeSyncTransaction.beginTransactionSync();
+    const savepoint = this._transactionStart();
+    const control = this._newTransactionControl(savepoint);
+    const view = this._transactionView(control);
+    const previousSync = root._activeSyncTransaction;
+    root._activeSyncTransaction = view;
+    let open = true;
+    const close = () => {
+      open = false;
+      root._activeSyncTransaction = previousSync;
+    };
+    const rollback = (cause) => {
+      if (!control.rolledBack) {
+        try {
+          this._transactionRollback(savepoint);
+          control.rolledBack = true;
+        } catch (rollbackError) {
+          close();
+          this._abortAfterFailedRollback(rollbackError, cause);
+        }
+      }
+      close();
+    };
+    queueMicrotask(() => {
+      if (!open) return;
+      const error = new Error(
+        "beginTransactionSync: the transaction was still open at the end of its turn; rolled back");
+      console.error(error.message);
+      rollback(error);
+    });
+    return Object.freeze({
+      commit: () => {
+        if (!open) throw new Error("beginTransactionSync: the transaction is already closed");
+        if (root._activeSyncTransaction !== view)
+          throw new Error("beginTransactionSync: a nested transaction is still open");
+        if (!control.rolledBack) {
+          this._transactionCommit(savepoint);
+          control.committed = true;
+        }
+        close();
+      },
+      rollback: () => {
+        if (!open) throw new Error("beginTransactionSync: the transaction is already closed");
+        rollback(new Error("rolled back"));
+      },
+    });
+  }
   transactionSync(f) {
     this._assertTransactionActive("transactionSync");
     const root = this._transactionRoot;

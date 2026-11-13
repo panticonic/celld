@@ -3697,8 +3697,16 @@ __celld.__makeLoader = () => {
         throw new TypeError(
           `Unknown celld option ${JSON.stringify(key)}; celld accepts ` +
           `${known.join(", ")}.`);
-      if (typeof celld[key] !== "boolean")
+      if (key === "egressIdentity") {
+        // The identity this loaded worker presents to the node's egress
+        // proxy, appended to its loader's (docs/services/egress.md).
+        if (typeof celld[key] !== "string" || celld[key].length === 0 ||
+            new TextEncoder().encode(celld[key]).length > 512)
+          throw new TypeError(
+            "celld.egressIdentity must be a non-empty string of at most 512 bytes.");
+      } else if (typeof celld[key] !== "boolean") {
         throw new TypeError(`celld.${key} must be a boolean.`);
+      }
     }
     if (celld.residency === true) {
       const colon = caller === undefined ? -1 : caller.indexOf(":");

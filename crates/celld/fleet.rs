@@ -1029,13 +1029,19 @@ fn service_bindings(manifest: &Manifest) -> Vec<(String, String, Option<String>)
         .collect()
 }
 
-fn worker_vars(manifest: &Manifest) -> Vec<(String, String)> {
-    bindings(manifest, "plain_text")
-        .filter_map(|binding| {
-            Some((
-                binding.get("name")?.as_str()?.to_string(),
-                binding.get("text")?.as_str()?.to_string(),
-            ))
-        })
-        .collect()
+fn worker_vars(manifest: &Manifest) -> Vec<(String, crate::engine_api::VarValue)> {
+    use crate::engine_api::VarValue;
+    let text = bindings(manifest, "plain_text").filter_map(|binding| {
+        Some((
+            binding.get("name")?.as_str()?.to_string(),
+            VarValue::Text(binding.get("text")?.as_str()?.to_string()),
+        ))
+    });
+    let json = bindings(manifest, "json").filter_map(|binding| {
+        Some((
+            binding.get("name")?.as_str()?.to_string(),
+            VarValue::Json(binding.get("json")?.to_string()),
+        ))
+    });
+    text.chain(json).collect()
 }

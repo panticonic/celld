@@ -244,7 +244,7 @@ Credentials come from the standard AWS credential chain, from Google\n\
 Application Default Credentials for a gs:// bucket, or from an Azure storage\n\
 account key, managed identity, or workload identity for an az:// bucket.\n\n\
 Worker projects require `esbuild` on PATH; asset-only projects do not. Static\n\
-assets, service bindings, and string vars are supported. Routes are not; use\n\
+assets, service bindings, and vars (strings or JSON) are supported. Routes are not; use\n\
 Wrangler for route configuration.\n\
 A running node polls the deployment pointer and adopts the new version in\n\
 place; nothing restarts."
@@ -565,6 +565,10 @@ impl Built {
                     )),
                     Some("plain_text") => Some((
                         format!("env.{name} (Text)"),
+                        "Environment Variable".to_string(),
+                    )),
+                    Some("json") => Some((
+                        format!("env.{name} (JSON)"),
                         "Environment Variable".to_string(),
                     )),
                     _ => None,
@@ -1904,14 +1908,22 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         }));
     }
     let mut vars = BTreeMap::new();
+    // Wrangler's `vars` take any JSON value; a non-string one becomes a
+    // `json` binding the Worker sees parsed.
+    let mut json_vars: BTreeMap<&str, &Value> = BTreeMap::new();
     match object.get("vars") {
         None => {}
         Some(Value::Object(object)) => {
             for (name, value) in object {
-                let value = value
-                    .as_str()
-                    .ok_or_else(|| anyhow!("var binding {name} must be a string"))?;
-                vars.insert(name.as_str(), value);
+                match value {
+                    Value::String(text) => {
+                        vars.insert(name.as_str(), text.as_str());
+                    }
+                    Value::Null => bail!("var binding {name} must not be null"),
+                    other => {
+                        json_vars.insert(name.as_str(), other);
+                    }
+                }
             }
         }
         Some(_) => bail!("config `vars` must be an object"),
@@ -1919,7 +1931,7 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
     // An asset-only project has no Worker to hand a variable to, so a
     // `.dev.vars` or `.env` beside it is residue, not a binding the guard below
     // should refuse in the config's name.
-    let declared_vars = !vars.is_empty();
+    let declared_vars = !vars.is_empty() || !json_vars.is_empty();
     if main.is_some() {
         match overrides {
             VarOverrides::None => {}
@@ -1960,6 +1972,20 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
             "type": "plain_text",
             "name": name,
             "text": value,
+        }));
+    }
+    for (name, value) in &json_vars {
+        if !valid_binding(name) {
+            bail!("invalid var binding name: {name:?}");
+        }
+        // A `.dev.vars` or `.env` entry of the same name overrides it as text.
+        if vars.contains_key(name) {
+            continue;
+        }
+        bindings.push(json!({
+            "type": "json",
+            "name": name,
+            "json": value,
         }));
     }
     if main.is_none()

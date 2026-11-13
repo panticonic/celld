@@ -1944,7 +1944,7 @@ pub struct WorkerConfig {
     /// `fetch` and provide only `queue`.
     declares_queue_consumer: bool,
     workflow_bindings: Vec<WorkflowBinding>,
-    vars: Vec<(String, String)>,
+    vars: Vec<(String, crate::engine_api::VarValue)>,
     node: String,
     /// The worker's non-main modules, so the main module can import siblings.
     modules: Vec<(String, ModuleSource)>,

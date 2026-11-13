@@ -53,6 +53,20 @@ Every method is synchronous, like `ctx.storage.sql`, and throws on failure.
 | `hashOf(ref)` | the commit hash of a branch, tag, hash, or `HEAD~n` |
 | `status()` | the uncommitted changes to application tables |
 | `gc()` | compacts the store (see [Storage and replication](#storage-and-replication)) |
+| `execute(program, context, { log? })` | runs one deterministic program (Chronolog Spec 10) as its own transaction: `{ outcome: "accepted" }` or `{ outcome: "rejected", code, statementIndex }`. `context` is `{ nowMs, seed, actor?, schemaAdmin?, limits? }`; `'now'`, `random()`, `localtime` and the actor are pinned for the program. With `log: { sql, bindings? }`, that statement runs after the program in the same transaction, as application SQL, and may name `:outcome`, `:rejection_code` and `:failing_statement_index`. An operational failure throws |
+| `query(sql, bindings?, { limits?, maxRows? })` | one read-only statement under the local-read profile and a step budget, `{ columns, rows }` with exact storage classes: INTEGER is a `bigint`, REAL a number, BLOB a `Uint8Array`. A refusal throws an error whose `code` is `SQL_PROFILE_VIOLATION`, `SQL_STEP_LIMIT`, `SQL_RESULT_LIMIT`, ... |
+| `engineDigest()` | the digest of the engine build and execution profile; it changes whenever execution semantics could |
+
+Values passed to `execute` and `query` keep SQLite's storage classes: a safe
+integer or a `bigint` is INTEGER, any other number is REAL, a one-element
+`Float64Array` is REAL even when integral, bytes are BLOB. Programs cannot read
+or write celld's `_cf_*` tables.
+
+On every cell, `ctx.storage.beginTransactionSync()` returns `{ commit(),
+rollback() }`: `transactionSync()` without the callback, for adapters such as a
+`node:sqlite` shim that receive BEGIN and COMMIT as separate calls. The handle
+must be closed in the same turn; one still open when the turn's microtasks run
+is rolled back.
 
 `env.REPO.fork(sourceId, { at? })` returns a new id whose object starts with a
 copy of the source: every branch and its history, with the checked-out branch

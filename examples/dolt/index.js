@@ -80,6 +80,32 @@ export class Repo {
       }
       case "gc":
         return Response.json({ gc: dolt.gc() });
+      case "query": {
+        // Exact local reads: INTEGER comes back as a bigint, so it is
+        // rendered as a string here, and typeof shows the storage class.
+        let result;
+        try {
+          result = dolt.query(q("sql"));
+        } catch (error) {
+          return Response.json({ error: error.code ?? String(error.message) });
+        }
+        return Response.json({
+          columns: result.columns,
+          rows: result.rows.map((row) =>
+            row.map((v) => (typeof v === "bigint" ? { int: String(v) } : v instanceof Uint8Array ? { blob: v.length } : v))),
+        });
+      }
+      case "txn": {
+        // beginTransactionSync(): separate begin and commit/rollback calls.
+        this.sql.exec("CREATE TABLE IF NOT EXISTS txn_probe (x INTEGER)");
+        const kept = this.ctx.storage.beginTransactionSync();
+        this.sql.exec("INSERT INTO txn_probe VALUES (1)");
+        kept.commit();
+        const dropped = this.ctx.storage.beginTransactionSync();
+        this.sql.exec("INSERT INTO txn_probe VALUES (2)");
+        dropped.rollback();
+        return Response.json({ rows: this.sql.exec("SELECT x FROM txn_probe ORDER BY x").toArray() });
+      }
       case "exec": {
         // Deterministic programs (Chronolog Spec 10): POST a JSON body
         // { program, context }; the answer is the outcome plus the rows a
@@ -98,7 +124,14 @@ export class Repo {
           for (const binding of step.bindings ?? []) binding.value = value(binding.value);
         if (typeof context.actor === "string")
           context.actor = value({ t: "blob", v: context.actor });
-        const outcome = dolt.execute(program, context);
+        const options = {};
+        if (url.searchParams.get("log"))
+          options.log = {
+            sql: "INSERT INTO exec_log(outcome, code, idx) VALUES (:outcome, :rejection_code, :failing_statement_index)",
+          };
+        if (options.log)
+          this.sql.exec("CREATE TABLE IF NOT EXISTS exec_log (outcome TEXT, code TEXT, idx INTEGER)");
+        const outcome = dolt.execute(program, context, options);
         const rows = probe ? this.sql.exec(probe).toArray() : [];
         return Response.json({ outcome, rows, digest: dolt.engineDigest() });
       }

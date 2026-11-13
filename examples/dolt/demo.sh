@@ -97,6 +97,13 @@ H1=$(get "/commit?repo=ex1&message=m&author=A%20%3Ca%40x%3E&date=1700000000000" 
 H2=$(get "/commit?repo=ex2&message=m&author=A%20%3Ca%40x%3E&date=1700000000000" | jq -r .hash)
 check "replica commit hashes" "{\"a\":\"$H1\",\"b\":\"$H2\"}"        '.a == .b and (.a | length) == 40'
 
+check "exec with log row"    "$(post "/exec?repo=ex1&log=1" "{$REJ,$CTX,\"probe\":\"SELECT outcome, code, idx FROM exec_log\"}")" \
+  '.outcome.outcome == "rejected" and .rows[0].outcome == "rejected" and .rows[0].code == "assert:nope" and .rows[0].idx == 1'
+check "exact local query"    "$(get "/query?repo=ex1&sql=SELECT%20big,%20x%20FROM%20ledger")" \
+  '.rows[0][0].int == "9007199254740993" and .rows[0][1] == 1'
+check "query is read-only"   "$(get "/query?repo=ex1&sql=DELETE%20FROM%20ledger")"       '.error == "SQL_PROFILE_VIOLATION"'
+check "begin/commit/rollback" "$(get "/txn?repo=ex1")"                     '.rows == [{"x":1}]'
+
 echo "-- restart (local resume)"
 stop
 start

@@ -31,7 +31,9 @@ use celld_ltx::client::epochs::EpochChain;
 use celld_ltx::object_store::ObjectStore;
 use celld_ltx::replica;
 use celld_ltx::replica_compactor::{CompactionResult, ReplicaCompactor};
+use celld_ltx::CellStore;
 use celld_ltx::Db;
+use celld_ltx::DoltStore;
 use celld_ltx::HostTaskError;
 use celld_ltx::LtxHost;
 use celld_ltx::ObjectStoreClient;
@@ -2312,7 +2314,11 @@ impl LtxRepl {
             // Consumed by the interlock before the fold; the field stays
             // on the options because the core's claim still names it.
             prior: _,
+            engine,
         } = options;
+        // A Dolt cell's chain is downloaded whole: the paged VFS serves
+        // SQLite pages, and DoltLite reads its chunk file directly.
+        let allow_paged = allow_paged && engine == celld_ltx::Engine::Sqlite;
         {
             let _close_gate = self.replica_close_gate.lock().unwrap();
             anyhow::ensure!(
@@ -2590,16 +2596,25 @@ impl LtxRepl {
         // or schema setup runs. An earlier write can hide a torn WAL header and
         // let capture resume from a stale LTX cursor after a crash.
         let (db, mut seed, marker) = asyncrt::blocking(move || {
-            let open_db = |ltx_host: LtxHost| match vfs_name.as_deref() {
-                Some(vfs_name) => Db::open_with_host_and_vfs(&dst_, ltx_host, vfs_name),
-                None => Db::open_with_host(&dst_, ltx_host),
+            let open_db = |ltx_host: LtxHost| -> celld_ltx::Result<Box<dyn CellStore>> {
+                match (engine, vfs_name.as_deref()) {
+                    (celld_ltx::Engine::Dolt, _) => {
+                        Ok(Box::new(DoltStore::open(&dst_, ltx_host)?))
+                    }
+                    (celld_ltx::Engine::Sqlite, Some(vfs_name)) => Ok(Box::new(
+                        Db::open_with_host_and_vfs(&dst_, ltx_host, vfs_name)?,
+                    )),
+                    (celld_ltx::Engine::Sqlite, None) => {
+                        Ok(Box::new(Db::open_with_host(&dst_, ltx_host)?))
+                    }
+                }
             };
             #[cfg(celld_internal_tests)]
             let mut db = crate::fault::with_connection_role("celld_ltx_db", || open_db(ltx_host))?;
             #[cfg(not(celld_internal_tests))]
             let mut db = open_db(ltx_host)?;
             if let Some(pages) = truncate_pages {
-                db.truncate_page_n = pages;
+                db.set_truncate_page_n(pages);
             }
             let marker = match continuation {
                 Some((txid, commit)) => Some((txid, db.seed_continuation(txid, commit)?)),
@@ -2651,7 +2666,7 @@ impl LtxRepl {
                 "computed restore plan"
             );
         }
-        let mut replica = Replica::new(db, client.clone());
+        let mut replica = Replica::new_boxed(db, client.clone());
         if let Some(pos) = seed {
             replica.seed_pos(pos);
         }
@@ -5515,7 +5530,7 @@ fn close_replica_or_warn(handle: &CellHandle, cell: &str, epoch: u64) {
 
 fn managed_db_mut(
     replica: &mut Option<Replica<SharedObjectStoreClient>>,
-) -> Option<&mut celld_ltx::Db> {
+) -> Option<&mut (dyn CellStore + 'static)> {
     replica.as_mut()?.db_mut()
 }
 

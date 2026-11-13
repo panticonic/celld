@@ -945,6 +945,7 @@ async fn load_worker_at_pointer(
             src,
             script_name: script_name.clone(),
             do_classes: manifest.do_classes,
+            dolt_classes: manifest.dolt_classes,
             bindings: do_bindings,
             r2_bindings,
             d1_bindings,

@@ -2082,6 +2082,11 @@ fn validate_managed_class_migrations(manifest: &Manifest) -> anyhow::Result<()> 
             }
         })
         .collect::<anyhow::Result<std::collections::BTreeSet<_>>>()?;
+    if !manifest.dolt_classes.is_empty() {
+        return Err(anyhow!(
+            "managed deployments do not support Dolt classes; deploy with `celld deploy`"
+        ));
+    }
     let mut declared_sqlite = std::collections::BTreeSet::new();
     for class in &manifest.sqlite_classes {
         if class.is_empty() {

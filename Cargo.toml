@@ -52,6 +52,7 @@ axum = { version = "0.7", features = ["multipart"] }
 base64 = "0.22"
 bytes = "1"
 celld-dolt-exec = { path = "crates/dolt-exec" }
+blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 celld-logic = { path = "crates/logic" }
 celld-ltx = { path = "crates/ltx" }
 chrono = { version = "0.4", default-features = false, features = ["std"] }

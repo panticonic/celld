@@ -477,6 +477,7 @@ name = "celld-ltx"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "blake3",
  "bytes",
  "chrono",
  "crc-fast",

@@ -144,6 +144,9 @@ pub struct ActivationOptions<'a> {
     /// was released or absent, which the release path already proved
     /// durable.
     pub prior: Option<String>,
+    /// The cell's storage engine, which picks its capture store
+    /// (`celld_ltx::CellStore`). A Dolt cell never restores paged.
+    pub engine: celld_ltx::Engine,
 }
 
 pub struct ActivationResult {

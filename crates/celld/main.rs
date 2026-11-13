@@ -4079,6 +4079,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                 src: source,
                 script_name,
                 do_classes,
+                dolt_classes: Vec::new(),
                 bindings,
                 r2_bindings,
                 d1_bindings,

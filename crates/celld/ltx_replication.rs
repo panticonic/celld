@@ -59,6 +59,7 @@ impl Replication {
         cell: &str,
         spec: &celld_logic::RestoreSpec,
         allow_paged: bool,
+        engine: celld_ltx::Engine,
     ) -> anyhow::Result<(PathBuf, bool, Option<String>)> {
         let options = ActivationOptions {
             cell,
@@ -67,6 +68,7 @@ impl Replication {
             took_over: spec.took_over,
             resume_local: spec.resume_local,
             prior: spec.prior.clone(),
+            engine,
         };
         let activated = self.ltx.activate_with(options, allow_paged).await?;
         Ok((activated.path, activated.restored, activated.vfs))

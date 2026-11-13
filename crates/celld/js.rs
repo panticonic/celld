@@ -1901,6 +1901,8 @@ pub struct WorkerConfig {
     /// A script name is caller-controlled, so it cannot prove this origin.
     origin: WorkerOrigin,
     do_classes: Vec<String>,
+    /// The subset of `do_classes` whose cells are Dolt cells.
+    dolt_classes: Vec<String>,
     bindings: Vec<(String, String)>,
     /// `r2_buckets`: (environment name, bucket name). The bucket name is
     /// the key space the binding owns inside the fleet bucket; see [[r2]].
@@ -2054,6 +2056,7 @@ impl WorkerConfig {
             src,
             script_name,
             do_classes,
+            dolt_classes,
             bindings,
             r2_bindings,
             d1_bindings,
@@ -2085,6 +2088,7 @@ impl WorkerConfig {
             script_name,
             origin: WorkerOrigin::Deployment,
             do_classes,
+            dolt_classes,
             bindings,
             r2_bindings,
             d1_bindings,
@@ -2160,6 +2164,15 @@ impl WorkerConfig {
     /// Whether cells of `class` supervise a container.
     pub fn container_class(&self, class: &str) -> bool {
         self.containers.iter().any(|spec| spec.class_name == class)
+    }
+
+    /// The storage engine of a Durable Object class's cells.
+    pub fn class_engine(&self, class: &str) -> celld_ltx::Engine {
+        if self.dolt_classes.iter().any(|dolt| dolt == class) {
+            celld_ltx::Engine::Dolt
+        } else {
+            celld_ltx::Engine::Sqlite
+        }
     }
 
     /// Stamp this Worker with the application generation it serves.
@@ -2274,6 +2287,8 @@ pub struct CellStorage<'a> {
     /// The activation's paged VFS, when its restore paged. The file at `path`
     /// is then sparse; opening it without this VFS reads holes as data.
     pub vfs: Option<&'a str>,
+    /// The storage engine of the cell's class.
+    pub engine: celld_ltx::Engine,
 }
 
 pub struct Worker {
@@ -6927,6 +6942,9 @@ ops! { OP_NAMES, install_op_functions,
         "__sql_cursor_next" => storage_ops::op_sql_cursor_next,
         "__sql_cursor_close" => storage_ops::op_sql_cursor_close,
         "__sql_database_size" => storage_ops::op_sql_database_size,
+        "__dolt_enabled" => storage_ops::op_dolt_enabled,
+        "__dolt_op" => storage_ops::op_dolt_op,
+        "__dolt_fork_export" => storage_ops::op_dolt_fork_export,
         "__d1_run" => storage_ops::op_d1_run,
         "__storage_transaction_control" => storage_ops::op_storage_transaction_control,
         "__log" => op_log,
@@ -7871,6 +7889,7 @@ fn op_loader_load(
             src,
             script_name: format!("__loader:{id}"),
             do_classes: Vec::new(),
+            dolt_classes: Vec::new(),
             bindings: Vec::new(),
             r2_bindings: Vec::new(),
             // A loaded worker reaches D1 only if its parent injects a stub;

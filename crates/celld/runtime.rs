@@ -1071,8 +1071,10 @@ impl RuntimeManager {
     ) -> anyhow::Result<celld_logic::RestoreOutcome> {
         let path = self.db_path(cell, spec.epoch);
         self.facets.register(cell, spec);
+        let engine = self.cell_engine(cell);
         if let Some(replication) = &self.replication {
-            let (restored_path, restored, vfs) = replication.restore(cell, spec, true).await?;
+            let (restored_path, restored, vfs) =
+                replication.restore(cell, spec, true, engine).await?;
             if restored_path != path {
                 return Err(anyhow!(
                     "replication restored {} instead of {}",
@@ -1096,6 +1098,15 @@ impl RuntimeManager {
             restored: false,
             alarm: self.restored_alarm(cell, &path, None).await,
         })
+    }
+
+    /// The storage engine of `cell`'s class in the current deployment. A cell
+    /// whose class this deployment does not export is a SQLite cell; its
+    /// activation fails later, when no Worker serves the class.
+    pub(crate) fn cell_engine(&self, cell: &str) -> celld_ltx::Engine {
+        cell.split_once(':')
+            .and_then(|(class, _)| self.generation().cell_config(class).map(|config| (class.to_string(), config)))
+            .map_or(celld_ltx::Engine::Sqlite, |(class, config)| config.class_engine(&class))
     }
 
     /// The alarm the restored database already had armed, read directly by
@@ -1321,6 +1332,7 @@ impl RuntimeManager {
                     epoch,
                     replicated_wake: self.wake.is_some(),
                     vfs: paged_vfs.as_deref(),
+                    engine: config.class_engine(class),
                 },
             )
             .await;

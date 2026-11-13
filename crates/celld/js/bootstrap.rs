@@ -959,6 +959,7 @@ pub(super) fn adopt_cell(
             cell_storage.replicated_wake,
             cell_storage.vfs,
             compat.sqlite_vec,
+            cell_storage.engine,
         )
         .context("cell storage open failed")?;
     }

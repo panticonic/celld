@@ -1472,6 +1472,82 @@ class SqlStorage {
     __sql_register_nomem_function_for_test(this._scope);
   }
 }
+// `ctx.storage.dolt`: versioning for a Dolt cell. Every method is
+// synchronous, like `ctx.storage.sql`, and runs in the handler's turn. A
+// method that changes the store is a write to the output gate: the next
+// output waits for its durability proof, as it does after a SQL write.
+// None of them runs inside `transaction()`/`transactionSync()`.
+class DoltStorage {
+  constructor(storage) {
+    this._storage = storage;
+    this._scope = storage._scope;
+    this._state = storage._state;
+    const dolt = this;
+    this.branch = Object.freeze({
+      create(name, options = {}) {
+        dolt._op("branchCreate", { name: String(name), from: options.from ?? null });
+      },
+      delete(name, options = {}) {
+        dolt._op("branchDelete", { name: String(name), force: !!options.force });
+      },
+      list() { return dolt._op("branchList", {}); },
+      current() { return dolt._op("currentBranch", {}); },
+    });
+  }
+  _op(op, args) {
+    this._storage._assertTransactionActive("dolt." + op);
+    if (this._storage._transactionControl)
+      throw new Error("ctx.storage.dolt cannot run inside a storage transaction");
+    if (this._state && this._state._aborted)
+      throw new Error("the Durable Object was reset; this event's storage is closed");
+    return JSON.parse(__dolt_op(this._scope, op, JSON.stringify(args)));
+  }
+  commit(options = {}) {
+    if (typeof options === "string") options = { message: options };
+    let date = options.date ?? null;
+    if (date instanceof Date) date = date.getTime();
+    return this._op("commit", {
+      message: options.message == null ? null : String(options.message),
+      author: options.author == null ? null : String(options.author),
+      date,
+      allowEmpty: !!options.allowEmpty,
+    });
+  }
+  checkout(branch, options = {}) {
+    return this._op("checkout", { branch: String(branch), create: !!options.create });
+  }
+  reset(options = {}) {
+    return this._op("reset", { hard: !!options.hard, to: options.to == null ? null : String(options.to) });
+  }
+  merge(branch, options = {}) {
+    if (branch !== null && typeof branch === "object") {
+      options = branch;
+      branch = options.branch;
+    }
+    return this._op("merge", {
+      branch: String(branch),
+      message: options.message == null ? null : String(options.message),
+    });
+  }
+  log(options = {}) {
+    return this._op("log", { limit: options.limit == null ? 100 : Number(options.limit) });
+  }
+  diff(options = {}) {
+    return this._op("diff", {
+      from: String(options.from ?? "HEAD"),
+      to: options.to == null ? null : String(options.to),
+      table: options.table == null ? null : String(options.table),
+    });
+  }
+  hashOf(ref = "HEAD") { return this._op("hashOf", { ref: String(ref) }); }
+  status() { return this._op("status", {}); }
+  gc() { return this._op("gc", {}); }
+  // Reserved for the deterministic execution core (`crates/celld/dolt_exec.rs`,
+  // design section 3a): `execute(program, { nowMs, seed, actor, profile, limits })`.
+  execute() {
+    throw new Error("ctx.storage.dolt.execute is not available in this build");
+  }
+}
 function __readStoredValue(scope, key, read) {
   try {
     return read();
@@ -1572,6 +1648,12 @@ class DurableObjectStorage {
     this._kv = new SyncKvStorage(this);
   }
   get kv() { return this._kv; }
+  // Present only on a Dolt cell (`migrations[].new_dolt_classes`).
+  get dolt() {
+    if (this._dolt === undefined)
+      this._dolt = __dolt_enabled(this._scope) ? new DoltStorage(this) : null;
+    return this._dolt ?? undefined;
+  }
   _transactionStatus() {
     let status = null;
     for (let control = this._transactionControl; control; control = control.parent) {
@@ -5318,6 +5400,23 @@ class DurableObjectNamespace {
     if (value == null) return this;
     throw new Error("Jurisdiction restrictions are not implemented");
   }
+  // Fork a Dolt object: a new id whose state starts from `sourceId`'s
+  // (every branch and its history), with the active branch reset to `at`
+  // when given. The source publishes the image from its own turn, behind
+  // its output gate; see docs/services/dolt-cells.md.
+  async fork(sourceId, options = {}) {
+    if (!(sourceId instanceof DurableObjectId) || sourceId._className !== this._className)
+      throw new TypeError("Durable Object ID is not valid for this namespace");
+    const id = this.newUniqueId();
+    const params = new URLSearchParams({ to: id._scope() });
+    if (options && options.at != null) params.set("at", String(options.at));
+    const response = await this.get(sourceId).fetch(
+      "https://celld.internal" + __FORK_EXPORT_PATH + "?" + params, { method: "POST" },
+    );
+    if (!response.ok) throw new Error("fork: " + (await response.text()));
+    await response.arrayBuffer();
+    return id;
+  }
   getByName(name, options) {
     return this.get(this.idFromName(name), options);
   }
@@ -5510,9 +5609,31 @@ __celld.__makeIncomingRequest = (
   url, method,
   streamId === undefined ? body : new CelldHttpBodyStream(streamId),
   headersJson, undefined, true);
+const __FORK_EXPORT_PATH = "/__celld/dolt-fork-export";
+const __forkExport = async (scope, url) => {
+  const params = new URL(url).searchParams;
+  try {
+    const result = await __dolt_fork_export(
+      scope, String(params.get("to") ?? ""), String(params.get("at") ?? ""));
+    return new Response(result, { status: 200 });
+  } catch (error) {
+    return new Response(String(error && error.message || error), { status: 409 });
+  }
+};
 const __dispatchTo = __celld.__dispatchTo = async (
   scope, url, method, body, headersJson, requestId = null, bodyStreamId = null,
 ) => {
+  // `env.NS.fork()` asks the source object to publish its own image. It is
+  // answered by the runtime, never by the object's fetch handler.
+  if (method === "POST" && typeof url === "string" &&
+      url.startsWith("https://celld.internal" + __FORK_EXPORT_PATH + "?")) {
+    const actorEvent = __beginActorEvent(scope);
+    try {
+      return await __forkExport(scope, url);
+    } finally {
+      __endActorEvent(actorEvent);
+    }
+  }
   // A routed body that must not be collected crosses as a host stream id; the
   // handler here reads it in parts. A held body arrives as its bytes.
   if (bodyStreamId !== null) body = new CelldHttpBodyStream(bodyStreamId);

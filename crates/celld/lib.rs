@@ -55,6 +55,7 @@ pub mod deadlines;
 pub mod deploy;
 pub mod dev;
 pub mod docker;
+pub(crate) mod dolt_cell;
 pub mod drain_token;
 pub mod engine_api;
 pub mod env_vars;

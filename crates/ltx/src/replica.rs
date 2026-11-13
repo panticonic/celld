@@ -41,7 +41,7 @@
 #![allow(clippy::disallowed_methods)]
 
 use crate::client::ReplicaClient;
-use crate::db::Db;
+use crate::cell_store::CellStore;
 use crate::error::{new_ltx_error, Error, Result};
 use crate::ltx::{self, FileInfo};
 use crate::{Pos, TXID};
@@ -133,7 +133,7 @@ fn sync_step(step: &'static str) -> impl FnOnce(Error) -> Error {
 pub struct Replica<C: ReplicaClient> {
     /// The database being replicated. `None` for a restore-only replica (the Go
     /// `NewReplicaWithClient(nil, client)` restore-only shape).
-    db: Option<Db>,
+    db: Option<Box<dyn CellStore>>,
 
     /// Client used to connect to the remote replica.
     pub client: C,
@@ -153,7 +153,12 @@ impl<C: ReplicaClient> Replica<C> {
     /// Creates a replica that owns `db` and replicates through `client`.
     ///
     /// Ported from `NewReplicaWithClient` (replica.go:73-77).
-    pub fn new(db: Db, client: C) -> Self {
+    pub fn new(db: impl CellStore + 'static, client: C) -> Self {
+        Self::new_boxed(Box::new(db), client)
+    }
+
+    /// [`Self::new`] over an engine chosen at run time.
+    pub fn new_boxed(db: Box<dyn CellStore>, client: C) -> Self {
         Replica {
             db: Some(db),
             client,
@@ -175,23 +180,23 @@ impl<C: ReplicaClient> Replica<C> {
 
     /// Returns a reference to the attached database, if any.
     /// Ported from `Replica.DB` (replica.go:89).
-    pub fn db(&self) -> Option<&Db> {
-        self.db.as_ref()
+    pub fn db(&self) -> Option<&dyn CellStore> {
+        self.db.as_deref()
     }
 
     /// Consumes the replica and returns the attached database, if any. Lets a
     /// host perform a clean [`Db::close`] (which consumes the `Db`) after a final
     /// sync — the shutdown ordering the deferred monitor loop would otherwise own
     /// (replica.go `Stop` → `db.Close`).
-    pub fn into_db(self) -> Option<Db> {
+    pub fn into_db(self) -> Option<Box<dyn CellStore>> {
         self.db
     }
 
     /// Returns a mutable reference to the attached database, if any. Lets a
     /// caller drive `db.sync()` (the local capture half) before `replica.sync()`
     /// (the upload half) — the `SyncAndWait` ordering (db.go:500-512).
-    pub fn db_mut(&mut self) -> Option<&mut Db> {
-        self.db.as_mut()
+    pub fn db_mut(&mut self) -> Option<&mut (dyn CellStore + 'static)> {
+        self.db.as_deref_mut()
     }
 
     /// The current replicated position. Ported from `Replica.Pos`

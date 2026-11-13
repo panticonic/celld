@@ -292,6 +292,14 @@ impl PressureConfig {
 
 pub const MAX_OUTBOUND_PIN_PERCENT: usize = 50;
 
+/// The most cells the node lets non-hibernatable transports and explicit
+/// residency holds pin together, as a count: `MAX_OUTBOUND_PIN_PERCENT` of the
+/// hard resident ceiling, and at least one so a small node can still use either.
+/// `None` when there is no ceiling to take a share of.
+pub fn pin_budget(ceiling: Option<usize>) -> Option<usize> {
+    ceiling.map(|cap| (cap.saturating_mul(MAX_OUTBOUND_PIN_PERCENT) / 100).max(1))
+}
+
 /// May another cell be pinned resident by an outbound WebSocket?
 ///
 /// An outbound socket is not hibernatable, so eviction refuses its cell for as
@@ -302,10 +310,21 @@ pub const MAX_OUTBOUND_PIN_PERCENT: usize = 50;
 /// sockets, because one socket is enough to pin. `ceiling` is the hard resident
 /// cap.
 pub fn may_pin_outbound(pinned_cells: usize, ceiling: Option<usize>) -> bool {
-    ceiling.is_none_or(|cap| {
-        // At least one, always. The share alone rounds to zero below a ceiling
-        // of two, which would make an outbound socket impossible on a small
-        // node rather than merely budgeted.
-        pinned_cells < (cap.saturating_mul(MAX_OUTBOUND_PIN_PERCENT) / 100).max(1)
-    })
+    // At least one, always. The share alone rounds to zero below a ceiling
+    // of two, which would make an outbound socket impossible on a small
+    // node rather than merely budgeted.
+    pin_budget(ceiling).is_none_or(|budget| pinned_cells < budget)
+}
+
+/// May another cell be pinned resident by `ctx.residency.hold()`?
+///
+/// A hold is the same removal from the eviction pool as an outbound socket,
+/// taken on purpose and for an unbounded time, so it draws on the same budget.
+/// `pinned_cells` counts a cell once however many holds and sockets pin it, and
+/// the caller does not ask for a cell that is already counted. The refusal is
+/// the point: a hold the node cannot afford fails at `hold()` rather than
+/// being revoked later, because a revocation destroys exactly the state the
+/// hold was taken to protect.
+pub fn may_hold(pinned_cells: usize, ceiling: Option<usize>) -> bool {
+    may_pin_outbound(pinned_cells, ceiling)
 }

@@ -38,6 +38,9 @@ pub mod wake;
 mod types;
 pub use types::*;
 
+#[cfg(test)]
+mod residency_tests;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Activation {
     Claim(Claim),
@@ -405,6 +408,10 @@ pub struct DrainPin {
     pub output_gate_count: usize,
     pub regular_websocket_count: usize,
     pub outbound_websocket_count: usize,
+    /// Residency holds still standing on the cell. A held cell is told its
+    /// holds are revoked when it joins the batch; this shows one that has not
+    /// finished winding down within `hold_grace_ms`.
+    pub hold_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -427,6 +434,15 @@ struct Cell {
     quiescing: bool,
     requests: BTreeSet<RequestId>,
     websockets: BTreeMap<WebSocketId, WebSocketKind>,
+    /// Live explicit residency holds (`ctx.residency.hold()`). A non-empty set
+    /// makes the cell active, so no timer, no memory walk and no balancing
+    /// move evicts it. Only ever non-empty while the phase is `Resident`:
+    /// `set_phase` empties it on any other phase, which is how a holder's
+    /// crash, a reset, a fence or a swap leaves nothing behind.
+    holds: BTreeSet<HoldId>,
+    /// A revocation is winding down: the cell has been told, and the timer of
+    /// this generation drops whatever is left. Also refuses new holds.
+    hold_revoke: Option<u64>,
     waiting_for: Option<Activation>,
     waiting_activation: Option<ColdStart>,
     /// The in-flight release of this cell's ownership record, if any.
@@ -599,6 +615,8 @@ impl Default for Cell {
             quiescing: false,
             requests: BTreeSet::new(),
             websockets: BTreeMap::new(),
+            holds: BTreeSet::new(),
+            hold_revoke: None,
             waiting_for: None,
             waiting_activation: None,
             releasing: None,
@@ -1115,6 +1133,7 @@ impl State {
                 .values()
                 .filter(|kind| matches!(kind, WebSocketKind::Outbound))
                 .count();
+            let hold_count = state.holds.len();
             if active.is_empty() {
                 pins.push(DrainPin {
                     cell: cell.clone(),
@@ -1123,6 +1142,7 @@ impl State {
                     output_gate_count: 0,
                     regular_websocket_count,
                     outbound_websocket_count,
+                    hold_count,
                 });
                 continue;
             }
@@ -1142,6 +1162,7 @@ impl State {
                         .count(),
                     regular_websocket_count,
                     outbound_websocket_count,
+                    hold_count,
                 });
             }
         }
@@ -1500,6 +1521,14 @@ impl State {
                     cell.phase
                 ));
             }
+            if (!cell.holds.is_empty() || cell.hold_revoke.is_some())
+                && !matches!(cell.phase, Phase::Resident { .. })
+            {
+                return Err(format!(
+                    "cell {id:?} carries residency holds in non-resident phase {:?}",
+                    cell.phase
+                ));
+            }
             if cell.swapping
                 && !matches!(
                     cell.phase,
@@ -1745,12 +1774,19 @@ impl State {
         self.occupied_below(self.config.max_resident) && !self.shedding
     }
 
+    /// Whether anything pins the cell's runtime in memory: a request, a
+    /// regular or outbound socket, or an explicit residency hold. This is the
+    /// one predicate every eviction path reads -- idle eviction, the memory
+    /// walk, a balancing move, an explicit `evict` -- so a held cell is
+    /// protected from all of them at once, and from nothing else: a drain, a
+    /// forced swap and a reset end holds through their own terminal paths.
     pub fn is_active(&self, id: &str) -> bool {
         self.active_cells.contains_key(id)
             || self.cells.get(id).is_some_and(|cell| {
-                cell.websockets
-                    .values()
-                    .any(|kind| matches!(kind, WebSocketKind::Regular | WebSocketKind::Outbound))
+                !cell.holds.is_empty()
+                    || cell.websockets.values().any(|kind| {
+                        matches!(kind, WebSocketKind::Regular | WebSocketKind::Outbound)
+                    })
             })
     }
 
@@ -3002,6 +3038,12 @@ impl State {
                 self.retry_owner_log_recovery(&cell, generation, effects);
                 return;
             }
+            // Unconditional too: a revoked hold must end whatever the lease
+            // is doing, or a lapsed lease would keep a drain waiting on it.
+            Timer::HoldRevokeGrace { cell, generation } => {
+                self.hold_grace_expired(&cell, generation, effects);
+                return;
+            }
             timer => timer,
         };
         // A retry has no held lease to validate against, so it is resolved
@@ -3863,6 +3905,20 @@ impl State {
     fn begin_preserve(&mut self, effects: &mut Vec<Effect>) {
         self.activation_waiters.clear();
         self.capacity_waiters.clear();
+
+        // A clean reload keeps the database but not the isolate, so a holder's
+        // heap does not survive it. Tell every holder before the process goes;
+        // the preserve drain waits for the notifications (`revoking_holds`),
+        // bounded by `hold_grace_ms`.
+        let held: Vec<CellId> = self
+            .cells
+            .iter()
+            .filter(|(_, cell)| !cell.holds.is_empty())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in held {
+            self.revoke_holds(&id, HoldRevocation::Drain, effects);
+        }
 
         let ids: Vec<CellId> = self.cells.keys().cloned().collect();
         for id in ids {
@@ -5269,6 +5325,7 @@ impl State {
             return false;
         };
         !self.active_cells.contains_key(id)
+            && cell.holds.is_empty()
             && !cell
                 .websockets
                 .values()
@@ -5355,6 +5412,13 @@ impl State {
                     .get_mut(&id)
                     .expect("nominated cell listed above");
                 cell.swap_cancelled = true;
+                // The swap stops this cell's isolate, and a hold cannot outlive
+                // it: tell the application first, as a drain does.
+                self.revoke_holds(&id, HoldRevocation::Swap, effects);
+                let cell = self
+                    .cells
+                    .get_mut(&id)
+                    .expect("nominated cell listed above");
                 let websockets = cell
                     .websockets
                     .iter()
@@ -5728,6 +5792,10 @@ impl State {
                 alarm,
                 keep_hibernatable: false,
             });
+            // A hold is never a reason for a drain to wait for good. The cell
+            // is told, and the hold drops when its handlers settle or the
+            // grace period ends; the quiescing promotion above then evicts.
+            self.revoke_holds(&id, HoldRevocation::Drain, effects);
             in_flight += 1;
             let _ = self.begin_eviction(&id, true, effects);
         }
@@ -6454,17 +6522,178 @@ impl State {
         });
     }
 
+    /// Whether a non-hibernatable transport or a residency hold pins this
+    /// cell. The two draw on one budget, so a cell is counted once for both.
+    fn cell_pinned(cell: &Cell) -> bool {
+        !cell.holds.is_empty()
+            || cell
+                .websockets
+                .values()
+                .any(|kind| *kind == WebSocketKind::Outbound)
+    }
+
     /// How many cells are currently held resident by a non-hibernatable
-    /// transport.
-    fn outbound_pinned(&self) -> usize {
+    /// transport or an explicit hold.
+    fn pinned_cells(&self) -> usize {
         self.cells
             .values()
-            .filter(|cell| {
-                cell.websockets
-                    .values()
-                    .any(|kind| *kind == WebSocketKind::Outbound)
-            })
+            .filter(|cell| Self::cell_pinned(cell))
             .count()
+    }
+
+    /// How many cells carry at least one residency hold.
+    pub fn held_cells(&self) -> usize {
+        self.cells
+            .values()
+            .filter(|cell| !cell.holds.is_empty())
+            .count()
+    }
+
+    /// How many cells have been told their holds are revoked and have not
+    /// finished winding down. A clean-reload drain waits for zero.
+    pub fn revoking_holds(&self) -> usize {
+        self.cells
+            .values()
+            .filter(|cell| cell.hold_revoke.is_some())
+            .count()
+    }
+
+    /// How many live holds `id` carries.
+    pub fn hold_count(&self, id: &str) -> usize {
+        self.cells.get(id).map_or(0, |cell| cell.holds.len())
+    }
+
+    /// Whether `hold` stands on `id`.
+    pub fn holds_hold(&self, id: &str, hold: HoldId) -> bool {
+        self.cells
+            .get(id)
+            .is_some_and(|cell| cell.holds.contains(&hold))
+    }
+
+    /// The answer the application gets for a `HoldAcquired` event: `Ok` when
+    /// the hold stands, otherwise the reason it was refused. A refusal leaves
+    /// the state untouched, so recomputing it here gives the reason the event
+    /// saw.
+    pub fn hold_verdict(&self, id: &str, hold: HoldId, epoch: Epoch) -> Result<(), HoldRefusal> {
+        if self.holds_hold(id, hold) {
+            return Ok(());
+        }
+        match self.hold_refusal(id, epoch) {
+            Some(refusal) => Err(refusal),
+            // Not refused now and not granted: the event never reached the
+            // core (the actor stopped first).
+            None => Err(HoldRefusal::NodeUnavailable),
+        }
+    }
+
+    /// Why a hold on `id` at `epoch` cannot be granted right now.
+    ///
+    /// Refusal is the node's whole defence of its own capacity, so it is
+    /// decided up front: a hold that would later have to be revoked for want
+    /// of budget destroys the very state it was taken to protect.
+    fn hold_refusal(&self, id: &str, epoch: Epoch) -> Option<HoldRefusal> {
+        if !self.ready_to_serve() {
+            return Some(HoldRefusal::NodeUnavailable);
+        }
+        let Some(cell) = self.cells.get(id) else {
+            return Some(HoldRefusal::CellNotResident);
+        };
+        let resident = matches!(cell.phase, Phase::Resident { epoch: held } if held == epoch);
+        if !resident {
+            return Some(HoldRefusal::CellNotResident);
+        }
+        if self.draining || cell.quiescing || cell.hold_revoke.is_some() || cell.handoff {
+            return Some(HoldRefusal::CellLeaving);
+        }
+        if cell.holds.len() >= self.config.max_holds_per_cell {
+            return Some(HoldRefusal::CellLimit {
+                max: self.config.max_holds_per_cell,
+            });
+        }
+        // A cell already pinned costs the budget nothing more.
+        if !Self::cell_pinned(cell)
+            && !pressure::may_hold(self.pinned_cells(), Some(self.config.max_resident))
+        {
+            return Some(HoldRefusal::NodeBudget {
+                pinned: self.pinned_cells(),
+                budget: pressure::pin_budget(Some(self.config.max_resident)).unwrap_or(0),
+            });
+        }
+        None
+    }
+
+    fn hold_acquired(&mut self, id: &str, hold: HoldId, epoch: Epoch) {
+        if self.hold_refusal(id, epoch).is_some() {
+            return;
+        }
+        if let Some(cell) = self.cells.get_mut(id) {
+            cell.holds.insert(hold);
+        }
+    }
+
+    /// One hold ended, by its owner or because its handlers settled after a
+    /// revocation. The last hold of a revoked cell also retires the grace
+    /// timer's work, and the cell may be evicted again at once.
+    fn hold_released(&mut self, id: &str, hold: HoldId, effects: &mut Vec<Effect>) {
+        let Some(cell) = self.cells.get_mut(id) else {
+            return;
+        };
+        if !cell.holds.remove(&hold) {
+            return;
+        }
+        if cell.holds.is_empty() {
+            cell.hold_revoke = None;
+            // The cell may have been what a waiter needed: an eviction was
+            // refused while it was held.
+            self.shed_one(effects);
+        }
+    }
+
+    /// Tell the cell its holds are ending and bound how long that may take.
+    ///
+    /// This is the terminal path for every involuntary end: a drain, a forced
+    /// swap and an operator action. The cell's application is notified (the
+    /// shell runs its `onrevoked` handlers), and the holds drop when its
+    /// handlers settle, or when `hold_grace_ms` passes, whichever is first. So
+    /// a hold can delay a drain by at most the grace period.
+    fn revoke_holds(&mut self, id: &str, reason: HoldRevocation, effects: &mut Vec<Effect>) {
+        let grace = self.config.hold_grace_ms;
+        let generation = self.next_timer_generation;
+        let Some(cell) = self.cells.get_mut(id) else {
+            return;
+        };
+        if cell.holds.is_empty() || cell.hold_revoke.is_some() {
+            return;
+        }
+        self.next_timer_generation = generation
+            .checked_add(1)
+            .expect("timer generation exhausted");
+        cell.hold_revoke = Some(generation);
+        effects.push(Effect::RevokeHolds {
+            cell: id.to_string(),
+            holds: cell.holds.iter().copied().collect(),
+            reason,
+        });
+        effects.push(Effect::ScheduleTimer {
+            timer: Timer::HoldRevokeGrace {
+                cell: id.to_string(),
+                generation,
+            },
+            at_mono_ms: self.now_mono_ms.saturating_add(grace),
+        });
+    }
+
+    /// The grace period of a revocation ended: drop what is left.
+    fn hold_grace_expired(&mut self, id: &str, generation: u64, effects: &mut Vec<Effect>) {
+        let Some(cell) = self.cells.get_mut(id) else {
+            return;
+        };
+        if cell.hold_revoke != Some(generation) {
+            return;
+        }
+        cell.hold_revoke = None;
+        cell.holds.clear();
+        self.shed_one(effects);
     }
 
     fn websocket_opened(
@@ -6497,11 +6726,7 @@ impl State {
         // be freed, and the node is wedged by its own applications. Cells that
         // already hold one are not counted again -- the budget is on how much
         // of the node is held, not on how many sockets exist.
-        let already_pinned = self.cells.get(id).is_some_and(|cell| {
-            cell.websockets
-                .values()
-                .any(|kind| *kind == WebSocketKind::Outbound)
-        });
+        let already_pinned = self.cells.get(id).is_some_and(Self::cell_pinned);
         let cell_outbound = self.cells.get(id).map_or(0, |cell| {
             cell.websockets
                 .values()
@@ -6512,7 +6737,7 @@ impl State {
             && (cell_outbound >= self.config.max_outbound_websockets
                 || (!already_pinned
                     && !pressure::may_pin_outbound(
-                        self.outbound_pinned(),
+                        self.pinned_cells(),
                         Some(self.config.max_resident),
                     )))
         {
@@ -6836,6 +7061,15 @@ pub fn on_event(state: &mut State, event: Event) -> Vec<Effect> {
         Event::WebSocketClosed { cell, websocket } => {
             state.websocket_closed(&cell, websocket, &mut effects)
         }
+        Event::HoldAcquired { cell, hold, epoch } => state.hold_acquired(&cell, hold, epoch),
+        Event::HoldsReleased { cell, holds } => {
+            for hold in holds {
+                state.hold_released(&cell, hold, &mut effects);
+            }
+        }
+        Event::RevokeHolds { cell } => {
+            state.revoke_holds(&cell, HoldRevocation::Operator, &mut effects)
+        }
         Event::AlarmObserved {
             cell,
             alarm,
@@ -7015,6 +7249,12 @@ fn phase_requires_activation_permit(phase: &Phase, swapping: bool) -> bool {
 fn set_phase(occupied: &mut usize, cell: &mut Cell, phase: Phase) {
     if !matches!(&phase, Phase::Resident { .. }) {
         cell.quiescing = false;
+        // A hold belongs to one runtime. Whatever ends that runtime -- a
+        // crash or reset, a fence, a swap's stop, an eviction that was
+        // somehow admitted -- ends its holds with it, so none can outlive the
+        // isolate that took it or attach to the next one.
+        cell.holds.clear();
+        cell.hold_revoke = None;
     }
     // Ownership follows the confirmed phases and survives the transient
     // wake phases between them; a phase that names another owner, no owner,

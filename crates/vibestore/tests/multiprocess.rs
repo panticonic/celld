@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 //! Conditional writes across real OS processes: the `celld dev` supervisor and
 //! its node are separate processes that share one store.
 

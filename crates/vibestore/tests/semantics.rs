@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 //! Conditional writes, ranged reads, multipart, attributes, copy and the
 //! features celld must never silently lose.
 

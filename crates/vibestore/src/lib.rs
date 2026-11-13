@@ -1,3 +1,8 @@
+// This crate is infrastructure outside celld's execution-determinism boundary:
+// it owns host files and a blocking pool, like `local_store.rs`. The boundary
+// lints exist for node storage, which goes through the injected filesystem.
+#![allow(clippy::disallowed_methods)]
+
 //! A local `object_store` backend over Vibestudio's content-addressed blobstore.
 //!
 //! See `docs/fork/vibestore.md` for the design, the on-disk format and the

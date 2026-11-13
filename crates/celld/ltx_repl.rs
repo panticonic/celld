@@ -1482,6 +1482,11 @@ impl LtxRepl {
             crate::bucket::StorageBackend::Local => {
                 Arc::new(crate::local_store::LocalStore::open(&bucket)?)
             }
+            // `bucket` is the spec text after `vibestore://`; the node's other
+            // bucket clients already opened this store, and `open` returns it.
+            crate::bucket::StorageBackend::Vibestore => {
+                crate::vibestore::open(&format!("vibestore://{bucket}"))?.0
+            }
         };
         // Azure blob metadata names must be C# identifiers, so the standard
         // Litestream key cannot carry its hyphen there. External Litestream
@@ -1491,7 +1496,8 @@ impl LtxRepl {
             crate::bucket::StorageBackend::Azure => TimestampMetadataKey::Underscore,
             crate::bucket::StorageBackend::S3
             | crate::bucket::StorageBackend::Gcs
-            | crate::bucket::StorageBackend::Local => TimestampMetadataKey::Litestream,
+            | crate::bucket::StorageBackend::Local
+            | crate::bucket::StorageBackend::Vibestore => TimestampMetadataKey::Litestream,
         };
         // The tiering flush interval: with a healthy shipper, at most one
         // upload per cell per interval; it is simultaneously the bucket lag

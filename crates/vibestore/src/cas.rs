@@ -521,9 +521,6 @@ mod tests {
         let cas = Cas::open(dir.path()).unwrap();
         let digest = put(&cas, b"original");
         let path = cas.path(&digest).unwrap();
-        let mut permissions = fs::metadata(&path).unwrap().permissions();
-        permissions.set_readonly(false);
-        fs::set_permissions(&path, permissions).unwrap();
         fs::write(&path, b"tampered").unwrap();
         assert!(matches!(
             cas.verify_existing(&digest, 8),

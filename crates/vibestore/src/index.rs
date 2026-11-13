@@ -218,6 +218,14 @@ impl Index {
     }
 
     /// Install `location` at `key` if `mode` allows it.
+    ///
+    /// `before_commit` runs inside the transaction, after the precondition
+    /// has passed and while the write lock is held. A blob-backed write takes
+    /// its retention row there: because it holds the index lock, no
+    /// reconciliation in another process can run between the retention row
+    /// and the commit and release the row as stale. If it fails the
+    /// transaction rolls back.
+    #[allow(clippy::too_many_arguments)]
     pub fn commit_put(
         &self,
         key: &str,
@@ -226,26 +234,29 @@ impl Index {
         attributes: &str,
         mode: &Mode,
         now_ms: i64,
+        before_commit: &mut dyn FnMut() -> Result<()>,
     ) -> Result<Committed> {
         let _gate = self.gate.lock().unwrap_or_else(|p| p.into_inner());
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let committed = put_in(&tx, key, location, size, attributes, mode, now_ms)?;
+        check_mode(&tx, key, mode)?;
+        before_commit()?;
+        let committed = put_in(&tx, key, location, size, attributes, now_ms)?;
         tx.commit()?;
         Ok(committed)
     }
 
-    /// Copy `from` to `to` inside one transaction. `expect_digest` is what the
-    /// caller already retained for `to`; a source that changed since is
-    /// reported as `Ok(None)` so the caller can retain the new digest and retry.
+    /// Copy `from` to `to` inside one transaction. `before_commit` receives
+    /// the source's digest (if it is a blob) so the destination's retention
+    /// row can be taken under the same lock.
     pub fn commit_copy(
         &self,
         from: &str,
         to: &str,
-        expect_digest: Option<&str>,
         mode: &Mode,
         now_ms: i64,
-    ) -> Result<Option<Committed>> {
+        before_commit: &mut dyn FnMut(Option<&str>) -> Result<()>,
+    ) -> Result<Committed> {
         let _gate = self.gate.lock().unwrap_or_else(|p| p.into_inner());
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -259,19 +270,40 @@ impl Index {
         let Some((source, body)) = source else {
             return Err(StoreError::NotFound(from.to_string()));
         };
-        if source.digest.as_deref() != expect_digest {
-            return Ok(None);
-        }
+        check_mode(&tx, to, mode)?;
         let location = match (&source.digest, body) {
             (Some(digest), _) => Location::Blob(digest.clone()),
             (None, Some(body)) => Location::Inline(body),
             (None, None) => {
-                return Err(StoreError::Corrupt(format!("row {from} has neither body nor digest")))
+                return Err(StoreError::Corrupt(format!(
+                    "row {from} has neither body nor digest"
+                )))
             }
         };
-        let committed = put_in(&tx, to, &location, source.size, &source.attributes, mode, now_ms)?;
+        before_commit(location.digest())?;
+        let committed = put_in(&tx, to, &location, source.size, &source.attributes, now_ms)?;
         tx.commit()?;
-        Ok(Some(committed))
+        Ok(committed)
+    }
+
+    /// Run `inspect` over every blob-backed `(key, digest)` while holding the
+    /// index write lock, so nothing can commit (or be about to) meanwhile.
+    pub fn with_blob_keys_locked<T>(
+        &self,
+        inspect: impl FnOnce(Vec<(String, String)>) -> Result<T>,
+    ) -> Result<T> {
+        let _gate = self.gate.lock().unwrap_or_else(|p| p.into_inner());
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let rows: Vec<(String, String)> = {
+            let mut statement =
+                tx.prepare("SELECT key, digest FROM objects WHERE digest IS NOT NULL")?;
+            let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect::<std::result::Result<_, _>>()?
+        };
+        let outcome = inspect(rows)?;
+        tx.commit()?;
+        Ok(outcome)
     }
 
     /// Delete `key`. Returns the digest it held, if it existed and was a blob.
@@ -328,15 +360,6 @@ impl Index {
             .is_some())
     }
 
-    /// `owner -> digest` for every blob-backed key, using `owner_of(key, digest)`.
-    pub fn blob_keys(&self) -> Result<Vec<(String, String)>> {
-        let conn = self.conn()?;
-        let mut statement =
-            conn.prepare("SELECT key, digest FROM objects WHERE digest IS NOT NULL")?;
-        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        Ok(rows.collect::<std::result::Result<_, _>>()?)
-    }
-
     pub fn live_digests(&self) -> Result<BTreeMap<String, u64>> {
         let conn = self.conn()?;
         let mut statement = conn.prepare(
@@ -360,35 +383,37 @@ impl Index {
     }
 }
 
+/// The write precondition, evaluated inside the transaction.
+fn check_mode(tx: &rusqlite::Transaction<'_>, key: &str, mode: &Mode) -> Result<()> {
+    let current: Option<i64> = tx
+        .query_row("SELECT etag FROM objects WHERE key = ?1", [key], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    match mode {
+        Mode::Overwrite => Ok(()),
+        Mode::Create if current.is_some() => Err(StoreError::AlreadyExists(key.to_string())),
+        Mode::Create => Ok(()),
+        Mode::Update(tag) => match current {
+            Some(etag) if etag.to_string() == *tag => Ok(()),
+            _ => Err(StoreError::Precondition(key.to_string())),
+        },
+    }
+}
+
 fn put_in(
     tx: &rusqlite::Transaction<'_>,
     key: &str,
     location: &Location,
     size: u64,
     attributes: &str,
-    mode: &Mode,
     now_ms: i64,
 ) -> Result<Committed> {
-    let current: Option<(i64, Option<String>)> = tx
-        .query_row(
-            "SELECT etag, digest FROM objects WHERE key = ?1",
-            [key],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
+    let replaced: Option<Option<String>> = tx
+        .query_row("SELECT digest FROM objects WHERE key = ?1", [key], |row| {
+            row.get(0)
+        })
         .optional()?;
-    match mode {
-        Mode::Overwrite => {}
-        Mode::Create if current.is_some() => return Err(StoreError::AlreadyExists(key.to_string())),
-        Mode::Create => {}
-        Mode::Update(tag) => {
-            let matches = current
-                .as_ref()
-                .is_some_and(|(etag, _)| etag.to_string() == *tag);
-            if !matches {
-                return Err(StoreError::Precondition(key.to_string()));
-            }
-        }
-    }
     let etag: i64 = tx.query_row(
         "UPDATE sequence SET next = next + 1 WHERE singleton = 1 RETURNING next - 1",
         [],
@@ -408,7 +433,7 @@ fn put_in(
     )?;
     Ok(Committed {
         etag,
-        replaced: current.and_then(|(_, digest)| digest),
+        replaced: replaced.flatten(),
     })
 }
 
@@ -470,7 +495,15 @@ mod tests {
     }
 
     fn put(index: &Index, key: &str, body: &[u8], mode: Mode) -> Result<Committed> {
-        index.commit_put(key, &Location::Inline(body.to_vec()), body.len() as u64, "[]", &mode, 1)
+        index.commit_put(
+            key,
+            &Location::Inline(body.to_vec()),
+            body.len() as u64,
+            "[]",
+            &mode,
+            1,
+            &mut || Ok(()),
+        )
     }
 
     #[test]
@@ -526,10 +559,10 @@ mod tests {
         let d1 = "a".repeat(64);
         let d2 = "b".repeat(64);
         index
-            .commit_put("k", &Location::Blob(d1.clone()), 3, "[]", &Mode::Overwrite, 1)
+            .commit_put("k", &Location::Blob(d1.clone()), 3, "[]", &Mode::Overwrite, 1, &mut || Ok(()))
             .unwrap();
         let committed = index
-            .commit_put("k", &Location::Blob(d2.clone()), 3, "[]", &Mode::Overwrite, 2)
+            .commit_put("k", &Location::Blob(d2.clone()), 3, "[]", &Mode::Overwrite, 2, &mut || Ok(()))
             .unwrap();
         assert_eq!(committed.replaced.as_deref(), Some(d1.as_str()));
         assert!(index.digest_referenced(&d2).unwrap());
@@ -554,6 +587,56 @@ mod tests {
         assert_eq!(keys(&resumed, 10), ["a/3"]);
         assert_eq!(index.max_key("a/", Some("a0")).unwrap().as_deref(), Some("a/3"));
         assert_eq!(keys(&Scan::default(), 100), ["a/1", "a/2", "a/3", "b/1", "c"]);
+    }
+
+    #[test]
+    fn reconciliation_cannot_run_between_a_retention_row_and_its_commit() {
+        // Two index instances over one file stand for two processes. The
+        // writer is parked inside `before_commit`, where a blob-backed write
+        // has just taken its retention row. A reconciliation then must wait
+        // for the commit, or it would see the row as stale and release it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("i.sqlite");
+        let writer = std::sync::Arc::new(Index::open(&path).unwrap());
+        let reader = std::sync::Arc::new(Index::open(&path).unwrap());
+        let (parked_tx, parked_rx) = std::sync::mpsc::channel();
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let w = writer.clone();
+        let write = std::thread::spawn(move || {
+            let digest = "c".repeat(64);
+            w.commit_put(
+                "k",
+                &Location::Blob(digest),
+                1,
+                "[]",
+                &Mode::Create,
+                1,
+                &mut || {
+                    parked_tx.send(()).unwrap();
+                    go_rx.recv().unwrap();
+                    Ok(())
+                },
+            )
+            .unwrap();
+        });
+        parked_rx.recv().unwrap();
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+        let r = reader.clone();
+        let reconcile = std::thread::spawn(move || {
+            r.with_blob_keys_locked(|keys| {
+                seen_tx.send(keys.len()).unwrap();
+                Ok(())
+            })
+            .unwrap();
+        });
+        assert!(
+            seen_rx.recv_timeout(Duration::from_millis(300)).is_err(),
+            "the reconciliation ran while a write held the lock"
+        );
+        go_tx.send(()).unwrap();
+        write.join().unwrap();
+        assert_eq!(seen_rx.recv_timeout(Duration::from_secs(10)).unwrap(), 1);
+        reconcile.join().unwrap();
     }
 
     #[test]

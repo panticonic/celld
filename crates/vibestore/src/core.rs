@@ -150,13 +150,16 @@ impl Core {
             ..Recovery::default()
         };
         if let Some(retentions) = &self.retentions {
-            let live: BTreeMap<String, String> = self
-                .index
-                .blob_keys()?
-                .into_iter()
-                .map(|(key, digest)| (retention::owner(&key, &digest), digest))
-                .collect();
-            let (added, released) = retentions.reconcile(&live)?;
+            // Under the index write lock: a writer in another process takes
+            // its retention row inside that lock too, so a row this pass sees
+            // as stale cannot belong to a write that is about to commit.
+            let (added, released) = self.index.with_blob_keys_locked(|keys| {
+                let live: BTreeMap<String, String> = keys
+                    .into_iter()
+                    .map(|(key, digest)| (retention::owner(&key, &digest), digest))
+                    .collect();
+                retentions.reconcile(&live)
+            })?;
             recovery.retentions_added = added;
             recovery.retentions_released = released;
         } else {
@@ -274,29 +277,26 @@ impl Core {
         mode: &Mode,
     ) -> Result<Committed> {
         let digest = location.digest().map(str::to_owned);
-        if let Some(digest) = &digest {
+        if digest.is_some() {
             self.crash(CrashPoint::AfterBlobInstalled)?;
-            if let Some(retentions) = &self.retentions {
-                retentions.retain(&retention::owner(key, digest), digest)?;
-            }
-            self.crash(CrashPoint::AfterRetained)?;
         }
-        match self
-            .index
-            .commit_put(key, &location, size, attributes, mode, now_ms())
-        {
-            Ok(committed) => {
-                self.crash(CrashPoint::AfterIndexCommit)?;
-                self.release_replaced(key, digest.as_deref(), committed.replaced.as_deref());
-                Ok(committed)
-            }
-            Err(error) => {
-                if !matches!(error, StoreError::Crashed(_)) {
-                    self.release_unless_current(key, digest.as_deref());
+        // Inside the index transaction, once the precondition has passed: a
+        // rejected write takes no retention row, so there is nothing to undo.
+        let mut retain = || -> Result<()> {
+            if let Some(digest) = &digest {
+                if let Some(retentions) = &self.retentions {
+                    retentions.retain(&retention::owner(key, digest), digest)?;
                 }
-                Err(error)
+                self.crash(CrashPoint::AfterRetained)?;
             }
-        }
+            Ok(())
+        };
+        let committed = self
+            .index
+            .commit_put(key, &location, size, attributes, mode, now_ms(), &mut retain)?;
+        self.crash(CrashPoint::AfterIndexCommit)?;
+        self.release_replaced(key, digest.as_deref(), committed.replaced.as_deref());
+        Ok(committed)
     }
 
     pub fn delete(&self, key: &str) -> Result<()> {
@@ -307,38 +307,19 @@ impl Core {
     }
 
     pub fn copy(&self, from: &str, to: &str, mode: &Mode) -> Result<Committed> {
-        for _ in 0..8 {
-            let source = self
-                .index
-                .get(from)?
-                .ok_or_else(|| StoreError::NotFound(from.to_string()))?;
-            if let (Some(retentions), Some(digest)) = (&self.retentions, &source.digest) {
+        let mut retained = None;
+        let mut retain = |digest: Option<&str>| -> Result<()> {
+            retained = digest.map(str::to_owned);
+            if let (Some(retentions), Some(digest)) = (&self.retentions, digest) {
                 retentions.retain(&retention::owner(to, digest), digest)?;
             }
-            match self
-                .index
-                .commit_copy(from, to, source.digest.as_deref(), mode, now_ms())
-            {
-                Ok(Some(committed)) => {
-                    self.release_replaced(
-                        to,
-                        source.digest.as_deref(),
-                        committed.replaced.as_deref(),
-                    );
-                    return Ok(committed);
-                }
-                // The source was rewritten between our read and the
-                // transaction: retain what it holds now and try again.
-                Ok(None) => self.release_unless_current(to, source.digest.as_deref()),
-                Err(error) => {
-                    self.release_unless_current(to, source.digest.as_deref());
-                    return Err(error);
-                }
-            }
-        }
-        Err(StoreError::Other(format!(
-            "copy of {from} to {to}: the source kept changing"
-        )))
+            Ok(())
+        };
+        let committed = self
+            .index
+            .commit_copy(from, to, mode, now_ms(), &mut retain)?;
+        self.release_replaced(to, retained.as_deref(), committed.replaced.as_deref());
+        Ok(committed)
     }
 
     fn release_replaced(&self, key: &str, new: Option<&str>, old: Option<&str>) {
@@ -352,20 +333,6 @@ impl Core {
             // Harmless: the row only delays a collection, and the next open
             // reconciles it away.
             tracing::warn!(%error, key, "vibestore could not release a retention");
-        }
-    }
-
-    /// After a rejected write, drop the retention taken for the digest it never
-    /// installed, unless the key already holds that digest.
-    fn release_unless_current(&self, key: &str, attempted: Option<&str>) {
-        let (Some(retentions), Some(attempted)) = (&self.retentions, attempted) else {
-            return;
-        };
-        let current = self.index.get(key).ok().flatten().and_then(|row| row.digest);
-        if current.as_deref() != Some(attempted) {
-            if let Err(error) = retentions.release(&retention::owner(key, attempted)) {
-                tracing::warn!(%error, key, "vibestore could not release a retention");
-            }
         }
     }
 

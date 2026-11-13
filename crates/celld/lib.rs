@@ -72,6 +72,7 @@ pub mod js;
 pub mod kv_blob;
 pub mod kv_cli;
 pub(crate) mod local_store;
+pub(crate) mod vibestore;
 pub mod ltx_repl;
 pub mod ltx_replication;
 pub mod machine;

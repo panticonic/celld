@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code, clippy::disallowed_methods)]
 
 use bytes::Bytes;
 use celld_vibestore::cas::Cas;

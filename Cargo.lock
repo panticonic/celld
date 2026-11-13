@@ -297,6 +297,7 @@ dependencies = [
  "cbc",
  "celld-logic",
  "celld-ltx",
+ "celld-vibestore",
  "chrono",
  "crc",
  "ctr",

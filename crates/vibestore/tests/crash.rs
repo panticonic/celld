@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 //! Crash safety and the Vibestudio GC contract.
 //!
 //! A simulated crash stops a write at a named point and runs no cleanup, which
@@ -104,7 +106,7 @@ async fn a_crash_after_a_delete_commits_leaves_a_stale_retention_only() {
 }
 
 #[tokio::test]
-async fn a_rejected_conditional_write_releases_the_retention_it_took() {
+async fn a_rejected_conditional_write_takes_no_retention() {
     let env = Env::new();
     let store = env.open();
     let first = put(&store, "k", payload(1, 100)).await;
@@ -117,7 +119,8 @@ async fn a_rejected_conditional_write_releases_the_retention_it_took() {
         .put_opts(&path("k"), payload(3, 100).into(), stale.into())
         .await
         .is_err());
-    // Only the live value is retained; the loser's blob is an unretained orphan.
+    // The precondition is checked before any retention row is taken, so the
+    // loser leaves only an unretained orphan blob.
     let owners = retention_owners(&env.root());
     assert_eq!(owners.len(), 1);
     assert_eq!(blob_digests(&env.root()).len(), 3);

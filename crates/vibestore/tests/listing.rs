@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 //! Listing semantics, checked against `object_store`'s reference in-memory
 //! store (which mirrors S3's path-segment prefixes) and against a transcription
 //! of the delimiter/continuation rules `LocalStore` implements for

@@ -9,7 +9,7 @@ runtime). Branch `feature/windows`.
 | Check | Result |
 | --- | --- |
 | `cargo xwin check --workspace --all-targets --target x86_64-pc-windows-msvc` (Linux host, clang-cl 19 + xwin MSVC CRT/SDK) | clean |
-| `cargo xwin build -p celld --target x86_64-pc-windows-msvc` (cross-link with lld-link) | see section 9 |
+| `cargo xwin build -p celld --target x86_64-pc-windows-msvc` (cross-link with lld-link, debug profile) | links: `celld.exe`, a 120 MB PE32+ console image (V8's 235 MB `rusty_v8.lib` included). Release / fat-LTO not tried |
 | Linux native: `cargo test -p doltlite-spike`, `cargo build -p celld-dolt-exec` with the new Rust build script | pass; the patched amalgamation is byte-identical to the `patch(1)` result |
 | Anything that executes on Windows | **not run**; `.github/workflows/windows.yml` does it |
 
@@ -21,8 +21,8 @@ cross-compilation cannot confirm. The CI workflow is the verification plan.
 ### v8
 
 `v8 = 152.1` publishes a prebuilt static library for `x86_64-pc-windows-msvc`
-(`rusty_v8.lib`, fetched by the crate's build script; no `RUSTY_V8_MIRROR`
-needed). No V8 source build is involved.
+(`rusty_v8.lib`, 235 MB, fetched by the crate's build script; no
+`RUSTY_V8_MIRROR` needed). No V8 source build is involved.
 
 ### DoltLite / SQLite C build (`vendor/libsqlite3-sys`)
 
@@ -59,6 +59,16 @@ Rust:
   but that target is untried.
 * The SQLite Windows VFS is used as is (`SQLITE_OS_WIN` is implied by the
   target); `-DHAVE_LOCALTIME_R` is already skipped for Windows targets.
+
+### C runtime
+
+The linked image imports `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll` and the
+Universal CRT (`api-ms-win-crt-*`): the dynamic CRT, which is what the prebuilt
+V8 library and `cc` default to. Vibestudio must ship, or require, the Visual C++
+redistributable until the whole link moves to the static CRT
+(`-C target-feature=+crt-static`, which the DoltLite build script already
+honors). That switch is not tried here, and whether the prebuilt V8 library links
+cleanly against the static CRT was not checked.
 
 ### Allocator
 

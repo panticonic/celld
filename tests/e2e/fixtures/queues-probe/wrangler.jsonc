@@ -1,0 +1,23 @@
+{
+  // Test-only overlay of examples/queues: the consumer records what it saw in
+  // a Durable Object so the test can assert on batch sizes, attempts, delays,
+  // content types and dead-lettering through HTTP rather than log scraping.
+  "name": "queues-probe",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": { "bindings": [{ "name": "REC", "class_name": "Recorder" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Recorder"] }],
+  "queues": {
+    "producers": [{ "binding": "Q", "queue": "probe-q" }],
+    "consumers": [
+      {
+        "queue": "probe-q",
+        "max_batch_size": 10,
+        "max_batch_timeout": 2,
+        "max_retries": 1,
+        "dead_letter_queue": "probe-dlq"
+      },
+      { "queue": "probe-dlq", "max_batch_timeout": 1 }
+    ]
+  }
+}

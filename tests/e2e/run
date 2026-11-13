@@ -1,0 +1,5 @@
+#!/bin/sh
+# Single entrypoint for the end-to-end suite. See tests/e2e/README.md.
+set -e
+here=$(cd "$(dirname "$0")" && pwd)
+exec node --no-warnings "$here/run.mjs" "$@"

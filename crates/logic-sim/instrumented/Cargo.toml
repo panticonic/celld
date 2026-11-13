@@ -1,0 +1,23 @@
+# The decision core, compiled a second time with `cfg(celld_internal_tests)`
+# so its observer hooks exist. The source is `crates/logic` itself; this
+# package only changes the cfg, so the simulator always tests the code that
+# ships. It is a separate crate rather than a feature of `celld-logic`, so
+# workspace feature unification can never leak the cfg into a celld binary.
+[package]
+name = "celld-logic-instrumented"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94.1"
+license = "Apache-2.0"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "celld_logic"
+path = "../../logic/lib.rs"
+test = false
+doctest = false
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ["cfg(celld_internal_tests)"]

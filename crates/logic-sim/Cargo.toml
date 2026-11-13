@@ -1,0 +1,20 @@
+[package]
+name = "logic-sim"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94.1"
+license = "Apache-2.0"
+publish = false
+description = "Deterministic simulator for the celld coordination core"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "logic-sim"
+path = "src/main.rs"
+
+# No third-party dependencies: the RNG is in-tree so a seed means the same
+# schedule forever, independent of any crate's algorithm changes.
+[dependencies]
+celld-logic = { package = "celld-logic-instrumented", path = "instrumented" }

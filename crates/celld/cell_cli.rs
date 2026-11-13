@@ -148,7 +148,8 @@ pub(crate) fn help_text() -> String {
 USAGE:
   celld cell list [CLASS] --bucket [s3://|gs://|az://]NAME[/PREFIX] [OPTIONS]
 
-Run `celld cell gc --help` for the report of superseded epochs.
+Run `celld cell gc --help` for the report of superseded epochs, and
+`celld cell import --help` to create an object from database files.
 
 The listing is bounded by default, because a fleet can hold far more cells
 than an operator wants to read and each request returns at most {page}
@@ -195,10 +196,13 @@ pub async fn run(arguments: Vec<String>) -> anyhow::Result<()> {
     match arguments.next().as_deref() {
         Some("list") => run_list(arguments.collect()).await,
         Some("gc") => run_gc(arguments.collect()).await,
+        Some("import") => run_import(arguments.collect()).await,
         None | Some("-h") | Some("--help") | Some("help") => {
             Output::new(Format::Text).help(&help_text())
         }
-        Some(other) => bail!("unknown cell command: {other}; use celld cell list or celld cell gc"),
+        Some(other) => bail!(
+            "unknown cell command: {other}; use celld cell list, celld cell gc or celld cell import"
+        ),
     }
 }
 
@@ -524,4 +528,300 @@ async fn cell_epochs(
         base: plan.retired_below,
         bytes,
     }))
+}
+
+/// `celld cell import`'s arguments.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct ImportOptions {
+    pub(crate) fleet: FleetFlags,
+    /// `--dev PROJECT`: the local bucket of `celld dev` in PROJECT.
+    pub(crate) dev: Option<std::path::PathBuf>,
+    pub(crate) script: String,
+    pub(crate) class: String,
+    /// The object's name (`idFromName`), or its hex id with `--id`.
+    pub(crate) object: String,
+    pub(crate) by_id: bool,
+    pub(crate) file: std::path::PathBuf,
+    pub(crate) facets: Vec<crate::object_image::ImportFacet>,
+    pub(crate) replace_unfinished: bool,
+    pub(crate) json: bool,
+}
+
+/// `NAME=FILE[:sqlite|:dolt]`. The name ends at the first `=`; only an
+/// exact `:sqlite` or `:dolt` suffix names the engine, so a path that
+/// contains a colon stays a path.
+pub(crate) fn parse_facet(spec: &str) -> anyhow::Result<crate::object_image::ImportFacet> {
+    let (name, rest) = spec
+        .split_once('=')
+        .with_context(|| format!("--facet takes NAME=FILE[:ENGINE], not {spec:?}"))?;
+    let (file, engine) = match rest.rsplit_once(':') {
+        Some((file, "sqlite")) => (file, celld_ltx::Engine::Sqlite),
+        Some((file, "dolt")) => (file, celld_ltx::Engine::Dolt),
+        _ => (rest, celld_ltx::Engine::Sqlite),
+    };
+    if name.is_empty() || file.is_empty() {
+        bail!("--facet takes NAME=FILE[:ENGINE], not {spec:?}");
+    }
+    Ok(crate::object_image::ImportFacet {
+        name: name.to_string(),
+        file: std::path::PathBuf::from(file),
+        engine,
+    })
+}
+
+pub(crate) fn import_options_from_arguments(
+    arguments: Vec<String>,
+) -> anyhow::Result<Option<ImportOptions>> {
+    let mut options = ImportOptions::default();
+    let mut positional = Vec::new();
+    let mut file = None;
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        let mut value = |option: &str| {
+            arguments
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("{option} requires a value"))
+        };
+        match argument.as_str() {
+            "-h" | "--help" => return Ok(None),
+            "--json" => options.json = true,
+            "--id" => options.by_id = true,
+            "--replace-unfinished" => options.replace_unfinished = true,
+            "--file" => file = Some(std::path::PathBuf::from(value("--file")?)),
+            "--facet" => options.facets.push(parse_facet(&value("--facet")?)?),
+            "--dev" => options.dev = Some(std::path::PathBuf::from(value("--dev")?)),
+            other => {
+                if options.fleet.consume(other, &mut value)? {
+                    continue;
+                }
+                if other.starts_with('-') {
+                    bail!("unknown cell import option: {other}; run `celld cell import --help` for usage");
+                }
+                positional.push(other.to_string());
+            }
+        }
+    }
+    let [script, class, object]: [String; 3] = positional.try_into().map_err(|_| {
+        anyhow::anyhow!("celld cell import takes SCRIPT CLASS NAME; run `celld cell import --help`")
+    })?;
+    if class.contains(':') || !celld_logic::cell::valid_cell_scope(&class) {
+        bail!("a cell class must use ASCII letters, digits, and `_ - . $`, not {class:?}");
+    }
+    options.file = file.context("celld cell import requires --file ROOT")?;
+    if options.dev.is_some() && options.fleet.bucket.is_some() {
+        bail!("celld cell import takes --dev or --bucket, not both");
+    }
+    options.script = script;
+    options.class = class;
+    options.object = object;
+    Ok(Some(options))
+}
+
+/// The cell scope an import addresses: what `idFromName(NAME)` (or
+/// `idFromString(ID)`) gives in `script`'s namespace for `class`.
+pub(crate) fn import_scope(options: &ImportOptions) -> anyhow::Result<String> {
+    let namespace = crate::engine_api::namespace_key(&options.script, &options.class);
+    let id = if options.by_id {
+        use hmac::Mac as _;
+        let decoded = crate::engine_api::decode_durable_object_id(&options.object)
+            .with_context(|| format!("--id takes a 64-digit hex id, not {:?}", options.object))?;
+        // What idFromString checks: the id belongs to this namespace.
+        let key = crate::engine_api::durable_object_id_key(&namespace);
+        crate::engine_api::durable_object_id_hmac(&key, &decoded[..16])
+            .verify_truncated_left(&decoded[16..])
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "{} is not an id of {}'s namespace for {}",
+                    options.object,
+                    options.script,
+                    options.class
+                )
+            })?;
+        options.object.to_ascii_lowercase()
+    } else {
+        crate::engine_api::durable_object_id_hex(&crate::engine_api::durable_object_id_for_name(
+            &namespace,
+            &options.object,
+        ))
+    };
+    let scope = format!("{}:{id}", options.class);
+    if !celld_logic::cell::valid_cell_scope(&scope) {
+        bail!("{scope} is not a valid cell scope");
+    }
+    Ok(scope)
+}
+
+pub(crate) fn import_help_text() -> String {
+    format!(
+        r#"Create a Durable Object from plain database files.
+
+USAGE:
+  celld cell import SCRIPT CLASS NAME --file ROOT [--facet NAME=FILE[:ENGINE]]...
+                    (--bucket [s3://|gs://|az://]NAME[/PREFIX] | --dev PROJECT) [OPTIONS]
+
+The new object is the one SCRIPT's namespace for CLASS gives idFromName(NAME)
+(with --id, NAME is the object's 64-digit hex id instead). ROOT becomes its
+database, and each --facet file the database of the facet NAME, which the
+object reaches with ctx.facets.get(NAME, ...). A facet file is a SQLite
+database unless :dolt follows it (a DoltLite store); a Dolt facet must be
+started with celld: {{ storage: "dolt" }}.
+
+The import refuses an object that exists, a file that is not of its declared
+engine, and a ROOT whose engine is not the class's in SCRIPT's current
+deployment (new_sqlite_classes or new_dolt_classes). A SQLite file is read
+through SQLite, so a WAL beside it counts; a file workerd wrote has its
+runtime tables (_cf_KV, _cf_METADATA) converted, and its alarm dropped. The
+object is created as a fork is: claimed with a conditional create, with every
+database uploaded as its first epoch before any node can activate it.
+
+OPTIONS:
+  --file ROOT              The root database (required)
+  --facet NAME=FILE[:ENGINE]
+                           A facet database; ENGINE is sqlite (default) or dolt
+  --id                     NAME is a hex object id, not a name
+  --replace-unfinished     Take over an import that stopped before it completed
+  --dev PROJECT            Use the local bucket of `celld dev` in PROJECT
+  --json                   Print the result as JSON
+{FLEET_HELP}
+  -h, --help               Show this help"#
+    )
+}
+
+async fn run_import(arguments: Vec<String>) -> anyhow::Result<()> {
+    let Some(mut options) = import_options_from_arguments(arguments)? else {
+        return Output::new(Format::Text).help(&import_help_text());
+    };
+    let scope = import_scope(&options)?;
+    let bucket = match &options.dev {
+        Some(project) => {
+            let database = project.join(".celld/dev/objects.sqlite3");
+            if !database.is_file() {
+                bail!(
+                    "{} has no celld dev state; run `celld dev` there first",
+                    project.display()
+                );
+            }
+            crate::bucket::Bucket::open_dev(&database)?
+        }
+        None => {
+            let fleet = std::mem::take(&mut options.fleet);
+            fleet.resolve("celld cell import")?.open().await?
+        }
+    };
+    let bytes = crate::object_image::import(
+        &bucket,
+        &options.script,
+        &scope,
+        &options.file,
+        &options.facets,
+        options.replace_unfinished,
+    )
+    .await
+    .with_context(|| format!("import {scope}"))?;
+    let mut out = Output::new(if options.json {
+        Format::Json
+    } else {
+        Format::Text
+    });
+    out.row(&Imported {
+        scope: scope.clone(),
+        facets: options.facets.iter().map(|f| f.name.clone()).collect(),
+        bytes,
+    })?;
+    out.finish()?;
+    if !options.json {
+        note!(
+            "imported {} database(s), {bytes} bytes, as {scope}",
+            1 + options.facets.len()
+        );
+    }
+    Ok(())
+}
+
+/// The object an import created.
+struct Imported {
+    scope: String,
+    facets: Vec<String>,
+    bytes: u64,
+}
+
+impl Record for Imported {
+    fn json(&self) -> serde_json::Value {
+        let (class, id) = self.scope.split_once(':').unwrap_or(("", &self.scope));
+        serde_json::json!({
+            "scope": self.scope,
+            "class": class,
+            "id": id,
+            "facets": self.facets,
+            "bytes": self.bytes,
+        })
+    }
+
+    fn text(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.scope)
+    }
+}
+
+#[cfg(test)]
+mod import_tests {
+    use super::*;
+
+    fn arguments(list: &[&str]) -> Vec<String> {
+        list.iter().map(|argument| argument.to_string()).collect()
+    }
+
+    #[test]
+    fn facets_name_their_engine_only_by_an_exact_suffix() {
+        let facet = parse_facet("do=/data/a.1.sqlite").unwrap();
+        assert_eq!((facet.name.as_str(), facet.engine), ("do", celld_ltx::Engine::Sqlite));
+        let facet = parse_facet("ws=C:/x/ledger.db:dolt").unwrap();
+        assert_eq!(facet.file, std::path::PathBuf::from("C:/x/ledger.db"));
+        assert_eq!(facet.engine, celld_ltx::Engine::Dolt);
+        let facet = parse_facet("a=b=c:sqlite").unwrap();
+        assert_eq!((facet.name.as_str(), facet.file.to_str().unwrap()), ("a", "b=c"));
+        assert!(parse_facet("nofile").is_err());
+        assert!(parse_facet("=x.db").is_err());
+    }
+
+    #[test]
+    fn an_import_names_its_object_as_the_namespace_does() {
+        let options = import_options_from_arguments(arguments(&[
+            "app",
+            "UniversalDO",
+            "workspace/one",
+            "--file",
+            "root.sqlite",
+            "--facet",
+            "do=root.1.sqlite",
+            "--dev",
+            "proj",
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(options.facets.len(), 1);
+        let scope = import_scope(&options).unwrap();
+        let namespace = crate::engine_api::namespace_key("app", "UniversalDO");
+        let id = crate::engine_api::durable_object_id_for_name(&namespace, "workspace/one");
+        assert_eq!(
+            scope,
+            format!("UniversalDO:{}", crate::engine_api::durable_object_id_hex(&id))
+        );
+        // The same object by its id, and an id of another namespace refused.
+        let hex = scope.split_once(':').unwrap().1.to_string();
+        let by_id = import_options_from_arguments(arguments(&[
+            "app", "UniversalDO", &hex, "--id", "--file", "root.sqlite", "--dev", "proj",
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(import_scope(&by_id).unwrap(), scope);
+        let other = import_options_from_arguments(arguments(&[
+            "other-app", "UniversalDO", &hex, "--id", "--file", "root.sqlite", "--dev", "proj",
+        ]))
+        .unwrap()
+        .unwrap();
+        assert!(import_scope(&other).is_err());
+        // A root file is required, and so are all three positionals.
+        assert!(import_options_from_arguments(arguments(&["app", "C", "n"])).is_err());
+        assert!(import_options_from_arguments(arguments(&["app", "C", "--file", "x"])).is_err());
+    }
 }

@@ -1598,6 +1598,7 @@ impl RuntimeManager {
             headers,
             reply,
             order,
+            invocation_limits: None,
         };
         let cancellation = if let Some(request_id) = request_id {
             let mut requests = self
@@ -1855,6 +1856,7 @@ impl RuntimeManager {
             method,
             args,
             reply,
+            invocation_limits: None,
         };
         self.cell_event(&cell, job, receive, "cell isolate dropped RPC result")
             .await

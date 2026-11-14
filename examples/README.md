@@ -44,13 +44,17 @@ supports, one service or API at a time:
 - `dynamic-worker-tails/` — a runtime-loaded Worker with a Tail Worker
 - `residency/` — an in-memory counter kept resident by `ctx.residency.hold()`
   past idle eviction, and evicted after `release()`; `run.sh` scripts it
-  against `celld dev`
+  against `celld dev`; `tests/e2e/scenarios/residency-swap.mjs` deploys over it
+  and checks that a code swap does not wait for the hold
 - `egress/` — outbound traffic through a node egress proxy, with a test that
   checks the identity each request carries (`node test.mjs`)
 - `facet-abort/` — a request in flight to a facet ends when the facet is aborted,
   and a root handler another request settles answers; driven by
   `tests/e2e/scenarios/compat-facet-abort.mjs`
 - `facets/` — a Durable Object facet over a class the Worker Loader starts
+- `facet-limits/` — a CPU limit on one call to a facet, below the loaded Worker's
+  own limit (fork-only feature); driven by
+  `tests/e2e/scenarios/facet-limits.mjs`
 - `codegen/` — `eval`, `new Function` and WebAssembly compilation are refused
   everywhere except a Durable Object class that declares `codegen`; no build
   step, and `check.sh` asserts the answers

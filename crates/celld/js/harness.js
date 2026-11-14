@@ -2757,6 +2757,37 @@ const __makeLoopbackDurableObjectClass = (name) => {
   });
   return specialize;
 };
+// celld fork: the `limits` of `ctx.facets.get(name, startup, { limits })`, as
+// the JSON text the host ops take ("null" for none). Same keys as the limits of
+// `getEntrypoint()`; a value must be a positive integer, so a typo is not read
+// as "unlimited".
+const __facetCallLimits = (options) => {
+  if (options === undefined || options === null) return "null";
+  if (typeof options !== "object")
+    throw new TypeError("ctx.facets.get() options must be an object.");
+  for (const key of Object.keys(options))
+    if (key !== "limits")
+      throw new TypeError(
+        'ctx.facets.get() does not support the option "' + key + '".');
+  const limits = options.limits;
+  if (limits === undefined || limits === null) return "null";
+  if (typeof limits !== "object")
+    throw new TypeError("ctx.facets.get() options.limits must be an object.");
+  const out = {};
+  for (const key of Object.keys(limits)) {
+    if (key !== "cpuMs" && key !== "subRequests")
+      throw new TypeError(
+        'ctx.facets.get() limits does not support "' + key +
+        '"; it accepts cpuMs and subRequests.');
+    const value = limits[key];
+    if (value === undefined) continue;
+    if (!Number.isInteger(value) || value < 1 || value > 4294967295)
+      throw new RangeError(
+        "ctx.facets.get() limits." + key + " must be a positive integer.");
+    out[key] = value;
+  }
+  return Object.keys(out).length === 0 ? "null" : JSON.stringify(out);
+};
 class DurableObjectFacets {
   constructor(state) {
     this._state = state;
@@ -2771,15 +2802,25 @@ class DurableObjectFacets {
       throw new TypeError("Facet name is too long (max 256 characters).");
     return name;
   }
-  get(name, getStartupOptions) {
+  // celld fork: `get(name, startup, { limits: { cpuMs, subRequests } })`
+  // returns a stub whose every `fetch` and RPC call is an invocation limited
+  // to that much CPU (and that many subrequests), on top of the limits of the
+  // loaded worker the class comes from: the lower of the two applies. The
+  // facet is the same running facet either way, with the same heap; only the
+  // calls through this stub carry the limit. Exceeding it ends that call the
+  // way the loaded worker's own limit does. `startup` runs once per run of the
+  // facet, so a limit that differs per call cannot live there.
+  get(name, getStartupOptions, options) {
     name = this._validName(name);
+    const limitsJson = __facetCallLimits(options);
     if (this._state._facetDepth >= 3)
       throw new Error(
         "Facet nesting depth limit exceeded. The maximum depth including the root Durable Object is 4.");
     if (typeof getStartupOptions !== "function")
       throw new TypeError("The facet startup callback must be a function.");
     let record = this._running.get(name);
-    if (record !== undefined) return record.stub;
+    if (record !== undefined)
+      return limitsJson === "null" ? record.stub : record.limited(limitsJson);
     // Each run gets a distinct host scope. An aborted request can still have
     // a pending continuation, so reusing its scope would let that continuation
     // enter the replacement instance after the abort barrier opens.
@@ -2794,6 +2835,7 @@ class DurableObjectFacets {
       owner: this._owner + ":" + this._next++,
       started: null,
       stub: null,
+      limited: null,
     };
     record.abortion = new Promise((_, reject) => { record.reject = reject; });
     record.abortion.catch(() => {});
@@ -2844,57 +2886,63 @@ class DurableObjectFacets {
         record.abortion,
       ]);
     };
-    const target = {};
     // Methods share the loaded-worker RPC transport. A facet stub is not
     // awaitable, and a property is a single callable pipeline node.
-    const session = {
-      get: () => Promise.reject(new Error(
-        "Awaitable properties on facets are not supported yet.")),
-      call: (path, args) => invoke(async ([loader, className, id, propsSc, , storage, local]) => {
-        if (path.length !== 1)
-          throw new Error(
-            "Pipelined property paths on facets are not supported yet.");
-        return __rpcDes(await __facet_rpc(
-          loader, className, this._state._scope, record.owner, name, id,
-          propsSc, path[0], __rpcOut(args, false), storage, local));
-      }),
-    };
     // Arrow closures retain the manager because `target.fetch`'s method
     // receiver is the target object, not the DurableObjectFacets instance.
     const manager = this;
-    target.fetch = async function(input, init) {
-      return invoke(async ([loader, className, id, propsSc, , storage, local]) => {
-        const req = new Request(input, init);
-        const headers = JSON.stringify(req.headers.__celldHeaderList);
-        const { body, streamId } = await __subrequestBody(req);
-        const response = JSON.parse(await __facet_fetch(
-          loader, className, manager._state._scope, record.owner, name, id,
-          propsSc, req.url, req.method, body, headers, streamId, storage, local));
-        const responseBody = response.streamId !== undefined
-          ? new CelldHttpBodyStream(response.streamId)
-          : response.body !== undefined ? response.body
-          : Uint8Array.from(response.bodyBytes || []);
-        // The facet's socket lives in the facet's isolate. The target lets
-        // the root return the upgrade, or accept the client end that the
-        // wrapper binds to the facet's socket.
-        return __wrapServiceResponse(new Response(responseBody, {
-          status: response.status,
-          headers: response.headers,
-          __rawBody: true,
-          __wsTarget: response.wsTarget,
-        }), req.url);
+    const makeStub = (callLimits) => {
+      const target = {};
+      const session = {
+        get: () => Promise.reject(new Error(
+          "Awaitable properties on facets are not supported yet.")),
+        call: (path, args) => invoke(async ([loader, className, id, propsSc, , storage, local]) => {
+          if (path.length !== 1)
+            throw new Error(
+              "Pipelined property paths on facets are not supported yet.");
+          return __rpcDes(await __facet_rpc(
+            loader, className, manager._state._scope, record.owner, name, id,
+            propsSc, path[0], __rpcOut(args, false), storage, local,
+            callLimits));
+        }),
+      };
+      target.fetch = async function(input, init) {
+        return invoke(async ([loader, className, id, propsSc, , storage, local]) => {
+          const req = new Request(input, init);
+          const headers = JSON.stringify(req.headers.__celldHeaderList);
+          const { body, streamId } = await __subrequestBody(req);
+          const response = JSON.parse(await __facet_fetch(
+            loader, className, manager._state._scope, record.owner, name, id,
+            propsSc, req.url, req.method, body, headers, streamId, storage, local,
+            callLimits));
+          const responseBody = response.streamId !== undefined
+            ? new CelldHttpBodyStream(response.streamId)
+            : response.body !== undefined ? response.body
+            : Uint8Array.from(response.bodyBytes || []);
+          // The facet's socket lives in the facet's isolate. The target lets
+          // the root return the upgrade, or accept the client end that the
+          // wrapper binds to the facet's socket.
+          return __wrapServiceResponse(new Response(responseBody, {
+            status: response.status,
+            headers: response.headers,
+            __rawBody: true,
+            __wsTarget: response.wsTarget,
+          }), req.url);
+        });
+      };
+      return new Proxy(target, {
+        get(base, prop) {
+          if (prop === "then") return undefined;
+          if (Reflect.has(base, prop)) return Reflect.get(base, prop);
+          if (typeof prop !== "string") return undefined;
+          return __makeNode(session, [prop], null);
+        },
       });
     };
-    record.stub = new Proxy(target, {
-      get(base, prop) {
-        if (prop === "then") return undefined;
-        if (Reflect.has(base, prop)) return Reflect.get(base, prop);
-        if (typeof prop !== "string") return undefined;
-        return __makeNode(session, [prop], null);
-      },
-    });
+    record.stub = makeStub("null");
+    record.limited = makeStub;
     this._running.set(name, record);
-    return record.stub;
+    return limitsJson === "null" ? record.stub : record.limited(limitsJson);
   }
   _abort(name, reason) {
     name = this._validName(name);

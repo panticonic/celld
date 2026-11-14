@@ -599,6 +599,10 @@ pub enum CellJob {
         /// Where this call sits in its caller's order for this cell, if it
         /// came from a script rather than from a peer or the ingress.
         order: Option<CallOrder>,
+        /// The limits of this one call, from the stub it came through
+        /// (`ctx.facets.get(name, startup, { limits })`). The invocation
+        /// runs under the lower of these and its isolate's own.
+        invocation_limits: Option<crate::WorkerInvocationLimits>,
     },
     Rpc {
         request_id: Option<RequestId>,
@@ -607,6 +611,8 @@ pub enum CellJob {
         method: String,
         args: RpcData,
         reply: tokio::sync::oneshot::Sender<Result<RpcOutcome>>,
+        /// As on `Fetch`.
+        invocation_limits: Option<crate::WorkerInvocationLimits>,
     },
     WsOpen {
         scope: String,
@@ -673,6 +679,19 @@ pub enum CellJob {
 }
 
 impl CellJob {
+    /// The limits of this one invocation, when its caller set any.
+    fn invocation_limits(&self) -> Option<ResourceLimits> {
+        match self {
+            CellJob::Fetch {
+                invocation_limits, ..
+            }
+            | CellJob::Rpc {
+                invocation_limits, ..
+            } => *invocation_limits,
+            _ => None,
+        }
+    }
+
     /// The cell this event addresses, which is also the realm it runs in.
     pub fn scope(&self) -> &str {
         match self {
@@ -2497,13 +2516,6 @@ impl WorkerIsolate {
             self.isolate.thread_safe_handle(),
             self.runtime_state.clone(),
         )
-    }
-
-    fn initial_cpu_budget(&self) -> Option<Duration> {
-        self.runtime_state
-            .resource_limits
-            .and_then(|limits| limits.cpu_ms)
-            .map(|milliseconds| Duration::from_millis(u64::from(milliseconds)))
     }
 
     /// Take the isolate for one turn, and make the cells it hosts reachable
@@ -5461,8 +5473,35 @@ fn start_cell_event<'s>(
     capture_frames: bool,
     call: impl FnOnce(&mut v8::PinScope<'s, '_>) -> Result<v8::Local<'s, v8::Value>>,
 ) -> Begun {
+    start_limited_cell_event(
+        tc,
+        scope,
+        answer,
+        request_id,
+        body_stream_id,
+        capture_frames,
+        None,
+        call,
+    )
+}
+
+/// `start_cell_event` for an invocation that carries limits of its own. They
+/// apply with the isolate's, whichever is lower, to this event's context, so
+/// the CPU it spends (across every turn of it) and the subrequests it makes
+/// are counted against the call and against nothing else.
+#[allow(clippy::too_many_arguments)]
+fn start_limited_cell_event<'s>(
+    tc: &mut v8::PinScope<'s, '_>,
+    scope: &str,
+    answer: Answer,
+    request_id: Option<RequestId>,
+    body_stream_id: Option<u64>,
+    capture_frames: bool,
+    invocation_limits: Option<ResourceLimits>,
+    call: impl FnOnce(&mut v8::PinScope<'s, '_>) -> Result<v8::Local<'s, v8::Value>>,
+) -> Begun {
     let runtime_state = actor_runtime_state(tc);
-    let context = IoContext::tracked(&runtime_state);
+    let context = IoContext::tracked(&runtime_state, invocation_limits);
     if let Some(stream_id) = body_stream_id {
         context.own_body_stream(stream_id);
     }
@@ -5630,19 +5669,21 @@ fn begin_cell(tc: &mut v8::PinScope, job: CellJob, event_time: i64) -> Begun {
             headers,
             reply,
             order: _,
+            invocation_limits,
         } => {
             if let Err(error) = register_actor_name(tc, &scope, name.as_deref()) {
                 let _ = reply.send(Err(error));
                 return Begun::Nothing;
             }
             let body_stream_id = body.stream_id();
-            start_cell_event(
+            start_limited_cell_event(
                 tc,
                 &scope,
                 Answer::Fetch(reply),
                 request_id,
                 body_stream_id,
                 false,
+                invocation_limits,
                 |tc| {
                     let f = internal_function(tc, "__dispatchTo")?;
                     // A held body crosses as its bytes; a streamed body crosses as
@@ -5684,18 +5725,20 @@ fn begin_cell(tc: &mut v8::PinScope, job: CellJob, event_time: i64) -> Begun {
             method,
             args,
             reply,
+            invocation_limits,
         } => {
             if let Err(error) = register_actor_name(tc, &scope, name.as_deref()) {
                 let _ = reply.send(Err(error));
                 return Begun::Nothing;
             }
-            start_cell_event(
+            start_limited_cell_event(
                 tc,
                 &scope,
                 Answer::CellRpc(reply),
                 request_id,
                 None,
                 false,
+                invocation_limits,
                 |tc| {
                     let f = internal_function(tc, "__dispatchRpc")?;
                     let arguments = [
@@ -6813,12 +6856,14 @@ impl Worker {
 
         let event_time = advance_io_time(tc);
         let previous = install_trace(tc, trace.as_ref());
+        // The first turn of a cell event runs under the limit its own context
+        // will carry: the lower of the isolate's and the call's.
+        let declared_ms =
+            effective_resource_limits(inner.runtime_state.resource_limits, job.invocation_limits())
+                .and_then(|limits| limits.cpu_ms);
         let cpu_watchdog = inner.cpu_watchdog(
-            inner.initial_cpu_budget(),
-            inner
-                .runtime_state
-                .resource_limits
-                .and_then(|limits| limits.cpu_ms),
+            declared_ms.map(|milliseconds| Duration::from_millis(u64::from(milliseconds))),
+            declared_ms,
         );
         let begun = begin_cell(tc, job, event_time);
         drop(cpu_watchdog);
@@ -9044,6 +9089,10 @@ fn op_facet_rpc(
         Ok(patterns) => patterns,
         Err(error) => return loader_throw(scope, &error),
     };
+    let invocation_limits = match loader_invocation_limits(scope, args.get(11)) {
+        Ok(limits) => limits,
+        Err(error) => return loader_throw(scope, &error),
+    };
     // Before the identity sample, so the parent's gate covers the index row
     // before anything the facet writes can leave.
     if let Err(error) = storage::register_facet(&parent_scope, &name, engine, true) {
@@ -9085,6 +9134,7 @@ fn op_facet_rpc(
             method,
             args: RpcData::V8(call_args.into()),
             reply,
+            invocation_limits,
         };
         let driving = tokio::spawn(crate::runtime::drive_cell(
             facet.slot.affiliate(),
@@ -9193,6 +9243,10 @@ fn op_facet_fetch(
         Ok(patterns) => patterns,
         Err(error) => return loader_throw(scope, &error),
     };
+    let invocation_limits = match loader_invocation_limits(scope, args.get(14)) {
+        Ok(limits) => limits,
+        Err(error) => return loader_throw(scope, &error),
+    };
     let body = if stream_arg.is_number() {
         RequestBody::Stream(stream_arg.number_value(scope).unwrap_or(0.0) as u64)
     } else {
@@ -9259,6 +9313,7 @@ fn op_facet_fetch(
             headers,
             reply,
             order: None,
+            invocation_limits,
         };
         let driving = tokio::spawn(crate::runtime::drive_cell(
             facet.slot.affiliate(),
@@ -12191,7 +12246,11 @@ impl IoContext {
         })
     }
 
-    fn tracked(runtime_state: &Arc<ActorRuntimeState>) -> Arc<Self> {
+    fn tracked(
+        runtime_state: &Arc<ActorRuntimeState>,
+        invocation_limits: Option<ResourceLimits>,
+    ) -> Arc<Self> {
+        let limits = effective_resource_limits(runtime_state.resource_limits, invocation_limits);
         let id = allocate_io_context_id();
         let context = Arc::new(Self {
             continuation: Some((id, Arc::downgrade(runtime_state))),
@@ -12212,13 +12271,10 @@ impl IoContext {
             handed_wake: tokio::sync::Notify::new(),
             settled_hint: AtomicBool::new(false),
             pending_events: Mutex::new(HashSet::new()),
-            subrequest_limit: runtime_state
-                .resource_limits
-                .and_then(|limits| limits.sub_requests),
+            subrequest_limit: limits.and_then(|limits| limits.sub_requests),
             subrequests: AtomicUsize::new(0),
             redirect_client: OnceLock::new(),
-            cpu_limit_nanos: runtime_state
-                .resource_limits
+            cpu_limit_nanos: limits
                 .and_then(|limits| limits.cpu_ms)
                 .map(|milliseconds| u64::from(milliseconds).saturating_mul(1_000_000)),
             cpu_used_nanos: AtomicU64::new(0),
@@ -12577,7 +12633,7 @@ pub struct IoContextRegistryForTest(Arc<ActorRuntimeState>);
 impl IoContextRegistryForTest {
     #[doc(hidden)]
     pub fn track(&self) -> (u64, Arc<IoContext>) {
-        let context = IoContext::tracked(&self.0);
+        let context = IoContext::tracked(&self.0, None);
         let id = context
             .continuation
             .as_ref()
@@ -13770,5 +13826,83 @@ mod retired_scope_tests {
         scopes.record(7, "A:1".into());
         scopes.record(7, "A:1".into());
         assert_eq!(scopes.order.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod invocation_limit_tests {
+    use super::*;
+
+    fn limits(cpu_ms: Option<u32>, sub_requests: Option<u32>) -> Option<ResourceLimits> {
+        Some(ResourceLimits {
+            cpu_ms,
+            sub_requests,
+        })
+    }
+
+    fn cpu(effective: Option<ResourceLimits>) -> Option<u32> {
+        effective.and_then(|limits| limits.cpu_ms)
+    }
+
+    #[test]
+    fn a_call_limit_below_the_workers_own_wins() {
+        let effective =
+            effective_resource_limits(limits(Some(600_000), None), limits(Some(500), None));
+        assert_eq!(cpu(effective), Some(500));
+    }
+
+    #[test]
+    fn a_call_limit_above_the_workers_own_cannot_raise_it() {
+        let effective =
+            effective_resource_limits(limits(Some(3_000), None), limits(Some(600_000), None));
+        assert_eq!(cpu(effective), Some(3_000));
+    }
+
+    #[test]
+    fn either_limit_alone_applies_and_the_keys_are_independent() {
+        assert_eq!(
+            cpu(effective_resource_limits(None, limits(Some(250), None))),
+            Some(250)
+        );
+        assert_eq!(
+            cpu(effective_resource_limits(limits(Some(250), None), None)),
+            Some(250)
+        );
+        let both = effective_resource_limits(limits(Some(900), Some(10)), limits(None, Some(2)))
+            .expect("limits");
+        assert_eq!((both.cpu_ms, both.sub_requests), (Some(900), Some(2)));
+        assert_eq!(effective_resource_limits(None, None), None);
+    }
+
+    #[test]
+    fn an_event_context_counts_the_lower_limit() {
+        let none = Arc::new(ActorRuntimeState::default());
+        let context = IoContext::tracked(&none, limits(Some(500), Some(3)));
+        assert_eq!(context.cpu_limit_ms(), Some(500));
+        assert_eq!(context.subrequest_limit, Some(3));
+        assert_eq!(IoContext::tracked(&none, None).cpu_limit_ms(), None);
+
+        let unit = Arc::new(ActorRuntimeState {
+            resource_limits: limits(Some(3_000), None),
+            ..Default::default()
+        });
+        assert_eq!(IoContext::tracked(&unit, None).cpu_limit_ms(), Some(3_000));
+        let capped = IoContext::tracked(&unit, limits(Some(600_000), None));
+        assert_eq!(capped.cpu_limit_ms(), Some(3_000));
+        let lowered = IoContext::tracked(&unit, limits(Some(100), None));
+        assert_eq!(lowered.cpu_limit_ms(), Some(100));
+        assert_eq!(lowered.cpu_used_nanos.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn the_wire_form_of_a_call_limit_takes_the_loader_keys_only() {
+        let parsed: Option<ResourceLimits> =
+            serde_json::from_str(r#"{"cpuMs":500,"subRequests":2}"#).unwrap();
+        assert_eq!(parsed, limits(Some(500), Some(2)));
+        assert_eq!(
+            serde_json::from_str::<Option<ResourceLimits>>("null").unwrap(),
+            None
+        );
+        assert!(serde_json::from_str::<Option<ResourceLimits>>(r#"{"cpuTime":5}"#).is_err());
     }
 }

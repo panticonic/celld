@@ -24,6 +24,11 @@ Worker Loader provides.
 - `ctx.facets.abort(name, reason)` stops a facet and keeps its database.
 - `ctx.facets.delete(name)` stops a facet and removes its database.
 - The stub answers `fetch()` and the RPC methods of the class.
+- `ctx.facets.get(name, callback, { limits: { cpuMs, subRequests } })` (celld
+  only) returns a stub of the same running facet whose calls each carry a limit
+  of their own, on top of the loaded Worker's:
+  [Limits of one call](dynamic-workers.md#limits-of-one-call). The
+  [facet-limits example](../../examples/facet-limits) ends a spinning call this way.
 
 ## A facet is a part of its root object
 

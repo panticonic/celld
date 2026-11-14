@@ -54,6 +54,45 @@ Worker, not at `get()`.
 - When both `WorkerCode.limits` and `getEntrypoint()` set a limit, celld uses
   the lower value.
 
+## Limits of one call
+
+`WorkerCode.limits` (`cpuMs`, `subRequests`) applies to every invocation of the
+loaded Worker, and an invocation is one `fetch`, one RPC call or one event of an
+object. A caller that wants a lower limit for one call, for example a run of
+untrusted code that has its own timeout, sets it on the capability it calls
+through. The call is then limited by the lower of the Worker's limit and its
+own, and a limit above the Worker's changes nothing.
+
+| capability | where the limit goes |
+| --- | --- |
+| `getEntrypoint(name, { limits })` | every call through that Fetcher |
+| a [facet](durable-object-facets.md) stub | `ctx.facets.get(name, callback, { limits })`: every `fetch()` and RPC call through the stub that this `get` returns |
+
+The facet form is the fork's own (workerd's `get` takes two arguments). It is a
+property of the stub and not of the class, because the class handle
+(`getDurableObjectClass()`, which still takes only `props`) is read once, when
+the facet starts, and the callback does not run again while the facet runs. A
+limit that differs from run to run must not restart the facet and lose its heap,
+so the caller gets a stub for each call:
+
+```js
+const kernel = this.ctx.facets.get("kernel", startup, { limits: { cpuMs: run.timeoutMs } });
+await kernel.fetch(request); // ends after run.timeoutMs of CPU, however long the Worker's own limit is
+```
+
+The stub is a view of the one running facet, with the same heap and storage.
+`limits` takes the keys of `WorkerCode.limits`; a value must be a positive
+integer, and anything else is refused at the `get`.
+
+An invocation that exceeds its limit ends exactly as one that exceeds the
+Worker's own limit: the isolate's execution of it is terminated and the call
+rejects with `Worker exceeded CPU limit of N ms` (N is the limit that applied,
+the lower one). The limit counts the CPU of that invocation across all its
+turns, and nothing else: the next call starts from zero, the object keeps its
+heap, and its root and its sibling objects are not affected. WebSocket and
+alarm events of a facet are not calls through a stub and carry only the
+Worker's limit.
+
 ## The isolation boundary
 
 The loaded isolate has its own context and heap, but it runs in the process of
@@ -110,7 +149,8 @@ compiles the code again.
   variable.
 - `getEntrypoint()` supports `props` and `limits` options, while
   `getDurableObjectClass()` supports only `props`. A structured-clone encoded
-  `props` value can be at most 1 MiB.
+  `props` value can be at most 1 MiB. The fork limits one call to a facet with
+  a third argument of `ctx.facets.get()` ([above](#limits-of-one-call)).
 - A `globalOutbound` Fetcher cannot use `connect()` or a WebSocket.
 - A `WorkerCode.tails` array accepts Service Binding Fetchers. Each Fetcher
   receives one event after a Dynamic Worker fetch invocation finishes.
@@ -121,8 +161,9 @@ compiles the code again.
   limit.
 - Tail delivery starts after the response is available. A Tail Worker failure
   does not change the response, and celld writes the failure to the console.
-- celld enforces `cpuMs` and `subRequests` in `WorkerCode.limits` and in a
-  `getEntrypoint()` call. It rejects `allowExperimental`.
+- celld enforces `cpuMs` and `subRequests` in `WorkerCode.limits`, in a
+  `getEntrypoint()` call and in a facet stub's `limits`. It rejects
+  `allowExperimental`.
 - `WorkerCode.env` accepts structured-clone values and Service Binding
   capabilities. The encoded values and the capability props can total 1 MiB.
 - A loaded Worker entrypoint cannot transfer to another Worker. Awaitable and

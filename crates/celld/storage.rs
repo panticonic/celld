@@ -5588,5 +5588,98 @@ mod dolt_gate_position {
     }
 }
 
+/// The same for the operations that move bytes between cells.
+#[cfg(test)]
+mod dolt_remote_gate_position {
+    use super::*;
+    use crate::dolt_remote::Output;
+    use serde_json::json;
+
+    #[allow(clippy::disallowed_methods)]
+    #[test]
+    fn every_remote_operation_that_changes_a_cell_advances_its_position() {
+        let dir = tempfile::tempdir().unwrap();
+        let cells = Cells::default();
+        let _installed = cells.install();
+        let at = |file: &str| dir.path().join(file).to_string_lossy().into_owned();
+        let open = |scope: &str, file: &str| {
+            open_at_epoch(scope, &at(file), 1, false, None, false, celld_ltx::Engine::Dolt).unwrap();
+        };
+        // A source with one commit, and a holder that starts as its copy.
+        open("C:src", "src.db");
+        sql_exec("C:src", "CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT)", &[]).unwrap();
+        sql_exec("C:src", "INSERT INTO notes VALUES (1, 'one')", &[]).unwrap();
+        dolt_op("C:src", "commit", &json!({"message": "base"})).unwrap();
+        close("C:src");
+        std::fs::copy(at("src.db"), at("holder.db")).unwrap();
+        open("C:src", "src.db");
+        open("C:holder", "holder.db");
+
+        let json_of = |output: Output| match output {
+            Output::Json(value) => value,
+            Output::Bytes(_) => panic!("expected JSON"),
+        };
+        let bytes_of = |output: Output| match output {
+            Output::Bytes(bytes) => bytes,
+            Output::Json(value) => panic!("expected bytes, got {value}"),
+        };
+        let blob = |scope: &str, op: &str, args: serde_json::Value, input: &[u8]| {
+            dolt_blob_op(scope, op, &args, input)
+                .unwrap_or_else(|error| panic!("{scope} {op} {args}: {error}"))
+        };
+        let mut seen = std::collections::HashMap::new();
+        for scope in ["C:src", "C:holder"] {
+            seen.insert(scope, write_position(scope).unwrap().unwrap());
+        }
+        let mut advanced = |scope: &'static str, what: &str| {
+            let now = write_position(scope).unwrap().unwrap();
+            let before = seen.insert(scope, now).unwrap_or(0);
+            assert!(now > before, "{what} did not advance the position of {scope} ({before} -> {now})");
+        };
+
+        let granted = json_of(blob("C:src", "grant", json!({"fetch": true, "push": ["main"]}), &[]));
+        advanced("C:src", "grant");
+        let token = granted["token"].as_str().unwrap().to_string();
+        blob("C:holder", "remoteAdd", json!({"name": "origin", "ref": "Graph:abc", "token": token}), &[]);
+        advanced("C:holder", "remoteAdd");
+
+        let exchange = |op: &str, input: &[u8]| {
+            let request = bytes_of(blob(
+                "C:holder",
+                "remoteRequest",
+                json!({"name": "origin", "op": op, "branch": "main"}),
+                input,
+            ));
+            bytes_of(blob("C:src", "remoteServe", json!({}), &request))
+        };
+        // A fetch: the source reads, the holder installs the pack.
+        sql_exec("C:src", "INSERT INTO notes VALUES (2, 'two')", &[]).unwrap();
+        dolt_op("C:src", "commit", &json!({"message": "two"})).unwrap();
+        advanced("C:src", "a commit");
+        let response = exchange("fetch", &[]);
+        blob("C:holder", "remoteApply", json!({"name": "origin", "op": "fetch"}), &response);
+        advanced("C:holder", "fetch (remoteApply)");
+
+        // A push: the source installs the pack and moves the branch, which
+        // is checked out and clean, with a hard reset.
+        dolt_op("C:holder", "merge", &json!({"branch": "origin/main"})).unwrap();
+        advanced("C:holder", "merge of the fetched branch");
+        sql_exec("C:holder", "INSERT INTO notes VALUES (3, 'three')", &[]).unwrap();
+        dolt_op("C:holder", "commit", &json!({"message": "three"})).unwrap();
+        let refs = exchange("refs", &[]);
+        advanced("C:holder", "work before the push");
+        let before = write_position("C:src").unwrap().unwrap();
+        let response = exchange("push", &refs);
+        let pushed = json_of(blob("C:holder", "remoteApply", json!({"name": "origin", "op": "push"}), &response));
+        assert_eq!(pushed["unchanged"], json!(false), "{pushed}");
+        assert!(write_position("C:src").unwrap().unwrap() > before, "an accepted push (remoteServe)");
+
+        blob("C:src", "revoke", json!({"id": granted["id"]}), &[]);
+        advanced("C:src", "revoke");
+        blob("C:holder", "remoteRemove", json!({"name": "origin"}), &[]);
+        advanced("C:holder", "remoteRemove");
+    }
+}
+
 #[cfg(celld_internal_tests)]
 include!(env!("CELLD_INTERNAL_STORAGE_OBSERVERS"));

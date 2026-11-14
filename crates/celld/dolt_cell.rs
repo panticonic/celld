@@ -2178,6 +2178,7 @@ mod tests {
     /// What a node restores after a kill: the capture's L0 files applied in
     /// order (the page images the bucket holds), opened as a restore opens
     /// them. Captures first, so only what a capture shipped counts.
+    #[allow(clippy::disallowed_methods)]
     fn restored_from_captures(
         store: &mut celld_ltx::DoltStore,
         into: &std::path::Path,

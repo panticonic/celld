@@ -115,10 +115,12 @@ impl Node {
                     alarm: None,
                 }),
             }),
+            // A runtime starts on the generation the node serves, as a shell's
+            // does, so a swapped cell is current afterwards.
             Effect::StartRuntime { op, .. } => Some(Event::RuntimeStarted {
                 op: *op,
                 isolate: None,
-                generation: 0,
+                generation: self.state.current_generation(),
                 result: Ok(()),
             }),
             Effect::Publish { op, .. } => Some(Event::Published {
@@ -618,20 +620,120 @@ fn a_forced_swap_tells_the_holder_before_it_stops_the_runtime() {
         .any(|effect| matches!(effect, Effect::StopRuntime { .. })));
 }
 
+/// Announce generation 2 with no eager class.
+fn adopt(node: &mut Node, max_age_ms: u64) -> Vec<Effect> {
+    node.send(Event::GenerationChanged {
+        generation: 2,
+        now_mono_ms: node.now,
+        max_age_ms,
+        eager_classes: Vec::new(),
+    })
+}
+
+fn stops_for_swap(effects: &[Effect], cell: &str) -> bool {
+    effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::StopRuntime { cell: c, cause: StopCause::Swap, .. } if c == cell
+        )
+    })
+}
+
+impl Node {
+    /// Start a request on `cell` and leave it running; returns its id.
+    fn start_request(&mut self, cell: &str) -> RequestId {
+        let request = self.next_request;
+        self.next_request += 1;
+        self.send(Event::RequestAt {
+            request,
+            cell: cell.into(),
+            now_mono_ms: self.now,
+        });
+        request
+    }
+}
+
 #[test]
-fn an_unforced_swap_waits_for_a_held_cell_until_the_maximum_age() {
+fn a_swap_tells_an_idle_holder_at_once_and_goes_through_when_it_has_answered() {
+    let mut node = Node::new(config(10));
+    let epoch = node.resident("Kernel:a");
+    let hold = node.hold("Kernel:a", epoch).unwrap();
+
+    // The maximum age is a minute away, and nothing but the hold stands in the
+    // way: the holder is told in the event that adopts the generation.
+    let effects = adopt(&mut node, 60_000);
+    assert_eq!(
+        revocations(&effects, "Kernel:a"),
+        vec![(vec![hold], HoldRevocation::Swap)]
+    );
+    assert!(
+        !stops_for_swap(&effects, "Kernel:a"),
+        "the swap waits for the handler"
+    );
+    assert_eq!(node.state.cell_generation("Kernel:a"), Some(0));
+    // The holder's `onrevoked` ran at the cell and settled; the swap is the
+    // next safe point.
+    let effects = node.release("Kernel:a", hold);
+    assert!(stops_for_swap(&effects, "Kernel:a"));
+    assert_eq!(node.state.cell_generation("Kernel:a"), Some(2));
+    assert!(node.resident_phase("Kernel:a"));
+    assert_eq!(node.state.held_cells(), 0);
+    assert_eq!(node.state.swapping(), 0);
+}
+
+#[test]
+fn a_swap_waits_for_a_holder_that_does_not_answer_at_most_the_grace_period() {
     let mut node = Node::new(config(10));
     let epoch = node.resident("Kernel:a");
     node.hold("Kernel:a", epoch).unwrap();
-    let effects = node.send(Event::GenerationChanged {
-        generation: 2,
-        now_mono_ms: node.now,
-        max_age_ms: 30_000,
-        eager_classes: Vec::new(),
-    });
-    assert!(revocations(&effects, "Kernel:a").is_empty());
-    assert!(node.resident_phase("Kernel:a"));
+    adopt(&mut node, 60_000);
+    assert_eq!(node.state.revoking_holds(), 1);
 
+    node.advance(GRACE_MS - 1);
+    assert!(node.fire_due_timers().is_empty());
+    assert_eq!(node.state.cell_generation("Kernel:a"), Some(0));
+    node.advance(1);
+    node.fire_due_timers();
+    assert_eq!(node.state.held_cells(), 0);
+    assert_eq!(
+        node.state.cell_generation("Kernel:a"),
+        Some(2),
+        "the grace period dropped the hold and the swap went through, long before the maximum age"
+    );
+}
+
+#[test]
+fn a_swap_does_not_tell_the_holder_while_a_request_is_in_flight() {
+    // A running request can still change what `onrevoked` would persist, so
+    // the holder is told only when the request has finished: the swap waits
+    // for that request anyway.
+    let mut node = Node::new(config(10));
+    let epoch = node.resident("Kernel:a");
+    let hold = node.hold("Kernel:a", epoch).unwrap();
+    let request = node.start_request("Kernel:a");
+
+    let effects = adopt(&mut node, 60_000);
+    assert!(revocations(&effects, "Kernel:a").is_empty());
+    node.advance(30_000);
+    assert!(revocations(&node.sample(0), "Kernel:a").is_empty());
+
+    let effects = node.send(Event::ActivityFinished { request });
+    assert_eq!(
+        revocations(&effects, "Kernel:a"),
+        vec![(vec![hold], HoldRevocation::Swap)],
+        "told as soon as the request ends"
+    );
+    let effects = node.release("Kernel:a", hold);
+    assert!(stops_for_swap(&effects, "Kernel:a"));
+}
+
+#[test]
+fn a_request_in_flight_still_ends_at_the_maximum_age_and_the_holder_is_told_then() {
+    let mut node = Node::new(config(10));
+    let epoch = node.resident("Kernel:a");
+    node.hold("Kernel:a", epoch).unwrap();
+    node.start_request("Kernel:a");
+    adopt(&mut node, 30_000);
     node.advance(30_000);
     let effects = node.sample(0);
     assert_eq!(
@@ -640,8 +742,50 @@ fn an_unforced_swap_waits_for_a_held_cell_until_the_maximum_age() {
             .map(|r| r.1)
             .collect::<Vec<_>>(),
         vec![HoldRevocation::Swap],
-        "past the maximum age the swap is forced, and the holder is told"
+        "past the maximum age the swap is forced, as before"
     );
+    assert!(effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::CancelCellActivity { .. })));
+}
+
+#[test]
+fn a_regular_websocket_keeps_the_old_wait_and_the_holder_is_told_at_the_maximum_age() {
+    // A regular socket cannot outlive the isolate, and a swap closes it with
+    // 1012 only when it is forced. That guarantee is kept, holds or not.
+    let mut node = Node::new(config(10));
+    let epoch = node.resident("Kernel:a");
+    node.hold("Kernel:a", epoch).unwrap();
+    node.send(Event::WebSocketOpened {
+        cell: "Kernel:a".into(),
+        websocket: 7,
+        kind: WebSocketKind::Regular,
+    });
+    let effects = adopt(&mut node, 30_000);
+    assert!(revocations(&effects, "Kernel:a").is_empty());
+    node.advance(29_999);
+    assert!(revocations(&node.sample(0), "Kernel:a").is_empty());
+    node.advance(1);
+    let effects = node.sample(0);
+    assert_eq!(revocations(&effects, "Kernel:a").len(), 1);
+}
+
+#[test]
+fn a_hold_taken_after_a_swap_stands() {
+    let mut node = Node::new(config(10));
+    let epoch = node.resident("Kernel:a");
+    let hold = node.hold("Kernel:a", epoch).unwrap();
+    adopt(&mut node, 60_000);
+    node.release("Kernel:a", hold);
+    assert_eq!(node.state.cell_generation("Kernel:a"), Some(2));
+    let epoch = match node.state.phase("Kernel:a") {
+        Some(Phase::Resident { epoch }) => *epoch,
+        other => panic!("not resident: {other:?}"),
+    };
+    let again = node.hold("Kernel:a", epoch).expect("a hold after the swap");
+    node.advance(120_000);
+    assert!(revocations(&node.sample(0), "Kernel:a").is_empty());
+    assert!(node.state.holds_hold("Kernel:a", again));
 }
 
 #[test]

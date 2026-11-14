@@ -5332,11 +5332,24 @@ impl State {
     /// `blockConcurrencyWhile` holder is a running request or alarm, so it is
     /// covered by those.
     fn swap_safe_point(&self, id: &str) -> bool {
+        self.cells.get(id).is_some_and(|cell| cell.holds.is_empty())
+            && self.swap_blocked_only_by_holds(id)
+    }
+
+    /// Whether the cell is at a swap safe point except for its residency
+    /// holds: nothing is running, nothing is withheld, and no socket or
+    /// alarm needs the isolate. A hold means "do not evict me for idleness or
+    /// capacity"; it must not mean "do not update my code", so a cell in this
+    /// state has its holds revoked at once and swaps when the holder has
+    /// answered. A cell that is not in this state has work in flight that the
+    /// swap must not cut short, and the holder is not told yet: an
+    /// `onrevoked` handler persists what must survive, and a request that is
+    /// still running would change it again afterwards.
+    fn swap_blocked_only_by_holds(&self, id: &str) -> bool {
         let Some(cell) = self.cells.get(id) else {
             return false;
         };
         !self.active_cells.contains_key(id)
-            && cell.holds.is_empty()
             && !cell
                 .websockets
                 .values()
@@ -5404,6 +5417,18 @@ impl State {
             .collect();
         for id in nominated {
             if !self.swap_safe_point(&id) {
+                let held = self
+                    .cells
+                    .get(&id)
+                    .is_some_and(|cell| !cell.holds.is_empty() && cell.hold_revoke.is_none());
+                if held && self.swap_blocked_only_by_holds(&id) {
+                    // Only the holds stand in the way: tell the holder now,
+                    // as a drain does. The holds drop when its handlers
+                    // settle (or at the grace period), and the next pump
+                    // finds the safe point.
+                    self.revoke_holds(&id, HoldRevocation::Swap, effects);
+                    continue;
+                }
                 let eager = self.swap_is_eager(&id);
                 let cell = self.cells.get(&id).expect("nominated cell listed above");
                 let alarm = match cell.alarm {

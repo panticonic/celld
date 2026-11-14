@@ -152,14 +152,16 @@ cell then evicts like any idle cell.
 ## Revocation
 
 A hold is the owner's promise to keep something alive, and the node's promise
-not to take it away for convenience. Three events end holds anyway, because the
-isolate itself is going away. In each, the node **tells the object first**.
+not to take it away for convenience: not to evict it for idleness or for
+capacity. It is not a promise to keep running old code. Four events end holds
+anyway, because the isolate itself is going away. In each, the node **tells the
+object first**.
 
 | event | what happens |
 | --- | --- |
 | **Drain** (shutdown, deploy, spot reclaim) | When the cell joins the handoff batch, the node revokes its holds with reason `"drain"`. |
 | **Clean reload** (same-node restart) | The database is kept but the isolate is not. The node revokes every hold with reason `"drain"` and the reload waits for the handlers. |
-| **Forced generation swap** | A held cell is not a safe point, so a swap waits for the maximum age (or at once for an eager class), then revokes with reason `"swap"`. |
+| **Generation swap** (a deploy adopted in place: the poll, a nudge or `POST /reload`) | The node revokes the cell's holds with reason `"swap"` as soon as the holds are all that stands in the way of the swap, and the cell swaps when the handlers have settled. See [Generation swaps](#generation-swaps). |
 | **Operator** | `POST /revoke-holds/<cell>`, reason `"operator"`. The cell stays resident. |
 
 Revocation is a cell event: the node runs each handle's `onrevoked` handler
@@ -179,6 +181,44 @@ own stay.
 
 The core's drain-pin report (`State::drain_pins`) counts the holds still standing
 on each quiescing cell.
+
+## Generation swaps
+
+When a node adopts a new deployment, a resident cell on the old generation
+moves to the new one at its next **safe point**: no request running, no output
+held back by the gate, no alarm handler in flight, and no regular or outbound
+WebSocket (a hibernatable one does not matter). Requests that arrive meanwhile
+wait for the new code. A cell that never reaches a safe point is forced after
+`CELLD_DEPLOY_MAX_AGE_S` (default 60 s) ([deployments](../README.md#deploy-an-application)).
+
+A residency hold is not part of that definition. The moment a cell that is
+marked for the swap has nothing else in the way, the node **revokes its holds**
+(reason `"swap"`), the cell runs the `onrevoked` handlers, and the swap goes
+through when they have settled, or when `CELLD_HOLD_GRACE_MS` ends, whichever is
+first. A cell that held an in-memory kernel therefore swaps within the handler's
+own time, and no longer waits for the maximum age. (Before this, every held cell
+waited out the full 60 s on every planned restart.)
+
+What does not change:
+
+- **A request in flight keeps its guarantees.** The holder is told only when the
+  cell has no request, alarm, regular socket or withheld output left, so
+  `onrevoked` sees the state the last request left and persists that, and no
+  request changes it afterwards. A cell with a request that never ends is forced
+  at the maximum age as before, and the holder is told then (with the request
+  cancelled), as is a cell with a regular WebSocket: the swap closes it with
+  code 1012 only when it is forced. This is the case where prompt revocation
+  would be unsafe, so it keeps the old rule.
+- **The output gate** still holds a response back until the writes it depends on
+  are durable. What `onrevoked` writes is covered by the same proof as any other
+  write, before the old runtime stops.
+- **An eager class** (the engine's own reserved cells) is still forced at once.
+- A hold taken after the swap, on the new generation, stands: the node never
+  revokes a hold for a swap that has already happened. A hold requested while the
+  swap is under way is refused with `ERR_RESIDENCY_LEAVING`.
+
+The handler is the place to persist anything that must survive: the heap is gone
+when the cell restarts on the new generation, as for a drain.
 
 ## When holds end by themselves
 
@@ -225,13 +265,15 @@ facet that runs in its root's isolate is still held through the root: call
 `celld: { residency: true }` can hold the root cell it runs under. Revocation
 reaches handles registered in the root's isolate; for a facet that runs in a
 separate loaded isolate the node still drops its hold when the grace period ends,
-but its `onrevoked` handler does not run.
+but its `onrevoked` handler does not run. For a generation swap that costs the
+grace period (5 s by default) and not the maximum age.
 
 ## Settings
 
 | variable | default | meaning |
 | --- | --- | --- |
-| `CELLD_HOLD_GRACE_MS` | 5000 | How long a revoked hold may take to wind down. |
+| `CELLD_HOLD_GRACE_MS` | 5000 | How long a revoked hold may take to wind down, for a drain, a swap or an operator revoke. |
+| `CELLD_DEPLOY_MAX_AGE_S` | 60 | After this long the node forces a swap of a cell that has work in flight (see [Generation swaps](#generation-swaps)). A hold alone no longer waits for it. |
 | `CELLD_MAX_HOLDS_PER_CELL` | 16 | Live holds one cell may carry. |
 | `CELLD_MAX_RESIDENT_CELLS` | machine-derived | The ceiling that the hold budget is half of. |
 
@@ -239,7 +281,10 @@ but its `onrevoked` handler does not run.
 
 [`examples/residency`](../../examples/residency) holds an in-memory counter
 across `CELLD_IDLE_EVICT_S` and shows it evicted after `release()`.
-`examples/residency/run.sh` runs that scenario against `celld dev`.
+`examples/residency/run.sh` runs that scenario against `celld dev`. The e2e
+scenario `residency-swap` deploys a second version over a held object, reloads
+the node (`POST /reload`) and checks that the swap takes seconds and that
+`onrevoked` ran, and that a request in flight is waited for.
 
 ## Differences from Cloudflare
 

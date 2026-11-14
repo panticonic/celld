@@ -259,6 +259,8 @@ in its log and in the `/reload` response.
 An inactive Durable Object runs the new deployment at its next activation.
 A resident one moves when no request, alarm handler, or regular WebSocket
 is active, and it keeps its storage and its hibernatable WebSockets. A
+[residency hold](services/residency.md#generation-swaps) does not delay the
+move: the object is told (`onrevoked`) and moves when it has answered. A
 request that arrives during the move waits for the new code. An outbound
 call from a request that already runs in the object does not wait, so that
 request can finish on the old code. After

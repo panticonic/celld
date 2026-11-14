@@ -1,3 +1,6 @@
+// The deployment this code belongs to; a test edits it to tell a swap happened.
+const VERSION = "v1";
+
 // A Durable Object that keeps live, in-memory state across idle periods.
 //
 // `heap` is plain JavaScript memory: nothing about it is stored. Without a
@@ -24,12 +27,23 @@ export class Kernel {
         this.hold?.release();
         this.hold = null;
         break;
+      case "/slow": {
+        // A request that stays in flight for `ms`, as a long evaluation does.
+        const ms = Number(new URL(request.url).searchParams.get("ms") ?? 1000);
+        this.slowStarted = (this.slowStarted ?? 0) + 1;
+        await new Promise((resolve) => setTimeout(resolve, ms));
+        this.slowDone = (this.slowDone ?? 0) + 1;
+        break;
+      }
     }
     return Response.json({
       counter: this.heap.counter,
       // Changes when the object was evicted and constructed again.
       bornAt: this.heap.bornAt,
       held: this.hold !== null,
+      version: VERSION,
+      slowStarted: this.slowStarted ?? 0,
+      slowDone: this.slowDone ?? 0,
       // Set by `onrevoked` when the node took the hold away (a drain, a swap or
       // an operator): the reason, and the counter it saved.
       revoked: (await this.ctx.storage.get("lastRevocation")) ?? null,
@@ -51,7 +65,11 @@ export class Kernel {
     // swap, an operator). Persist whatever must survive; the node waits for
     // this handler for at most CELLD_HOLD_GRACE_MS.
     this.hold.onrevoked = async ({ reason }) => {
-      await this.ctx.storage.put("lastRevocation", { reason, counter: this.heap.counter });
+      await this.ctx.storage.put("lastRevocation", {
+        reason,
+        counter: this.heap.counter,
+        slowDone: this.slowDone ?? 0,
+      });
     };
     this.hold.released.then(() => {
       this.hold = null;

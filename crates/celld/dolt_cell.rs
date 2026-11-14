@@ -2070,6 +2070,139 @@ mod tests {
                 .unwrap_err();
         assert!(format!("{error:#}").contains("no storage"), "{error:#}");
     }
+
+    /// What a reader of the store sees, for comparing the live cell with the
+    /// store a capture would restore.
+    fn observed(c: &Connection) -> Value {
+        json!({
+            "branch": active_branch(c).unwrap(),
+            "head": hash_of(c, "HEAD").unwrap(),
+            "branches": rows(c, "SELECT name, hash FROM dolt_branches ORDER BY name", &[]).unwrap(),
+            "log": rows(c, "SELECT commit_hash, message FROM dolt_log", &[]).unwrap(),
+            "rows": rows(c, "SELECT a, b FROM t ORDER BY a", &[]).unwrap(),
+            "status": rows(c, "SELECT table_name, staged, status FROM dolt_status \
+                               WHERE table_name NOT LIKE '\\_cf\\_%' ESCAPE '\\'", &[]).unwrap(),
+            "outbox": rows(c, "SELECT body FROM outbox_msgs ORDER BY id", &[]).unwrap(),
+        })
+    }
+
+    /// What a node restores after a kill: the capture's L0 files applied in
+    /// order (the page images the bucket holds), opened as a restore opens
+    /// them. Captures first, so only what a capture shipped counts.
+    fn restored_from_captures(
+        store: &mut celld_ltx::DoltStore,
+        into: &std::path::Path,
+    ) -> Connection {
+        use celld_ltx::CellStore as _;
+        store.sync().unwrap();
+        let restored = into.join("restored.db");
+        let _ = std::fs::remove_file(&restored);
+        let mut image: Vec<u8> = Vec::new();
+        for txid in 1..=store.pos().unwrap().txid.0 {
+            let id = celld_ltx::TXID(txid);
+            let bytes = std::fs::read(store.ltx_path(0, id, id)).unwrap();
+            let decoded = celld_ltx::ltx::decode_file(&bytes).unwrap();
+            for (pgno, page) in celld_ltx::ltx::decode_file_pages(&bytes).unwrap() {
+                let at = (pgno as usize - 1) * 4096;
+                if image.len() < at + 4096 {
+                    image.resize(at + 4096, 0);
+                }
+                image[at..at + 4096].copy_from_slice(&page);
+            }
+            image.resize(decoded.header.commit as usize * 4096, 0);
+        }
+        std::fs::write(&restored, image).unwrap();
+        celld_ltx::DoltStore::open(&restored, celld_ltx::LtxHost::default()).unwrap();
+        let c = open_connection(&restored.to_string_lossy(), celld_ltx::Engine::Dolt, None).unwrap();
+        attach_active_branch(&c).unwrap();
+        c
+    }
+
+    /// Two commits on `main` of `t`, with a local row, a second branch that
+    /// has a commit of its own, and an uncommitted row.
+    fn two_commits(
+        dir: &std::path::Path,
+        in_transaction: bool,
+    ) -> (celld_ltx::DoltStore, Connection) {
+        // The capture store opens before the application opens the file.
+        let store =
+            celld_ltx::DoltStore::open(dir.join("cell.db"), celld_ltx::LtxHost::default()).unwrap();
+        let (_path, c) = local_cell(dir);
+        c.execute_batch(
+            "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT); \
+             CREATE TABLE outbox_msgs(id INTEGER PRIMARY KEY, body TEXT);",
+        )
+        .unwrap();
+        let commit = |row: &str, message: &str| {
+            if in_transaction {
+                // `transactionSync(fn, { commit })`: the write and the commit are one step.
+                c.execute_batch("BEGIN IMMEDIATE").unwrap();
+                c.execute(&format!("INSERT INTO t VALUES {row}"), []).unwrap();
+                super::run_in_transaction(&c, "txCommit", &json!({"message": message}), &LOCAL).unwrap();
+                c.execute_batch("COMMIT").unwrap();
+            } else {
+                c.execute(&format!("INSERT INTO t VALUES {row}"), []).unwrap();
+                dolt(&c, "commit", json!({"message": message}));
+            }
+        };
+        commit("(1, 'one')", "one");
+        dolt(&c, "branchCreate", json!({"name": "side"}));
+        commit("(2, 'two')", "two");
+        c.execute("INSERT INTO t VALUES (3, 'pending')", []).unwrap();
+        c.execute("INSERT INTO outbox_msgs(body) VALUES ('local')", []).unwrap();
+        (store, c)
+    }
+
+    /// The durability contract of the output gate: an operation that
+    /// `mutates` has appended its effects to the chunk file behind a sealed
+    /// root before it returns, so the capture that follows ships them. Every
+    /// operation, on a store with history, a second branch, a dirty working
+    /// set and a local table, must leave the live cell and the store a kill
+    /// would restore reading the same. (A hard reset once left its branch
+    /// move in the connection until the next write.)
+    #[test]
+    fn an_acknowledged_operation_is_in_the_committed_prefix() {
+        type Op = (&'static str, &'static str, Value);
+        let ops: Vec<Op> = vec![
+            ("commit", "commit", json!({"message": "three"})),
+            ("branchCreate", "branchCreate", json!({"name": "new", "from": "HEAD~1"})),
+            ("branchDelete", "branchDelete", json!({"name": "side"})),
+            ("branchDelete force", "branchDelete", json!({"name": "side", "force": true})),
+            ("checkout", "checkout", json!({"branch": "side"})),
+            ("checkout create", "checkout", json!({"branch": "fresh", "create": true})),
+            ("reset hard to a commit", "reset", json!({"hard": true, "to": "HEAD~1"})),
+            ("reset hard", "reset", json!({"hard": true})),
+            ("reset soft to a commit", "reset", json!({"to": "HEAD~1"})),
+            ("reset soft", "reset", json!({})),
+            ("merge fast-forward", "merge", json!({"branch": "side"})),
+            ("gc", "gc", json!({})),
+        ];
+        for (name, op, args, in_transaction) in ops.into_iter().flat_map(|(name, op, args)| {
+            [(name, op, args.clone(), false), (name, op, args, true)]
+        }) {
+            let name = &format!("{name} (commits made {})", if in_transaction { "in a transaction" } else { "outside one" });
+            let dir = tempfile::tempdir().unwrap();
+            let (mut store, c) = two_commits(dir.path(), in_transaction);
+            // Everything before the operation is shipped, as it is by the
+            // outputs that answered those requests.
+            use celld_ltx::CellStore as _;
+            store.sync().unwrap();
+            if name.starts_with("merge fast-forward") {
+                dolt(&c, "reset", json!({"hard": true}));
+                dolt(&c, "branchCreate", json!({"name": "ahead", "from": "HEAD"}));
+                dolt(&c, "checkout", json!({"branch": "ahead"}));
+                c.execute("INSERT INTO t VALUES (9, 'nine')", []).unwrap();
+                dolt(&c, "commit", json!({"message": "ahead"}));
+                dolt(&c, "checkout", json!({"branch": "main"}));
+            }
+            let args = if name.starts_with("merge fast-forward") { json!({"branch": "ahead"}) } else { args };
+            assert!(mutates(op), "{name}: {op} must count as a mutation");
+            dolt(&c, op, args);
+            let live = observed(&c);
+            let kept = restored_from_captures(&mut store, dir.path());
+            assert_eq!(observed(&kept), live, "{name}: what a kill right after it restores");
+        }
+    }
 }
 
 /// `ctx.storage.dolt.execute(program, context)`: one deterministic program

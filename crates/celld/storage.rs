@@ -35,11 +35,9 @@ pub(crate) fn alarm_snapshot(scope: &str) -> anyhow::Result<celld_logic::wake::A
         ));
     }
     with(scope, |c| {
-        wake_record::snapshot(
-            c,
-            scope,
-            total_changes(c) + data_version(c) + schema_version(c),
-        )
+        // The same position the output gate samples, so an alarm's source
+        // and a proof speak of one counter.
+        wake_record::snapshot(c, scope, fingerprint(scope, c))
     })
     .context("wake snapshot has no open cell")?
 }
@@ -72,6 +70,8 @@ pub struct Cells {
     sql_critical_errors: RefCell<HashMap<String, String>>,
     /// The schema cookie last read for a cell, and what it was read against.
     schema_cookies: RefCell<HashMap<String, SchemaCookie>>,
+    /// A Dolt cell's counters of change (see [`Transitions`]), by scope.
+    dolt_transitions: RefCell<HashMap<String, Transitions>>,
     /// The SQLite handles of open Dolt-cell connections, so reinstalling the
     /// authorizer after a lifted section picks the Dolt rules.
     dolt_handles: RefCell<HashSet<usize>>,
@@ -184,6 +184,61 @@ struct SchemaCookie {
     cookie: u64,
     changes: u64,
     prepares: u64,
+}
+
+/// How many times the two values SQLite reports about a database's identity
+/// (`PRAGMA schema_version` and `PRAGMA data_version`) changed on a Dolt
+/// cell's connection, which is all the committed-write position can use them
+/// for.
+///
+/// On a SQLite cell both only ever go up (a DDL statement adds one, another
+/// connection's commit adds one), so their sum can stand in a position that
+/// must never go back. On a Dolt cell neither is a counter: the schema
+/// "cookie" is derived from the catalog (a hash), so a `reset --hard`, a
+/// checkout or a merge that moves the store to a state with another schema
+/// gives it an arbitrary new value, which is usually lower. A position that
+/// fell by more than the operation's own count then compared as "no write
+/// happened", and the output gate released the answer of an acknowledged
+/// `dolt.reset({ hard: true })` without a durability proof; a node killed
+/// right after lost the reset. A position that goes back is also wrong for
+/// every later write, which the gate would find at or below a position it
+/// already proved. Counting changes instead of adding values keeps the
+/// position monotonic and still sees every move.
+#[derive(Default)]
+struct Transitions {
+    schema: Seen,
+    data: Seen,
+}
+
+#[derive(Default)]
+struct Seen {
+    /// The last value read, `None` before the first read.
+    value: Option<u64>,
+    /// How many times a read found another value than the one before.
+    count: u64,
+}
+
+impl Seen {
+    fn observe(&mut self, value: u64) -> u64 {
+        match self.value.replace(value) {
+            Some(before) if before != value => self.count += 1,
+            _ => {}
+        }
+        self.count
+    }
+}
+
+/// The schema cookie or data version of `scope`'s connection as the
+/// committed-write position counts it: the value on a SQLite cell, the
+/// number of times it changed on a Dolt cell (see [`Transitions`]).
+fn position_term(scope: &str, raw: u64, pick: impl FnOnce(&mut Transitions) -> &mut Seen) -> u64 {
+    if !is_dolt(scope) {
+        return raw;
+    }
+    cells(|c| {
+        let mut transitions = c.dolt_transitions.borrow_mut();
+        pick(transitions.entry(scope.to_string()).or_default()).observe(raw)
+    })
 }
 
 /// Statements prepared across every cell in the process.
@@ -1079,6 +1134,7 @@ pub fn close(scope: &str) {
     close_sql_statement_cache(scope);
     sql_critical_errors(|errors| errors.borrow_mut().remove(scope));
     cells(|c| c.schema_cookies.borrow_mut().remove(scope));
+    cells(|c| c.dolt_transitions.borrow_mut().remove(scope));
     if let Some(cell) = dbs(|d| d.borrow_mut().remove(scope)) {
         // SAFETY: the handle is only used as an identity.
         let handle = unsafe { cell.connection.handle() } as usize;
@@ -1500,7 +1556,7 @@ pub fn write_position(scope: &str) -> anyhow::Result<Option<u64>> {
 
 fn fingerprint(scope: &str, connection: &Connection) -> u64 {
     total_changes(connection)
-        + data_version(connection)
+        + position_term(scope, data_version(connection), |t| &mut t.data)
         + schema_cookie(scope, connection)
         + dolt_mutations(scope)
 }
@@ -1618,7 +1674,7 @@ fn schema_cookie(scope: &str, connection: &Connection) -> u64 {
     if let Some(cookie) = cached {
         return cookie;
     }
-    let cookie = schema_version(connection);
+    let cookie = position_term(scope, schema_version(connection), |t| &mut t.schema);
     // Read the counter *after* the pragma, not before: preparing it calls
     // the authorizer too, so a count taken beforehand is already stale by
     // the time it is stored and every later sample misses.
@@ -5459,6 +5515,76 @@ mod dolt_read_surface {
         }
         assert_eq!(first(app(&c, "SELECT num_conflicts FROM dolt_conflicts")), ["1"]);
         c.execute_batch("ROLLBACK").unwrap();
+    }
+}
+
+/// The committed-write position the output gate samples, on a Dolt cell: it
+/// must go up for every operation that changes the store and never go back,
+/// whatever the operation does to the schema.
+#[cfg(test)]
+mod dolt_gate_position {
+    use super::*;
+    use serde_json::json;
+
+    /// `reset --hard` to an earlier commit of another schema changes
+    /// `PRAGMA schema_version` to an unrelated number (a Dolt cell derives it
+    /// from the catalog), and the position used to add that number. Reset
+    /// from `a, b, c, d` back to `a` then compared as no write at all, and the
+    /// output gate answered an acknowledged reset without a durability proof.
+    #[test]
+    fn a_dolt_operation_advances_the_position_whatever_the_schema_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let cells = Cells::default();
+        let _installed = cells.install();
+        let path = dir.path().join("cell.db").to_string_lossy().into_owned();
+        open_at_epoch("C:p", &path, 1, false, None, false, celld_ltx::Engine::Dolt).unwrap();
+        let sql = |query: &str| sql_exec("C:p", query, &[]).unwrap();
+        let op = |name: &str, args: serde_json::Value| {
+            dolt_op("C:p", name, &args).unwrap_or_else(|error| panic!("{name} {args}: {error}"))
+        };
+        let mut last = write_position("C:p").unwrap().unwrap();
+        let mut advanced = |what: &str| {
+            let now = write_position("C:p").unwrap().unwrap();
+            assert!(now > last, "{what} did not advance the position ({last} -> {now})");
+            last = now;
+        };
+        for table in ["a", "b", "c", "d", "e", "f"] {
+            sql(&format!("CREATE TABLE {table}(x INTEGER PRIMARY KEY, y TEXT)"));
+            advanced(&format!("CREATE TABLE {table}"));
+            sql(&format!("INSERT INTO {table} VALUES (1, 'one')"));
+            advanced(&format!("a row in {table}"));
+            op("commit", json!({"message": format!("add {table}")}));
+            advanced(&format!("commit {table}"));
+        }
+        // Each step lands on a schema with one table fewer.
+        for back in 1..=5 {
+            op("reset", json!({"hard": true, "to": "HEAD~1"}));
+            advanced(&format!("hard reset {back} back"));
+        }
+        op("reset", json!({"hard": true, "to": "HEAD~1"}));
+        advanced("a hard reset to the first commit");
+        op("branchCreate", json!({"name": "side", "from": "HEAD"}));
+        advanced("branch create");
+        op("checkout", json!({"branch": "side"}));
+        advanced("checkout");
+        sql("CREATE TABLE z(x INTEGER PRIMARY KEY)");
+        op("commit", json!({"message": "z"}));
+        advanced("commit on a branch");
+        op("checkout", json!({"branch": "main"}));
+        advanced("checkout back");
+        sql("CREATE TABLE m(x INTEGER PRIMARY KEY)");
+        op("commit", json!({"message": "m"}));
+        advanced("commit on main");
+        op("merge", json!({"branch": "side"}));
+        advanced("merge");
+        op("reset", json!({"to": "HEAD~1"}));
+        advanced("soft reset");
+        op("reset", json!({"hard": true}));
+        advanced("hard reset of the working set");
+        op("branchDelete", json!({"name": "side", "force": true}));
+        advanced("branch delete");
+        op("gc", json!({}));
+        advanced("gc");
     }
 }
 

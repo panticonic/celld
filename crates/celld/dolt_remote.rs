@@ -1166,6 +1166,46 @@ mod tests {
         assert_eq!(rows, 1, "the uncommitted row is untouched");
     }
 
+    /// What the target's own runtime is told of a push (`ondoltpush`): the
+    /// response `serve` frames carries `accepted` for a push that moved a
+    /// branch, and for nothing else; the pusher's `apply` drops it.
+    #[test]
+    fn an_accepted_push_carries_what_the_target_is_told() {
+        let (_dir, source, holder) = pair();
+        let granted = grant(&source, json!({ "fetch": true, "push": ["main", "work/*"] }));
+        let (id, token) = (granted["id"].as_str().unwrap(), granted["token"].as_str().unwrap().to_string());
+        add_remote(&holder, &token);
+        let base = head(&source, "main");
+        holder.execute("INSERT INTO notes VALUES (2, 'holder')", []).unwrap();
+        let tip = commit(&holder, "holder work");
+
+        let raw_push = |to: Option<&str>| {
+            let refs = exchange(&holder, &source, json!({ "name": "origin", "op": "refs" }), &[]);
+            exchange(&holder, &source, json!({ "name": "origin", "op": "push", "branch": "main", "to": to }), &refs)
+        };
+        let accepted = |response: &[u8]| parse_response(response).unwrap().1.get("accepted").cloned();
+
+        assert_eq!(
+            accepted(&raw_push(None)),
+            Some(json!({
+                "remote": format!("pushed-{id}"), "grant": id, "branch": "main",
+                "from": base, "to": tip, "created": false,
+            }))
+        );
+        assert_eq!(head(&source, "main"), tip);
+        // A new branch has no previous tip.
+        let created = accepted(&raw_push(Some("work/one"))).unwrap();
+        assert_eq!((created["from"].clone(), created["created"].clone()), (Value::Null, json!(true)));
+        // Nothing changed, nothing refused: nothing to tell.
+        assert_eq!(accepted(&raw_push(None)), None);
+        let refused = raw_push(Some("other"));
+        assert_eq!(parse_response(&refused).unwrap().0, 1);
+        assert_eq!(accepted(&refused), None);
+        // A fetch is not a push.
+        let fetched = exchange(&holder, &source, json!({ "name": "origin", "op": "fetch" }), &[]);
+        assert_eq!(accepted(&fetched), None);
+    }
+
     #[test]
     fn a_pushed_pack_that_lies_about_its_tip_is_refused() {
         let (_dir, source, holder) = pair();

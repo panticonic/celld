@@ -334,9 +334,41 @@ beginning `dolt_` or `doltlite_` cannot be created.
 ## Semantics
 
 **Output gate.** Each method that can change the store (commit, branch create
-and delete, checkout, reset, merge, gc) counts as a write: the next response,
-or any other output, waits until a durability proof covers it, exactly as
-after a SQL `INSERT`. Read methods behave like a SQL `SELECT`.
+and delete, checkout, reset, merge, gc, execute, and the
+[remote](dolt-remotes.md) methods that write) counts as a write: the next
+response, or any other output, waits until a durability proof covers it,
+exactly as after a SQL `INSERT`. Read methods behave like a SQL `SELECT`. So an
+acknowledged `reset({ hard: true, to })`, like every other method above,
+survives `kill -9` of the node: the cell is restored with the head and the rows
+the answer promised. A DDL statement made through `ctx.storage.sql` is a write
+too.
+
+**Schema text.** DoltLite re-renders the `sql` column of `sqlite_master` for
+every table and index when the transaction that creates it commits, and keeps
+that form from then on (a Dolt commit, a checkout, a restart and a restore do
+not change it again, and rendering a rendered text gives the same text). Inside
+the creating transaction `sql` is what you wrote; after it, whitespace runs
+are one space, there is none before `(`, `)` and `,`, comments are gone, and a
+name is quoted only when it has to be:
+
+```text
+CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)   -- as written
+CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT)    -- from the commit on
+CREATE TABLE "q" ( a , b )  ->  CREATE TABLE q( a, b)
+CREATE UNIQUE INDEX u ON t ( a )  ->  CREATE UNIQUE INDEX u ON t( a)
+```
+
+String literals and quoted identifiers inside the statement are kept as
+written. Views and triggers are kept as written. The rendered text is also what
+the engine's schema hashes cover, which is why `ALTER TABLE ... ADD COLUMN` on
+one branch and a typed-final `CREATE TABLE` on another compare equal in a
+merge. A class that fingerprints its schema from `sqlite_master.sql` must
+therefore take the fingerprint from the rendered form (read it once after the
+creating transaction, or render the text before hashing it), not from the text
+it wrote. celld does not change this: preserving the original text would
+change what the engine stores and compares, and a merge relies on it. A test
+(`schema_text_is_rendered_when_the_creating_transaction_commits`) pins the
+rules, so an engine upgrade that changes them is noticed.
 
 **Transactions.** No method runs inside `transaction()` or
 `transactionSync()`; each one throws there. SQL writes made before a

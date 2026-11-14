@@ -120,6 +120,47 @@ The target's single writer is never bypassed: the pack lands through the
 target's own connection, in the target's own event. Many pushers contend only
 for the target's turn, which is a hash comparison and a ref move.
 
+### Learning that a push was accepted: `ondoltpush`
+
+A cell that is pushed to (the shared graph of a decentralized workspace) often
+has to react to published work. It declares an optional method on its class:
+
+```js
+export class Graph {
+  // Called in this cell's own turn when a push into it was accepted: the
+  // branch has moved (`hashOf(event.branch) === event.to`), and the pusher has
+  // not been answered yet.
+  async ondoltpush({ remote, grant, branch, from, to, created }) {
+    // remote:  "pushed-<grant id>", the tracking remote that holds what was pushed
+    // grant:   the id of the grant the pusher used (`remote.grants()` has its label)
+    // branch:  the branch that moved; from: its previous tip, or null when created
+    // to:      its new tip
+    this.ctx.storage.put(`published:${to}`, { branch, from, grant });
+  }
+}
+```
+
+- It runs once for each push that **moved a branch**, after the move and after
+  the head and working set follow it when the branch is checked out. A push
+  that changed nothing (`unchanged`), a refused one (a non-fast-forward, a
+  forbidden branch, a dirty target, a bad pack) and a fetch call nothing.
+- It runs in the target's turn and before the pusher is answered, so what it
+  writes is covered by the same output gate: the pusher's answer waits until the
+  handler's writes are durable too. Keep it short; hand long work to an alarm
+  or a queue. An `async` handler is awaited.
+- The push is already made. A handler that throws or rejects is logged
+  (`ondoltpush failed`) and changes nothing; the pusher still gets its answer.
+- It runs the same way whichever carrier delivered the push: the built-in one,
+  or a carrier of your own that calls `remote.serve(bytes)` (the handler runs
+  inside that call, before `serve` returns; an `async` handler keeps the event
+  alive). A **Dolt facet** that its parent relays pushes to with `remote.serve`
+  is notified as well, on the facet's own class.
+- The pusher is not shown the notification: its `push` result is
+  `{ branch, hash, created, unchanged }` as before.
+- The class needs the method, not an instance property; the runtime wakes the
+  object (constructing it) to call it. There is no event for a cell that is
+  only a holder.
+
 ## What it guarantees
 
 - **A fetch reads committed state its source cannot lose.** The source answers
@@ -141,6 +182,11 @@ for the target's turn, which is a hash comparison and a ref move.
   clear the remotes, the grants and every remote-tracking branch of the image: a
   fork does not inherit its source's authority. Set the remote up again after
   forking.
+- **Every operation is durable once answered.** `grant`, `revoke`, `add`,
+  `remove`, a fetch's install, an accepted push, a pull's merge and
+  `ondoltpush`'s own writes are writes for the output gate; a node killed right
+  after the answer comes back with them (e2e scenario `dolt-remotes-durability`
+  kills the node after each and restores the cells from the replication log).
 - **The source pays one turn**, bounded by the size of the delta (the first
   fetch of a long history is the whole history). Nothing reads a source's file
   from outside its owner, so nothing can block or corrupt its writer.
@@ -196,7 +242,10 @@ A failure throws with `error.code`:
 - A Dolt **facet** is a holder (`add`, `fetch`, `pull`, `push` to a root cell);
   it is a source or a push target only through its parent, which relays the
   request bytes with `remote.serve` over a facet call: a facet is reached
-  through its root's isolate and has no id to route to. In a facet loaded
+  through its root's isolate and has no id to route to. The relay is tested end
+  to end (`examples/dolt-remotes`: a root cell fetches from a facet and pushes a
+  branch to it through the parent, with the grant, the refusals and
+  `ondoltpush` on the facet). In a facet loaded
   through a Worker Loader the built-in carrier needs a namespace binding for the
   source's class; pass `transport` otherwise.
 - No force push, no tag transfer, no deleting a remote branch.

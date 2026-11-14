@@ -36,6 +36,7 @@ has not been run yet.
 | Vibestudio runtime cutover | partial, paused (Vibestudio branch `feat/celld-runtime`, `HANDOFF-celld-runtime.md`) | |
 | Dolt runtime for the Vibestudio redesign: merge resolver (F1), commit in a transaction (F2), class-declared local tables (F4), checkout independent of local state (F5), history reads (F6) | done (branch `feature/dolt-runtime-f1-f6`) | §3b.12, `docs/services/dolt-cells.md` |
 | Compatibility fixes from the Vibestudio cutover: continuations after their event (E6), facet abort, streaming `Response.clone()`, WebSocket upgrade from an alarm, retry and delete of an unfinished fork target, error codes, inspector titles | done (branch `fix/cutover-compat`), §3b.14, `docs/fork/upstream-findings.md` E6-E9 | |
+| Dolt durability and remotes follow-ups: an acknowledged hard reset (and DDL) was lost by a kill because the write position went down; `sqlite_master` text rendering documented and pinned; `ondoltpush`; facet relay tested | done (branch `fix/dolt-reset-durability`) | §3b.15, `docs/services/dolt-cells.md`, `docs/services/dolt-remotes.md` |
 | Vibestudio Dolt redesign | design done, P0 not started (Vibestudio branch `design/dolt-redesign`, `docs/dolt-redesign.md`); questions Q1–Q5 open | |
 
 ### Single-track backlog (from 2026-11-13, in order)
@@ -698,7 +699,8 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
     - **Not built.** A Dolt *facet* is a holder (fetch, pull, push to a root
       cell, merge, tested in the example) and a source or push target only
       through its parent, which relays the request bytes to `remote.serve`
-      over a facet call of its own: a facet is reached through its root's
+      over a facet call of its own (tested since §3b.15): a facet is reached
+      through its root's
       isolate and has no id to route to. In a facet loaded by a Worker
       Loader the built-in carrier needs a namespace binding of the source's
       class (otherwise pass `transport`). Force push, tag transfer and deleting a
@@ -770,6 +772,79 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       (`env.LOADER.get(id, ...)`) shows the id in its CDP target: title
       `__loader:<n> (celld dynamic worker isolate; loader id <id>; ...)`, url
       `file:///__loader:<n>/<id>`. `docs/services/inspector.md`.
+
+15. **Dolt durability and remotes follow-ups (2026-11-14).** Source: Vibestudio
+    P0 (`doltDurableCelld.test.ts`, the canary "an acknowledged hard reset
+    survives a kill"). Branch `fix/dolt-reset-durability`.
+    - **An acknowledged `reset({ hard })` was lost by a SIGKILL.** Not a missing
+      `mutates`, a write outside the capture or a gate that did not wait: the
+      operation counted as a mutation (`dolt_mutations + 1`), the file held the
+      reset behind a sealed root, and the capture shipped it when asked. What
+      failed was the gate's *decision to ask*. The output gate compares the
+      committed-write position before and after a handler, and a position that
+      did not rise is a read. The position was `total_changes + data_version +
+      schema_version + dolt_mutations`. `PRAGMA schema_version` of a SQLite file
+      is a DDL counter; on a Dolt cell it is derived from the catalog (a hash),
+      so a hard reset, a checkout or a merge to a state with another schema gave
+      it an unrelated value, usually lower, and the sum fell by more than the
+      operation's `+ 1`. The answer left with no durability proof (commit,
+      branch, soft reset and gc left the schema alone, which is why only reset
+      lost). The same sum made a DDL statement through `ctx.storage.sql` on a Dolt
+      cell look like a read, and a position that goes back is wrong for every
+      later write too (the gate treats positions at or below what it proved as
+      proved). The fix (`storage.rs`, `Transitions`): on a Dolt cell the
+      schema cookie and the data version enter the position as *the number of
+      times they changed*, so it is monotonic by construction and still sees
+      every move; SQLite cells are unchanged. The wake snapshot takes the same
+      position as the gate. The Vibestudio canary now fails as ".fails passes";
+      turn it into a plain test.
+    - **Audit of every operation and path** for the same class (does it count,
+      does the file hold it behind a root, is the position monotonic across it):
+      commit, commit in a transaction (F2), branch create and delete, checkout,
+      reset soft and hard, merge (plain and with a resolver, F1), gc, execute,
+      SQL writes (versioned and `doltLocal`), DDL, and the remote operations
+      (`grant`, `revoke`, `add`, `remove`, a fetch's install, an accepted push,
+      a pull). All count; `remoteList`, `remoteBranches` and `grants` create
+      their `_cf_*` tables on first use (now counted as DDL, and lost harmlessly
+      if not, since they are recreated). Tag, revert and cherry-pick are not
+      exposed. Tests: `dolt_cell::tests::an_acknowledged_operation_is_in_the_committed_prefix`
+      (what a capture restores equals the live cell after each operation, commits
+      made in or out of a transaction), `storage::dolt_gate_position` and
+      `dolt_remote_gate_position` (the position rises for every operation, across
+      schema changes; fails on the old sum at the first `CREATE TABLE`), and
+      two e2e scenarios, `dolt-durability` and `dolt-remotes-durability`, that
+      acknowledge each operation, SIGKILL the node, delete its local runtime
+      state and restore from the replication log (the first fails on a node
+      built from the previous commit; a graceful stop or a restart over the
+      surviving file hides the bug).
+    - **`sqlite_master.sql` is re-rendered once, when the creating transaction
+      commits.** DoltLite's catalog persist (`doltliteCanonicalizeSchemaSql`)
+      stores a canonical text for each table and index, and the live
+      `sqlite_master` is read back from it. A Dolt commit, a checkout and a
+      reopen change nothing further. Preserving the written text was not done:
+      the canonical text is the engine's merge and diff key (`ADD COLUMN`
+      against a typed-final `CREATE TABLE`, about twenty `strcmp` sites over
+      catalog texts), so storing another text would turn whitespace into schema
+      conflicts and change every commit hash. No engine change, so the engine
+      digest is unchanged. The rules are documented in `dolt-cells.md` ("Schema
+      text") and pinned by a test, so a class takes its schema fingerprint from
+      the rendered form.
+    - **`ondoltpush`.** A cell that is pushed to learns of an accepted push
+      through an optional method of its class, `ondoltpush({ remote, grant,
+      branch, from, to, created })`, called in the target's turn after the branch
+      moved and before the pusher is answered (so its writes are behind the same
+      gate). The target's `serve_push` adds an `accepted` object to its response
+      frame; the runtime reads it from the response bytes on both paths, the
+      built-in carrier (`__doltRemoteServeHere`) and `remote.serve`, so a facet a
+      parent relays to is notified too. The pusher's `apply` strips it. A
+      failing handler is logged and changes nothing (the push is made). Rejected:
+      a hook inside the engine's push (it has no event, and the target's own
+      class code must run in its isolate), and a poll of
+      `remote.branches()` (it cannot tell an accepted push from a fetch).
+    - **Facet relay, verified.** A root cell fetches from and pushes to a Dolt
+      facet through its parent (`Hub` relays `/serve` to the facet, whose
+      handler is `remote.serve`), with the grant's refusals and `ondoltpush` on
+      the facet. `examples/dolt-remotes/demo.sh` (and the cluster run).
 
 ## 4. Determinism: fixes over the earlier plans
 

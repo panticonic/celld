@@ -3876,6 +3876,24 @@ __celld.__registerIncomingRequest = (requestId, request) => {
 __celld.__finishIncomingRequest = (requestId) => {
   __incomingRequestSignals.delete(String(requestId));
 };
+// A termination (a CPU limit, ctx.abort(), process.exit()) unwound code of
+// the object `scope` inside a storage transaction. Its `finally` never ran, so
+// the instance's transaction state names a transaction that no longer runs:
+// the next transactionSync() would nest inside it and commit the unwound
+// writes with its own. The host rolls the connection back; the instance
+// goes, as an object reset by a failed critical section does, and the next
+// event constructs a new one.
+__celld.__resetTerminatedActor = (scope) => {
+  const instance = __cell.instances[scope];
+  if (instance === undefined) return false;
+  const state = instance.__celldState;
+  if (state._aborted) return false;
+  state._aborted = true;
+  __storage_cancel_pending_puts(scope);
+  __p2p_close_object(scope);
+  delete __cell.instances[scope];
+  return true;
+};
 __celld.__retireInputGateContext = (context) => {
   for (const [scope, block] of __cellBlocks) {
     const retired = [...block.events].filter(([, record]) =>

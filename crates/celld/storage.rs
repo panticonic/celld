@@ -3574,6 +3574,31 @@ pub fn transaction_control(
     result
 }
 
+/// Whether `scope`'s connection is inside a transaction.
+pub(crate) fn transaction_open(scope: &str) -> bool {
+    with(scope, |connection| !connection.is_autocommit()).unwrap_or(false)
+}
+
+/// Roll back the transaction a terminated turn left open on `scope`'s
+/// connection, savepoints and all. The code that would have ended it was
+/// unwound, so nothing else ever would: its writes stayed visible to every
+/// later statement, and the next commit of the connection made them durable.
+pub(crate) fn rollback_abandoned_transaction(scope: &str) -> Result<(), String> {
+    with(scope, |connection| {
+        if connection.is_autocommit() {
+            return Ok(());
+        }
+        without_sql_authorizer(connection, || {
+            connection
+                .execute_batch("ROLLBACK")
+                .map_err(|error| error.to_string())
+        })
+    })
+    .unwrap_or(Ok(()))?;
+    publish_alarm_if_transaction_dirty(scope);
+    Ok(())
+}
+
 #[cfg(celld_internal_tests)]
 pub fn set_query_only_for_test(scope: &str, enabled: bool) -> anyhow::Result<()> {
     with(scope, |connection| {

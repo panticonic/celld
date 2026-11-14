@@ -34,6 +34,79 @@ const KERNEL = `
       }
       return out;
     }
+    // What a kernel's start does (the product's EvalKernel): the call answers
+    // at once and the run goes on under waitUntil, after one timer turn. The
+    // run arms its deadline, joins the kernel's serial chain and runs the
+    // caller's code; a spin there is ended by the call's CPU limit, in a
+    // continuation of the start call. The deadline settles the run and
+    // writes its terminal row; a run that timed out orphans the chain, as a
+    // kernel's force reset does, so the next run is not queued behind it.
+    chain = Promise.resolve();
+    start(id, timeoutMs, spin) {
+      this.calls++;
+      const sql = this.ctx.storage.sql;
+      sql.exec("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, status TEXT)");
+      sql.exec("INSERT OR REPLACE INTO runs VALUES (?, 'running')", id);
+      this.ctx.waitUntil(
+        new Promise((resolve) => setTimeout(resolve, 0)).then(() => this.execute(id, timeoutMs, spin)),
+      );
+      return { started: id };
+    }
+    async execute(id, timeoutMs, spin) {
+      let timer;
+      const deadline = new Promise((resolve) => {
+        timer = setTimeout(() => resolve("timed-out"), timeoutMs);
+      });
+      const ran = this.chain.then(() => {
+        if (spin) for (;;);
+        return "done";
+      });
+      this.chain = ran.catch(() => {});
+      const status = await Promise.race([ran, deadline]);
+      clearTimeout(timer);
+      if (status === "timed-out") this.chain = Promise.resolve();
+      this.ctx.storage.sql.exec("UPDATE runs SET status = ? WHERE id = ?", status, id);
+    }
+    run(id) {
+      const sql = this.ctx.storage.sql;
+      sql.exec("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, status TEXT)");
+      return sql.exec("SELECT status FROM runs WHERE id = ?", id).toArray()[0]?.status ?? null;
+    }
+    // A spin inside a storage transaction: the write before it must roll back,
+    // and the object must take the next transaction.
+    txSpin(kind) {
+      this.calls++;
+      const storage = this.ctx.storage;
+      storage.sql.exec("CREATE TABLE IF NOT EXISTS rows (v TEXT)");
+      const write = () => storage.sql.exec("INSERT INTO rows VALUES ('spun')");
+      // A Dolt cell commits each transaction, as a product kernel does.
+      const commit = storage.dolt ? { commit: { message: "spun" } } : undefined;
+      if (kind === "sync") {
+        return storage.transactionSync(() => {
+          write();
+          for (;;);
+        }, commit);
+      }
+      if (kind === "async") {
+        return storage.transaction(async () => {
+          write();
+          await null;
+          for (;;);
+        }, commit);
+      }
+      return this.ctx.blockConcurrencyWhile(async () => {
+        write();
+        await null;
+        for (;;);
+      });
+    }
+    txWrite(value) {
+      const storage = this.ctx.storage;
+      storage.sql.exec("CREATE TABLE IF NOT EXISTS rows (v TEXT)");
+      const commit = storage.dolt ? { commit: { message: value } } : undefined;
+      storage.transactionSync(() => storage.sql.exec("INSERT INTO rows VALUES (?)", value), commit);
+      return storage.sql.exec("SELECT v FROM rows ORDER BY rowid").toArray().map((row) => row.v);
+    }
     async fetch(request) {
       const url = new URL(request.url);
       if (url.pathname === "/spin") return Response.json(this.spin());
@@ -51,20 +124,25 @@ const KERNEL = `
 const UNIT_CPU_MS = 3000;
 
 export class Owner extends DurableObject {
-  kernel(cpu, subRequests = null) {
+  // `dolt`: the kernel's storage is a Dolt facet (a product kernel's is).
+  kernel(cpu, subRequests = null, dolt = false) {
     const worker = this.env.LOADER.get("kernel-v1", () => ({
       compatibilityDate: "2025-01-01",
       mainModule: "kernel.js",
       modules: { "kernel.js": KERNEL },
       limits: { cpuMs: UNIT_CPU_MS },
     }));
-    const startup = () => ({ class: worker.getDurableObjectClass("Kernel") });
+    const name = dolt ? "dolt-kernel" : "kernel";
+    const startup = () => ({
+      class: worker.getDurableObjectClass("Kernel"),
+      ...(dolt ? { celld: { storage: "dolt" } } : {}),
+    });
     // A call's own limit rides on the stub: `get(name, startup, { limits })`.
-    if (cpu === null && subRequests === null) return this.ctx.facets.get("kernel", startup);
+    if (cpu === null && subRequests === null) return this.ctx.facets.get(name, startup);
     const limits = {};
     if (cpu !== null) limits.cpuMs = cpu;
     if (subRequests !== null) limits.subRequests = subRequests;
-    return this.ctx.facets.get("kernel", startup, { limits });
+    return this.ctx.facets.get(name, startup, { limits });
   }
 
   async fetch(request) {
@@ -81,7 +159,11 @@ export class Owner extends DurableObject {
       }
       const cpu = cpuParam === null ? null : Number(cpuParam);
       const subParam = url.searchParams.get("sub");
-      const kernel = this.kernel(cpu, subParam === null ? null : Number(subParam));
+      const kernel = this.kernel(
+        cpu,
+        subParam === null ? null : Number(subParam),
+        url.searchParams.get("dolt") === "1",
+      );
       if (via === "kernel") {
         const response = await kernel.fetch(`http://kernel/${rest}${url.search}`);
         return Response.json({ ok: true, ms: Date.now() - started, body: await response.json() });
@@ -91,7 +173,16 @@ export class Owner extends DurableObject {
           rest === "spin" ? await kernel.spin()
             : rest === "work" ? await kernel.work(Number(url.searchParams.get("n")))
               : rest === "subs" ? await kernel.subs(Number(url.searchParams.get("n")))
-                : await kernel.info();
+                : rest === "start"
+                  ? await kernel.start(
+                    url.searchParams.get("id"),
+                    Number(url.searchParams.get("timeout")),
+                    url.searchParams.get("spin") === "1",
+                  )
+                  : rest === "run" ? await kernel.run(url.searchParams.get("id"))
+                    : rest === "tx-spin" ? await kernel.txSpin(url.searchParams.get("kind"))
+                      : rest === "tx-write" ? await kernel.txWrite(url.searchParams.get("v"))
+                        : await kernel.info();
         return Response.json({ ok: true, ms: Date.now() - started, body: result });
       }
       return new Response("not found", { status: 404 });

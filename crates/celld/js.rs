@@ -2840,6 +2840,8 @@ struct ExecutionTermination {
     error: String,
     actor_scope: Option<String>,
     context_id: Option<u64>,
+    /// The CPU watchdog ended the turn: a limit, not the code, stopped it.
+    cpu_limit: bool,
 }
 
 #[cfg(all(test, celld_internal_tests))]
@@ -2881,6 +2883,7 @@ fn inject_cpu_finish_termination_for_test(
         error: error.clone(),
         actor_scope: None,
         context_id: None,
+        cpu_limit: true,
     });
     tc.terminate_execution();
     Some(error)
@@ -3046,6 +3049,7 @@ fn run_cpu_watchdog_service(shared: &Arc<(Mutex<CpuWatchdogState>, std::sync::Co
                     error: format!("Worker exceeded CPU limit of {} ms", watch.declared_ms),
                     actor_scope: None,
                     context_id: None,
+                    cpu_limit: true,
                 });
                 drop(termination);
                 watch.isolate.terminate_execution();
@@ -4784,13 +4788,12 @@ impl Worker {
 /// does not defer retirement: see `retired`.
 fn finish_turn(tc: &mut v8::PinScope, entry: &mut InFlight) -> Vec<Op> {
     if let Err(error) = finish_cpu_turn(tc, entry) {
+        // The turn ran past its budget: the watchdog's termination, or the
+        // exact sample at the turn's end, which only a limit produces.
+        let cpu_limit = pending_termination_is_cpu_limit(tc).unwrap_or(true);
         let error = take_execution_termination_in_context(tc, Some(&entry.context))
             .unwrap_or_else(|| anyhow!(error));
-        entry.fail_in_turn(error);
-        entry.background = None;
-        entry.abandon();
-        ws_capture_flush_touched(tc, &entry.runtime_state);
-        return Vec::new();
+        return end_terminated_turn(tc, entry, error, cpu_limit);
     }
     entry.context.begin_cpu_turn();
     {
@@ -4806,24 +4809,18 @@ fn finish_turn(tc: &mut v8::PinScope, entry: &mut InFlight) -> Vec<Op> {
         tc.perform_microtask_checkpoint();
     }
     if let Err(error) = finish_cpu_turn(tc, entry) {
+        let cpu_limit = pending_termination_is_cpu_limit(tc).unwrap_or(true);
         let error = take_execution_termination_in_context(tc, Some(&entry.context))
             .unwrap_or_else(|| anyhow!(error));
-        entry.fail_in_turn(error);
-        entry.background = None;
-        entry.abandon();
-        ws_capture_flush_touched(tc, &entry.runtime_state);
-        return Vec::new();
+        return end_terminated_turn(tc, entry, error, cpu_limit);
     }
     // `abort()` and `process.exit()` terminate execution without settling
     // the handler's promise, so an entry that only watched the promise would
     // wait on it forever and then report that it was waiting on nothing.
     // The blocking loop broke out of its loop here; an entry fails here.
+    let cpu_limit = pending_termination_is_cpu_limit(tc).unwrap_or(false);
     if let Some(error) = take_execution_termination_in_context(tc, Some(&entry.context)) {
-        entry.fail_in_turn(error);
-        entry.background = None;
-        entry.abandon();
-        ws_capture_flush_touched(tc, &entry.runtime_state);
-        return Vec::new();
+        return end_terminated_turn(tc, entry, error, cpu_limit);
     }
     settle(tc, entry);
     // 5. **release what suspended WebSocket handlers have sent** — after the
@@ -4838,6 +4835,83 @@ fn finish_turn(tc: &mut v8::PinScope, entry: &mut InFlight) -> Vec<Op> {
         entry.context.close_sockets();
     }
     ops
+}
+
+/// A termination left `scope`'s connection inside a transaction: roll it
+/// back and reset the object (`__resetTerminatedActor`). Called once the
+/// termination is taken, so the reset can run JavaScript. The instance goes
+/// first, so no write it still queued reaches the connection after the
+/// rollback.
+fn release_terminated_transaction(tc: &mut v8::PinScope, scope: &str) {
+    if !storage::transaction_open(scope) {
+        return;
+    }
+    if let Ok(function) = internal_function(tc, "__resetTerminatedActor") {
+        let cell = v8::String::new(tc, scope).unwrap();
+        let recv = v8::undefined(tc).into();
+        let _ = function.call(tc, recv, &[cell.into()]);
+    }
+    match storage::rollback_abandoned_transaction(scope) {
+        Ok(()) => tracing::warn!(
+            cell = %scope,
+            "a terminated call left a storage transaction open; rolled it back and reset the object"
+        ),
+        Err(error) => tracing::error!(
+            cell = %scope,
+            %error,
+            "a terminated call left a storage transaction open and the rollback failed"
+        ),
+    }
+}
+
+/// Whether the termination waiting to be taken is a CPU limit's, or `None`
+/// when no termination is recorded.
+fn pending_termination_is_cpu_limit(scope: &mut v8::PinScope) -> Option<bool> {
+    let state = scope.get_slot::<Arc<ActorRuntimeState>>().cloned()?;
+    let termination = state.termination.lock().ok()?;
+    termination.as_ref().map(|termination| termination.cpu_limit)
+}
+
+/// End the event whose turn a termination ended (a CPU limit, `abort()`,
+/// `process.exit()`), once the termination is taken.
+///
+/// The event fails with the termination's error: the caller is answered, or
+/// already was, and the event's `waitUntil` aggregate is dropped, because the
+/// code it waited on was unwound and its promise never settles.
+///
+/// A Durable Object event that its CPU limit ended keeps the object's
+/// pending I/O, as a completed one does (`completed_cell_event`). The limit
+/// ends the *code* of one call and the object keeps its heap, so it keeps
+/// the timers and subrequests that heap waits on. Dropping them left every
+/// promise behind them pending for as long as the isolate lived: a kernel's
+/// deadline timer, armed by a run whose CPU limit ended it, never fired, the
+/// run never settled, and the kernel's caller waited for it forever. What
+/// the call held is released here: its critical sections (a block it still
+/// held resets the object, as any block that cannot reach its `finally`
+/// does), and the CPU it was charged, so the pending work runs under the
+/// same limit counted from zero instead of being ended on its first turn.
+/// Any other termination ends the event together with its operations.
+fn end_terminated_turn(
+    tc: &mut v8::PinScope,
+    entry: &mut InFlight,
+    error: anyhow::Error,
+    cpu_limit: bool,
+) -> Vec<Op> {
+    if let Some(scope) = entry.scope.clone() {
+        release_terminated_transaction(tc, &scope);
+    }
+    entry.fail_in_turn(error);
+    entry.background = None;
+    if cpu_limit && entry.scope.is_some() {
+        entry.completed_cell_event = true;
+        finish_retired_input_gate_context(tc, &entry.context);
+        entry.context.restart_cpu_budget();
+        ws_capture_flush_touched(tc, &entry.runtime_state);
+        return adopt(entry);
+    }
+    entry.abandon();
+    ws_capture_flush_touched(tc, &entry.runtime_state);
+    Vec::new()
 }
 
 /// An op the JS enqueued, and the id whose promise it resolves.
@@ -5578,9 +5652,13 @@ fn start_limited_cell_event<'s>(
             // wrapper can only report that its call returned no value, so do
             // not replace process.exit or actor-abort with that generic seam.
             let cpu_error = context.finish_cpu_turn().err().map(anyhow::Error::msg);
-            let error = take_execution_termination(tc)
-                .or(cpu_error)
-                .unwrap_or(error);
+            let cpu_limit = pending_termination_is_cpu_limit(tc).unwrap_or(cpu_error.is_some());
+            let termination = take_execution_termination(tc);
+            let terminated = termination.is_some() || cpu_error.is_some();
+            let error = termination.or(cpu_error).unwrap_or(error);
+            if terminated {
+                release_terminated_transaction(tc, scope);
+            }
             // The handler ran synchronously before it threw, and a
             // synchronous storage call both commits and reads, so the error
             // carries the positions it reached like a rejection does.
@@ -5597,7 +5675,15 @@ fn start_limited_cell_event<'s>(
                 ws_capture_discard(&context);
             }
             let gated_reply = answer.fail_with_arm_gates(error, context.take_arm_gates());
-            let begun = if gated_reply.is_none() && background.is_none() {
+            // A CPU limit that ended the handler's first turn leaves the
+            // object its pending I/O, as one in a later turn does
+            // (`end_terminated_turn`): the event stays to drive it.
+            let keeps_ops = terminated && cpu_limit;
+            if keeps_ops {
+                finish_retired_input_gate_context(tc, &context);
+                context.restart_cpu_budget();
+            }
+            let begun = if gated_reply.is_none() && background.is_none() && !keeps_ops {
                 Begun::Nothing
             } else {
                 let undefined = v8::undefined(tc).into();
@@ -5614,7 +5700,7 @@ fn start_limited_cell_event<'s>(
                     reply: None,
                     gated_reply,
                     background,
-                    completed_cell_event: false,
+                    completed_cell_event: keeps_ops,
                     ops: std::collections::HashSet::new(),
                     io_context_ops: std::collections::HashSet::new(),
                     unrefed_ops: std::collections::HashSet::new(),
@@ -5896,6 +5982,7 @@ fn begin_cell(tc: &mut v8::PinScope, job: CellJob, event_time: i64) -> Begun {
                         error: "synchronous V8 termination sentinel".to_string(),
                         actor_scope: None,
                         context_id: None,
+                        cpu_limit: false,
                     });
                 tc.terminate_execution();
                 Err(anyhow!("generic synchronous dispatch failure"))
@@ -11009,6 +11096,7 @@ fn op_actor_abort(
         error: format!("__CELLD_ACTOR_ABORT__:{reason}"),
         actor_scope: Some(cell),
         context_id: context.continuation_id(),
+        cpu_limit: false,
     });
     scope.terminate_execution();
 }
@@ -11047,6 +11135,7 @@ fn op_process_exit(
         error: format!("__CELLD_PROCESS_EXIT__:The Node.js process.exit({code}) API was called."),
         actor_scope,
         context_id: context.continuation_id(),
+        cpu_limit: false,
     });
     scope.terminate_execution();
 }
@@ -12174,6 +12263,12 @@ impl IoContext {
         self.cpu_limit_nanos.map(|limit| {
             Duration::from_nanos(limit.saturating_sub(self.cpu_used_nanos.load(Ordering::Relaxed)))
         })
+    }
+
+    /// Count this event's CPU from zero again. See `end_terminated_turn`.
+    fn restart_cpu_budget(&self) {
+        self.cpu_used_nanos.store(0, Ordering::Relaxed);
+        self.cpu_turn.lock().unwrap().take();
     }
 
     fn finish_cpu_turn(&self) -> Result<(), String> {

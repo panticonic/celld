@@ -22,4 +22,12 @@ curl 'http://127.0.0.1:9876/kernel/spin'                # ends at the Worker's 3
 curl 'http://127.0.0.1:9876/kernel/info'                # the heap survived
 ```
 
-Driven by `tests/e2e/scenarios/facet-limits.mjs`.
+The kernel also does what a kernel that runs code under `waitUntil` does
+(`/rpc/start?id=r1&timeout=300&spin=1&cpu=500`, then `/rpc/run?id=r1`): the
+limit ends the spinning code, the run's deadline timer still fires and settles
+the run, and the next run completes. A spin inside a transaction
+(`/rpc/tx-spin?kind=sync|async|block&cpu=400`, add `dolt=1` for a Dolt facet)
+rolls back what the transaction wrote.
+
+Driven by `tests/e2e/scenarios/facet-limits.mjs` and
+`tests/e2e/scenarios/facet-limit-recovery.mjs`.

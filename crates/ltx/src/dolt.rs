@@ -182,6 +182,13 @@ pub struct Cut {
 /// root it reaches. A partial record, an unknown tag or a root that does not
 /// verify ends the scan: that is an open transaction or a torn tail.
 pub fn scan_wal(buf: &[u8], base: u64, from: u64, cut: Cut) -> Cut {
+    scan_wal_counting(buf, base, from, cut).0
+}
+
+/// `scan_wal`, and how many sealed root records it passed (each one is a
+/// durable step: the engine syncs once per root record).
+pub fn scan_wal_counting(buf: &[u8], base: u64, from: u64, cut: Cut) -> (Cut, usize) {
+    let mut roots = 0usize;
     let end_of_buf = base + buf.len() as u64;
     let at = |offset: u64| (offset - base) as usize;
     let mut position = from;
@@ -217,12 +224,13 @@ pub fn scan_wal(buf: &[u8], base: u64, from: u64, cut: Cut) -> Cut {
                     end: root_end,
                     resume: next,
                 };
+                roots += 1;
                 position = next;
             }
             _ => break,
         }
     }
-    cut
+    (cut, roots)
 }
 
 /// The committed cut of a whole chunk file, or `None` when the file holds

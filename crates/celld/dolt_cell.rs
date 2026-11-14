@@ -1345,11 +1345,7 @@ mod tests {
     #[allow(clippy::disallowed_methods)]
     fn roots_after(path: &str, from: celld_ltx::dolt::Cut) -> usize {
         let bytes = std::fs::read(path).unwrap();
-        let mut ends = std::collections::BTreeSet::new();
-        for end in from.resume as usize..=bytes.len() {
-            ends.insert(celld_ltx::dolt::scan_wal(&bytes[..end], 0, from.resume, from).end);
-        }
-        ends.len() - 1
+        celld_ltx::dolt::scan_wal_counting(&bytes, 0, from.resume, from).1
     }
 
     #[allow(clippy::disallowed_methods)]
@@ -1910,6 +1906,154 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A Dolt commit made in the transaction of a write adds no durable
+    /// step: it is the one root record the write is anyway (and so one device
+    /// flush), whether or not the transaction also writes a local table. A
+    /// write followed by a separate commit is two. A write that touches only
+    /// a local table is also a root record: "local" means never in a commit,
+    /// not "free". `commit_cost_by_shape` measures the same shapes in ms.
+    #[test]
+    fn a_commit_in_the_transaction_adds_no_root_record_to_the_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, c) = local_cell(dir.path());
+        c.execute_batch(
+            "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT); \
+             CREATE TABLE outbox_msgs(id INTEGER PRIMARY KEY, body TEXT);",
+        )
+        .unwrap();
+        dolt(&c, "commit", json!({"message": "base"}));
+
+        let roots_of = |shape: &dyn Fn(usize)| -> usize {
+            let before = cut_of(&path);
+            for i in 0..5 {
+                shape(i);
+            }
+            roots_after(&path, before)
+        };
+        let in_tx = |i: usize, local: bool, commit: bool| {
+            c.execute_batch("BEGIN IMMEDIATE").unwrap();
+            c.execute("INSERT INTO t(b) VALUES (?1)", [format!("{i}")]).unwrap();
+            if local {
+                c.execute("INSERT INTO outbox_msgs(body) VALUES ('x')", []).unwrap();
+            }
+            if commit {
+                run_in_transaction_local(&c, "txCommit", &json!({"message": format!("m{i}")}));
+            }
+            c.execute_batch("COMMIT").unwrap();
+        };
+
+        let plain = roots_of(&|i| {
+            c.execute("INSERT INTO t(b) VALUES (?1)", [format!("p{i}")]).unwrap();
+        });
+        assert_eq!(plain, 5, "a plain write is one root record");
+        assert_eq!(roots_of(&|i| in_tx(i, false, false)), 5, "a write transaction is one");
+        assert_eq!(roots_of(&|i| in_tx(i, false, true)), 5, "with a commit in it, still one");
+        assert_eq!(roots_of(&|i| in_tx(i, true, true)), 5, "and with a local write in it");
+        assert_eq!(
+            roots_of(&|_| {
+                c.execute("INSERT INTO outbox_msgs(body) VALUES ('x')", []).unwrap();
+            }),
+            5,
+            "a local-only write is a root record too"
+        );
+        assert_eq!(
+            roots_of(&|i| {
+                c.execute("INSERT INTO t(b) VALUES (?1)", [format!("w{i}")]).unwrap();
+                dolt(&c, "commit", json!({"message": format!("w{i}")}));
+            }),
+            10,
+            "a write and then a separate commit are two"
+        );
+    }
+
+    /// Release benchmark: what a write costs with and without a Dolt commit
+    /// in the same transaction (`cargo test -p celld --release --lib
+    /// commit_cost -- --ignored --nocapture`). `COMMIT_COST_SCENARIO` picks
+    /// one scenario so a tracer can count device flushes for it alone.
+    #[test]
+    #[ignore]
+    #[allow(clippy::disallowed_methods)]
+    fn commit_cost_by_shape() {
+        fn percentile(mut v: Vec<f64>, p: f64) -> f64 {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            v[((v.len() as f64 * p) as usize).min(v.len() - 1)]
+        }
+        let only = std::env::var("COMMIT_COST_SCENARIO").ok();
+        let n = 200usize;
+        for sync in ["NORMAL", "FULL"] {
+            for scenario in [
+                "plain",          // autocommit versioned write, no commit
+                "tx",             // BEGIN; write; COMMIT, no commit
+                "tx_commit",      // BEGIN; write; txCommit; COMMIT
+                "tx_local",       // BEGIN; write + local write; COMMIT
+                "tx_local_commit",// BEGIN; write + local write; txCommit; COMMIT
+                "write_then_commit", // autocommit write, then op commit
+                "local_only",     // autocommit write to a local table
+            ] {
+                if only.as_deref().is_some_and(|o| o != scenario) {
+                    continue;
+                }
+                let dir = tempfile::tempdir().unwrap();
+                let (path, c) = local_cell(dir.path());
+                c.execute_batch(&format!("PRAGMA synchronous={sync}")).unwrap();
+                c.execute_batch(
+                    "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT); \
+                     CREATE TABLE outbox_msgs(id INTEGER PRIMARY KEY, body TEXT);",
+                )
+                .unwrap();
+                dolt(&c, "commit", json!({"message": "base"}));
+                let before = cut_of(&path);
+                let mut times = Vec::new();
+                if only.is_some() {
+                    eprintln!("COMMIT_COST_BEGIN {scenario}");
+                }
+                for i in 0..n {
+                    let started = std::time::Instant::now();
+                    match scenario {
+                        "plain" => {
+                            c.execute("INSERT INTO t(b) VALUES (?1)", [format!("{i}")]).unwrap();
+                        }
+                        "tx" | "tx_commit" | "tx_local" | "tx_local_commit" => {
+                            c.execute_batch("BEGIN IMMEDIATE").unwrap();
+                            c.execute("INSERT INTO t(b) VALUES (?1)", [format!("{i}")]).unwrap();
+                            if scenario.contains("local") {
+                                c.execute("INSERT INTO outbox_msgs(body) VALUES ('x')", []).unwrap();
+                            }
+                            if scenario.ends_with("commit") {
+                                run_in_transaction_local(&c, "txCommit", &json!({"message": format!("m{i}")}));
+                            }
+                            c.execute_batch("COMMIT").unwrap();
+                        }
+                        "write_then_commit" => {
+                            c.execute("INSERT INTO t(b) VALUES (?1)", [format!("{i}")]).unwrap();
+                            dolt(&c, "commit", json!({"message": format!("m{i}")}));
+                        }
+                        "local_only" => {
+                            c.execute("INSERT INTO outbox_msgs(body) VALUES ('x')", []).unwrap();
+                        }
+                        _ => unreachable!(),
+                    }
+                    times.push(started.elapsed().as_secs_f64() * 1000.0);
+                }
+                if only.is_some() {
+                    eprintln!("COMMIT_COST_END {scenario}");
+                }
+                eprintln!(
+                    "synchronous={sync:<6} {scenario:<18} p50/p95 {:.2}/{:.2} ms, root records per op {:.2}, file growth per op {} bytes",
+                    percentile(times.clone(), 0.5),
+                    percentile(times, 0.95),
+                    roots_after(&path, before) as f64 / n as f64,
+                    (std::fs::metadata(&path).unwrap().len() - before.resume) / n as u64,
+                );
+            }
+        }
+    }
+
+    fn run_in_transaction_local(c: &Connection, op: &str, args: &Value) {
+        super::run_in_transaction(c, op, args, &LOCAL)
+            .unwrap_or_else(|error| panic!("{op} {args}: {error:#}"));
     }
 
     #[test]

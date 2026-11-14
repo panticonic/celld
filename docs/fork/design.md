@@ -549,6 +549,34 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       with `{ commit }` leaves nothing to record. The pointer could be made
       free only by writing it with the first write after the checkout; that is
       not done.
+    - **What a Dolt commit adds to a write** (release, same NVMe, 200 writes
+      per shape, `cargo test -p celld --release --lib commit_cost -- --ignored
+      --nocapture`; flushes counted with `strace -f -e trace=fsync,fdatasync`
+      around one shape at a time; the root-record counts are pinned by the plain
+      test `a_commit_in_the_transaction_adds_no_root_record_to_the_write`).
+      `synchronous` NORMAL and FULL measure the same, because a Dolt root record
+      is flushed either way:
+
+| shape of one operation | p50 / p95 ms | root records | `fsync`s |
+| --- | ---: | ---: | ---: |
+| autocommit write, no commit | 6.46 / 7.35 | 1 | 1 |
+| `BEGIN; write; COMMIT`, no commit | 6.53 / 12.60 | 1 | 1 |
+| `BEGIN; write; txCommit; COMMIT` (`{ commit }`) | 7.83 / 9.27 | 1 | 1 |
+| the same plus a write to a local table | 7.80 / 10.66 | 1 | 1 |
+| write, then a separate `commit` | 13.46 / 15.54 | 2 | 2 |
+| a write to a local table only | 6.32 / 6.49 | 1 | 1 |
+
+      A commit made in the transaction costs about 1.3 ms of CPU and 340 bytes
+      of file over the write itself and **no extra flush**: F2 already makes it
+      one durable step. What dominates is that every transaction on a Dolt cell
+      is a root record and so a device flush (SQLite cells at NORMAL skip it),
+      including a transaction that writes only a local table; a class that
+      makes many small transactions (a per-call ledger row) pays one flush
+      each. In the product a root record is followed by the replication
+      capture, so one durable step is about three flushes there (the cell
+      file, the LTX segment and the node index's WAL), measured with the node
+      run under `strace -f`: 233 flushes of the cell file, 208 of the segments
+      and 342 of the index for 228 calls to one cell.
     - **F4: declaration and scope.** `doltLocal` is a `ClassCapabilities` field
       (so the same unknown-key refusal and manifest round trip as `residency`),
       validated by `dolt_cell::validate_local_patterns` (a pattern must not be

@@ -37,6 +37,7 @@ has not been run yet.
 | Dolt runtime for the Vibestudio redesign: merge resolver (F1), commit in a transaction (F2), class-declared local tables (F4), checkout independent of local state (F5), history reads (F6) | done (branch `feature/dolt-runtime-f1-f6`) | §3b.12, `docs/services/dolt-cells.md` |
 | Compatibility fixes from the Vibestudio cutover: continuations after their event (E6), facet abort, streaming `Response.clone()`, WebSocket upgrade from an alarm, retry and delete of an unfinished fork target, error codes, inspector titles | done (branch `fix/cutover-compat`), §3b.14, `docs/fork/upstream-findings.md` E6-E9 | |
 | Dolt durability and remotes follow-ups: an acknowledged hard reset (and DDL) was lost by a kill because the write position went down; `sqlite_master` text rendering documented and pinned; `ondoltpush`; facet relay tested | done (branch `fix/dolt-reset-durability`) | §3b.15, `docs/services/dolt-cells.md`, `docs/services/dolt-remotes.md` |
+| Swap does not wait for residency holds; per-call CPU limit on a facet stub (requests from the Dolt redesign, P0) | done (branch `feature/swap-holds-cpu`) | §3b.16, `docs/services/residency.md` ("Generation swaps"), `docs/services/dynamic-workers.md` ("Limits of one call") |
 | Vibestudio Dolt redesign | design done, P0 not started (Vibestudio branch `design/dolt-redesign`, `docs/dolt-redesign.md`); questions Q1–Q5 open | |
 
 ### Single-track backlog (from 2026-11-13, in order)
@@ -873,6 +874,82 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       facet through its parent (`Hub` relays `/serve` to the facet, whose
       handler is `remote.serve`), with the grant's refusals and `ondoltpush` on
       the facet. `examples/dolt-remotes/demo.sh` (and the cluster run).
+
+16. **A swap does not wait for residency holds; a CPU limit per call (2026-11-14).**
+    Source: Vibestudio's Dolt redesign, where an eval kernel is a Dolt class
+    hosted through a root that holds `ctx.residency.hold()` for as long as the
+    kernel lives. Branch `feature/swap-holds-cpu`.
+    - **A hold stops being a swap blocker.** `swap_safe_point` counted a hold as
+      work, so a held cell was nominated for the swap, quiesced, and then waited
+      for `CELLD_DEPLOY_MAX_AGE_S` (60 s) before the age rule revoked it. Every
+      planned reload stalled each kernel-hosting entity for up to a minute
+      (measured: the node log showed the hold revoked 60.4 s after adoption). The
+      pump (`State::pump_swap`) now splits the predicate: a cell that is at a safe
+      point *except for its holds* (`swap_blocked_only_by_holds`: no request, no
+      withheld output, no alarm in flight, no regular or outbound socket) has its
+      holds revoked at once, with reason `"swap"`, by the same `revoke_holds` a
+      drain uses. The holder's `onrevoked` runs, the holds drop when it settles or
+      at `CELLD_HOLD_GRACE_MS` (default 5 s), and the next pump finds the safe
+      point and stops the runtime. Nothing else changed: the age rule and eager
+      classes still force; `hold()` during the swap is still refused (the cell is
+      quiescing).
+    - **The unsafe case, kept as it was: work in flight.** Revoking while a
+      request runs would be wrong. `onrevoked` is where the application persists
+      what its heap holds, and a request still running afterwards would change the
+      heap again and be acknowledged, so its effect would be lost in the swap. The
+      swap waits for that request anyway, so telling the holder before it ends
+      buys nothing. A held cell with a request, a withheld output, an alarm or a
+      regular WebSocket is therefore not told until it is otherwise at the safe
+      point, or until the maximum age forces it (requests cancelled, sockets closed
+      1012), as before. Tests: six cases in `crates/logic/residency_tests.rs` (an
+      idle holder told at the adoption; a holder that never answers bounded by the
+      grace; a request in flight, told when it ends; the same forced at the age; a
+      regular WebSocket; a hold taken after the swap), and the e2e scenario
+      `residency-swap` (a standalone node on a vibestore bucket, deploy v2,
+      `POST /reload`: the held cell answers from v2 in 27 ms against the 60 s
+      default, `onrevoked` ran with reason `swap`; and a 3 s request in flight
+      finishes on v1 first and the holder is told after it). The scenario times out
+      on the previous build.
+    - **A hold means "not for idleness or capacity".** `docs/services/residency.md`
+      says so in the revocation table, in a new section "Generation swaps", and in
+      the settings table; `docs/README.md` (deploy) points to it.
+    - **Per-call CPU limit: on the facet stub.** `getDurableObjectClass` accepts
+      `props` only, and the loaded Worker's `limits.cpuMs` is one value for the
+      unit, so a spinning call ended at the unit's 600 s and not at its own
+      `timeoutMs`. The limit machinery already has the right shape for a call:
+      `WorkerInvocationLimits` rides on `WorkerJob::Fetch`/`Rpc`, becomes the
+      invocation's `IoContext` limit through `effective_resource_limits` (the
+      lower of the unit's and the call's), and the same two enforcers apply
+      (the exact sample at each turn boundary and the process-wide watchdog thread
+      that terminates the isolate). That path existed for `getEntrypoint(name,
+      { limits })`; a facet call is a `CellJob`, which took its limit from the
+      isolate only. The change gives `CellJob::Fetch` and `CellJob::Rpc` an
+      `invocation_limits` field, `start_limited_cell_event` builds the event's
+      context with it (`IoContext::tracked`), and the first-turn watchdog of
+      `turn_begin_cell` reads the same effective limit. Exceeding it is therefore
+      the unit limit's own end: V8 terminates the call, it rejects with `Worker
+      exceeded CPU limit of N ms` (N the lower one), the facet keeps its heap, and
+      the root and sibling objects keep answering (tested).
+    - **API: a third argument of `ctx.facets.get`.** `ctx.facets.get(name,
+      startup, { limits: { cpuMs, subRequests } })` returns a stub of the same
+      running facet whose `fetch()` and RPC calls each carry the limits. Chosen
+      over the alternatives: (a) `limits` on `getDurableObjectClass` is read once,
+      when the facet starts (the startup callback does not run again while it
+      runs), so a limit that differs per run could only be applied by restarting
+      the facet and losing the kernel's heap; (b) a key of the startup options has
+      the same defect; (c) an option on `fetch()` has no counterpart for an RPC
+      call, whose arguments are the application's. A stub per `get` costs one
+      small object, is not cached (a caller varying `timeoutMs` per run would grow
+      any cache), and leaves `get(name, startup)` returning the one stub it always
+      did. The keys are the loader's (`cpuMs`, `subRequests`), validated as
+      positive integers at the `get`, and a limit above the unit's changes
+      nothing. WebSocket and alarm events of a facet are not calls through a stub
+      and carry only the unit's limit. Test: the `facet-limits` example and
+      e2e scenario (a spin through `fetch` and RPC ends at 500 ms with a unit limit
+      of 3 s; a limit above the unit's ends at the unit's; no per-call limit falls
+      back to the unit's; six calls of 0.4 s each under a 1.5 s limit complete,
+      because the limit is per call; subrequests; invalid values), and unit tests
+      for the effective-limit rule and the event context.
 
 ## 4. Determinism: fixes over the earlier plans
 

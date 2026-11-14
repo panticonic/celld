@@ -119,6 +119,13 @@ export class Agent extends DurableObject {
         this.results[op] = "pending";
         // Nothing here is awaited, and nothing native is pending when this
         // request returns: the continuation outlives the request that made it.
+        // With `linger`, the request leaves a timer pending: it has answered
+        // but is still running when the continuation starts its block, in the
+        // turn of another request (Vibestudio's agent: an alarm pass that
+        // returned with I/O in flight, whose queued transaction a later event
+        // releases).
+        const linger = Number(url.searchParams.get("linger") ?? 0);
+        if (linger > 0) setTimeout(() => {}, linger);
         released
           .then(() => OPS[op](this, url.origin, this.env))
           .then(

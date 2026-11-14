@@ -10505,15 +10505,17 @@ fn op_gate_acquire(
             GATE_ENGAGEMENTS.fetch_sub(1, Ordering::Relaxed);
         }
     }
+    // An origin that no longer takes claims has retired as far as other events
+    // are concerned: it answered, holds no gate, and closed its sockets, even
+    // if its driver still polls I/O it left pending (a completed cell event
+    // keeps that). Its continuation is then the object's own, exactly like one
+    // whose event has ended: the driver stands for it and nothing is claimed.
+    // Refusing it failed Vibestudio's agents at their first alarm pass, when a
+    // transaction queued by an answered pass was released by another event.
     let mut origin = if Arc::ptr_eq(&context, &owner_context) {
         None
     } else {
-        let Some(claim) = context.claim_cross_entry_gate() else {
-            let promise = rejected_promise(scope, RETIRED_INPUT_GATE);
-            return_gate_acquisition(scope, rv, event, None, promise);
-            return;
-        };
-        Some(claim)
+        context.claim_cross_entry_gate()
     };
     let id = match acquire_cell_gate(&owner_context, &cell, event, owner, &mut origin) {
         CellGateAcquisition::Acquired => {

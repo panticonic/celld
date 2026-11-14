@@ -14,6 +14,16 @@ const orphan = (op, ok, name = op) => [
   get(`/result?op=${op}`, { status: 200, json: { ok } }, { poll: settled, name: `${name} from an orphaned continuation` }),
 ];
 
+// The same, but the arming request leaves a timer pending: it has answered and
+// is still running (it keeps its pending I/O) when another request's turn runs
+// the continuation. Its block must start as the object's own, not be refused
+// because the answered request no longer originates cross-event work.
+const lingering = (op, ok, name = op) => [
+  get(`/arm?op=${op}&linger=4000`, { status: 200, json: { armed: op } }, { name: `arm ${name} (lingering)` }),
+  get(`/go?op=${op}`, { status: 200, json: { released: op } }, { name: `release ${name} (lingering)` }),
+  get(`/result?op=${op}`, { status: 200, json: { ok } }, { poll: settled, name: `${name} from a continuation of an answered, running request` }),
+];
+
 const continuations = {
   example: "continuations",
   title: "continuations that outlive their event may use the object: blockConcurrencyWhile, storage, transactions, alarms, fetch and RPC",
@@ -24,6 +34,8 @@ const continuations = {
     ...orphan("sql", '[{"v":7}]', "SQL storage"),
     ...orphan("transactionSync", "inside", "transactionSync"),
     ...orphan("transaction", "inside", "an async transaction"),
+    ...lingering("transaction", "inside", "an async transaction"),
+    ...lingering("bcw", "ran:block", "blockConcurrencyWhile"),
     ...orphan("alarm", "armed", "setAlarm, getAlarm, deleteAlarm"),
     ...orphan("fetch", "200:pong", "fetch"),
     ...orphan("stub", "200:peer", "a Durable Object stub fetch"),

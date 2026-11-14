@@ -41,6 +41,17 @@ const continuations = {
     ...orphan("stub", "200:peer", "a Durable Object stub fetch"),
     ...orphan("rpc", "echo:hi", "an RPC call"),
     ...orphan("effect", "200:written", "a write, then an outbound effect"),
+    // A continuation of a request that has just answered, run by another
+    // request's turn before the first request's driver has gone, starts a
+    // timer. The timer was handed to the first request and dropped with it,
+    // so the continuation never resumed (the agent hang, C2).
+    run("an op handed to a request on its way out still settles", async (t) => {
+      const release = t.fetch("/late-release?after=100");
+      const arm = t.fetch("/late-arm");
+      t.expect(await arm, { status: 200, json: { armed: "late" } });
+      t.expect(await release, { status: 200, json: { released: "late" } });
+      await t.poll(async () => t.expect(await t.fetch("/result?op=late"), { status: 200, json: { ok: "timer settled" } }), settled);
+    }),
     // A block that throws resets the object, as a block in a request does: the
     // object that answers afterwards is a new instance, and the block ran.
     get("/instance", { status: 200, json: { instance: M.capture("before", M.type("string")) } }),

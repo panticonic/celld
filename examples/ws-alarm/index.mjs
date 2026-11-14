@@ -24,8 +24,42 @@ export class Dialer extends DurableObject {
     socket.send("hello");
   }
 
+  // Writes, dials, sends and waits for the reply inside the alarm, as a model
+  // transport does: the frame trails the alarm's own write.
+  async dialAndWait(mode, url, { transaction = false } = {}) {
+    const write = async () => {
+      if (transaction) await this.ctx.storage.transaction(async (txn) => txn.put("before", mode));
+      else this.ctx.storage.kv.put("before", mode);
+    };
+    await write();
+    const response = await fetch(url, { headers: { Upgrade: "websocket" } });
+    const socket = response.webSocket;
+    if (!socket) throw new Error(`no upgrade: ${response.status}`);
+    socket.accept();
+    this.socket = socket;
+    let n = 0;
+    const first = new Promise((resolve, reject) => {
+      socket.addEventListener("message", (event) => {
+        this.ctx.storage.kv.put(`${mode}:${++n}`, String(event.data));
+        resolve();
+      });
+      socket.addEventListener("close", () => reject(new Error("closed before a reply")));
+    });
+    socket.send("hello");
+    await first;
+    await write();
+  }
+
   async alarm() {
     const { mode, url } = this.ctx.storage.kv.get("dial");
+    if (mode === "alarm-write" || mode === "alarm-transaction") {
+      try {
+        await this.dialAndWait(mode, url, { transaction: mode === "alarm-transaction" });
+      } catch (error) {
+        this.ctx.storage.kv.put(`${mode}:error`, String(error?.message ?? error));
+      }
+      return;
+    }
     const dial = () => this.dial(mode, url).catch((error) => {
       this.ctx.storage.kv.put(`${mode}:error`, String(error?.message ?? error));
     });

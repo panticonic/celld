@@ -726,6 +726,23 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       here has a deadline of its own: a block that never ends holds only its
       object (30 s limit by default), and does not delay the node stopping.
       Detail in `docs/fork/upstream-findings.md` (E6).
+    - **Continuations of an event on its way out (E10, E11; 2026-11-14).**
+      Two remaining gaps of the rule above, found by Vibestudio's agents
+      (branch `fix/agent-blockers`). An op a continuation starts in another
+      event's turn while its own event's driver is leaving belongs to that
+      event, which now polls it before it goes: the driver closes the event's
+      mailbox inside a turn, so nothing is handed to it unseen (E10; this was
+      the agent alarm that never sent its model frame). A continuation of an
+      event that has answered but still runs starts its block as the object's
+      own when that event no longer takes cross-event claims (E11; the agent's
+      first-pass "the cell event ended before it could acquire an input gate").
+      Debug tracing for this machinery: `celld::cell_event` (each cell event
+      queued, delivered, finished), `celld::input_gate` (block acquire, take,
+      release; deliveries that wait), `celld::egress_gate` (each output-gate
+      verdict and its latency), `celld::ws_egress` (each WebSocket frame and its
+      gate), `celld::ops` (ops dropped with an ended event). Scenarios in
+      `continuations` and `ws-alarm` (a frame after the alarm's own write or
+      transaction).
     - **Facet abort (E7).** `ctx.facets.abort` rejects the calls pending on the
       facet with the abort reason, ends the facet's fetches in flight, and a root
       handler settled by another event's turn answers although an operation of

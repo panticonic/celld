@@ -82,10 +82,37 @@ seeds.
 | E3 | A graceful shutdown with an open WebSocket waits out the full 25 s drain, then the client sees close code 1006 instead of 1001. | **Yes**, for the preserved restart that `celld dev` and `POST /shutdown?handoff=preserve` use. See below. | |
 | E5 | An alarm set far in the future (year 2100) panics the node: "invalid deadline", `actor/effects.rs:252`. Found while testing object fork. | **Yes.** See below. | |
 | E4 | static-assets: `/index.html` redirects with 307 rather than a permanent redirect. A 404 is served as `Not found` with `content-type: application/json`. | No. | |
+| E10 | An op started by a continuation of event A, run in another event's turn while A's driver is on its way out (A answered and has no op of its own left), is handed to A and dropped with A: its promise never settles, and whatever awaits it hangs. The driver decides an event is finished between turns, without the isolate, so another turn can hand it an op in that gap; `abandon` then closes the mailbox and drops the op's resolver. Found by Vibestudio: an agent `__alarm` that never completed (no model frame sent, a commit or reply that never resumed), about one console-streaming run in three. | **Yes.** See below. | |
+| E11 | A continuation of an event that has answered but still runs (it keeps I/O it left pending) is refused when it starts a block in another event's turn ("the cell event ended before it could acquire an input gate"): the origin's cross-entry claim lifecycle closed at its retirement check, and the refused claim was taken as a refusal of the block. A gap of the E6 fix. Found by Vibestudio: a fresh agent failing its first alarm pass, about one session in five. | **Yes.** See below. | |
 | E9 | `fetch(url, { headers: { Upgrade: "websocket" } })` from a Durable Object fails with "WebSocket upgrade failed: isolate stopped reading WebSocket" when it runs in a continuation that outlived its event (an alarm's detached work, a promise another request released): the object's socket is taken for a Worker's, polled by the isolate and closed when the running event ends. Separately, the same call inside `blockConcurrencyWhile` (an alarm that dials in its initialisation block) waited for the 30 s limit and reset the object. | **Yes.** See below. | |
 | E8 | `Response.clone()` of a response whose body is a stream throws "Cannot clone a streaming response before consumption". workerd tees the body. `Request.clone()` already teed. | **Yes.** `Response.clone()` tees a streaming body as `Request.clone()` does: the response keeps one branch and the clone gets the other, so either can be read first, and a `fetch()` response (a host stream) tees through the host. Scenario `clone-stream`. | |
 | E7 | A request in flight to a facet is not ended when the facet is aborted (`ctx.facets.abort`, or the parent's release): the facet's handler keeps running, the caller's call never settles, and the caller's own response is never sent even when it caught or raced the call. A handler that another event's turn settles is not noticed either while one of its own operations is pending: the driver waits on that operation alone, and for an operation that never ends the event's response is never sent. workerd rejects the pending call with the abort reason. Found by Vibestudio (retiring an object with a request in flight). Both are in upstream code (`op_facet_fetch`, the drive loop's `wake`). | **Yes.** See below. | |
 | E6 | A promise continuation that runs after the event that created it ended cannot use its Durable Object. `blockConcurrencyWhile` (and so `transaction()`) rejects with "the cell event ended before it could acquire an input gate"; `fetch`, a stub call or an RPC call starts, and its promise never settles. workerd allows all of it while the object is alive. Found by Vibestudio's agent runtime, which starts blocks from background continuations. Upstream refuses it on purpose (`RETIRED_INPUT_GATE`, `op_gate_acquire`) and drops the op of an owner that is gone. | **Yes.** See below. | |
+
+**E10 detail.** `drive_cell_inner` (`crates/celld/runtime.rs`) leaves its loop
+when `entry.finished()`, which it decides between turns. An op a continuation of
+the event starts in another event's turn is attributed to the event while its
+mailbox is open (`op!` wrapper, `adopt` → `hand_op`), and reached the driver
+only through `take_handed_ops` on its next wake; when there was none, `abandon`
+closed the mailbox and dropped the resolver. The driver now closes the mailbox
+inside a turn of its isolate once it finds the event finished
+(`InFlight::close_handed_ops_taking`), so no turn can hand an op between the
+check and the close, and polls whatever was handed in the gap before it leaves.
+After the close the event no longer counts as running, so a later continuation's
+op goes to the turn that runs it (E6). `hand_op` logs a dropped op at `warn`
+(`celld::ops`). Scenario `continuations` ("an op handed to a request on its way
+out still settles"; the arming request holds the isolate so the releasing
+request's turn runs in the gap, deterministic).
+
+**E11 detail.** `op_gate_acquire` claims the origin event (`claim_cross_entry_gate`)
+when a block's origin and driver differ, so the origin stays until the block
+ends. `InFlight::retired()` closes that lifecycle as soon as the event has
+answered, holds no gate and has no claim, while the event can still be running
+(its mailbox open, its pending I/O polled). A continuation of it is then
+neither an orphan (E6: its event looks live) nor able to claim it, and the block
+was refused. A failed claim now means what an ended origin means: the driver
+stands for it and the block is the object's own. Scenario `continuations`
+("lingering": the arming request leaves a timer pending).
 
 **E6 detail.** A continuation keeps the token of the event that created it. When
 that event is gone, the token names nothing: the gate op refused it, and an op

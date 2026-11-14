@@ -813,6 +813,23 @@ enum EgressGate {
 }
 
 impl EgressGate {
+    /// A short description for tracing.
+    fn describe(&self) -> String {
+        match self {
+            EgressGate::NoCell => "none".to_string(),
+            EgressGate::Wrote(cell, _, position, epoch) => {
+                format!("wrote {cell} at {position} (epoch {epoch:?})")
+            }
+            EgressGate::ReadOnly(cell, _, observed, epoch) => {
+                format!("read {cell} observed {observed:?} (epoch {epoch:?})")
+            }
+            EgressGate::Unpersisted(error) => format!("unpersisted: {error}"),
+            EgressGate::Facet(root, stream, epoch) => {
+                format!("facet {stream} (epoch {epoch}) then {}", root.describe())
+            }
+        }
+    }
+
     /// Whether the effect must consult the gate before it leaves. True for a
     /// read as well as a write: a read whose cell has no barrier is released
     /// at once, but only the core can say so.
@@ -1019,6 +1036,27 @@ async fn prove_facet(stream: String, epoch: u64) -> std::result::Result<(), Gate
 /// once when the cell has no barrier open, so an ordinary read pays one actor
 /// hop and no replica write.
 async fn egress_gate_verdict(gate: EgressGate) -> std::result::Result<(), GateRefusal> {
+    if !tracing::enabled!(target: "celld::egress_gate", tracing::Level::DEBUG)
+        || matches!(gate, EgressGate::NoCell)
+    {
+        return egress_gate_verdict_inner(gate).await;
+    }
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let started = std::time::Instant::now();
+    tracing::debug!(target: "celld::egress_gate", id, gate = gate.describe(), "egress gate asked");
+    let verdict = egress_gate_verdict_inner(gate).await;
+    tracing::debug!(
+        target: "celld::egress_gate",
+        id,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        ok = verdict.is_ok(),
+        "egress gate answered"
+    );
+    verdict
+}
+
+async fn egress_gate_verdict_inner(gate: EgressGate) -> std::result::Result<(), GateRefusal> {
     let gate = match gate {
         EgressGate::Facet(root, stream, epoch) => {
             prove_facet(stream, epoch).await?;
@@ -1359,6 +1397,7 @@ const RETIRED_INPUT_GATE: &str = "the cell event ended before it could acquire a
 
 /// Release one completed block and remove the open gate from the process map.
 fn release_cell_gate(cell: &str, event: celld_logic::gate::EventId, outcome: Result<(), String>) {
+    tracing::debug!(target: "celld::input_gate", cell = %cell, event, ok = outcome.is_ok(), "block releases the input gate");
     let origin = {
         let mut gates = cell_gates().lock().unwrap();
         let Some(gate) = gates.get_mut(cell) else {
@@ -4079,6 +4118,15 @@ impl InFlight {
         // hand-off, which is what bounds this to one place instead of a race
         // the driver would have to keep re-checking on its way out.
         let handed = self.context.close_handed_ops();
+        if !handed.is_empty() || !self.ops.is_empty() {
+            tracing::debug!(
+                target: "celld::ops",
+                context = ?self.context.continuation_id(),
+                pending = self.ops.len(),
+                handed = handed.len(),
+                "an ended event drops the resolvers of its pending ops"
+            );
+        }
         if self.ops.is_empty() && handed.is_empty() {
             return;
         }
@@ -4122,8 +4170,45 @@ impl InFlight {
             .io_context(owner)
             .is_some_and(|context| context.hand_op(id, future, lifetime));
         if !delivered {
+            tracing::warn!(
+                target: "celld::ops",
+                op = id,
+                owner,
+                runner = ?self.context.continuation_id(),
+                "an op was handed to an event that no longer takes ops; its promise never settles"
+            );
             self.runtime_state.promises.lock().unwrap().remove(&id);
         }
+    }
+
+    /// Close this event's mailbox and take what it still holds, as this
+    /// event's own ops.
+    ///
+    /// An event's driver decides it is done between turns, without the
+    /// isolate. Another event's turn can run one of this event's continuations
+    /// in that gap and hand it an op (the continuation started it, and the
+    /// mailbox was still open), and the driver then dropped it with its
+    /// resolver: the continuation never resumed and whatever awaited it hung
+    /// (Vibestudio's agent alarm: a frame or a commit that never went out).
+    /// The caller holds the isolate, so no turn can hand an op between the
+    /// close and the take. A non-empty answer means the event still has work:
+    /// the driver polls it to the end, as for any pending op of a completed
+    /// event. From the close on, the event no longer counts as running, so a
+    /// later continuation's op goes to the turn that runs it.
+    pub(crate) fn close_handed_ops_taking(&mut self) -> Vec<Op> {
+        let handed = self.context.close_handed_ops();
+        let mut ops = Vec::with_capacity(handed.len());
+        for (id, future, lifetime) in handed {
+            self.ops.insert(id);
+            if lifetime == asyncrt::OpLifetime::IoContext {
+                self.io_context_ops.insert(id);
+            }
+            if lifetime == asyncrt::OpLifetime::Unrefed {
+                self.unrefed_ops.insert(id);
+            }
+            ops.push((id, future));
+        }
+        ops
     }
 
     /// Take the ops another turn enqueued for this event, and record them as
@@ -10517,7 +10602,17 @@ fn op_gate_acquire(
     } else {
         context.claim_cross_entry_gate()
     };
-    let id = match acquire_cell_gate(&owner_context, &cell, event, owner, &mut origin) {
+    let first = acquire_cell_gate(&owner_context, &cell, event, owner, &mut origin);
+    tracing::debug!(
+        target: "celld::input_gate",
+        cell = %cell,
+        event,
+        owner = ?owner,
+        origin = ?context.continuation_id(),
+        acquired = matches!(first, CellGateAcquisition::Acquired),
+        "block asks for the input gate"
+    );
+    let id = match first {
         CellGateAcquisition::Acquired => {
             asyncrt::enqueue_io_context(async move { Ok(String::new()) })
         }
@@ -10556,6 +10651,7 @@ fn op_gate_acquire(
                     };
                     match acquire_cell_gate(&context, &cell, event, owner, &mut origin) {
                         CellGateAcquisition::Acquired => {
+                            tracing::debug!(target: "celld::input_gate", cell = %cell, event, "queued block takes the input gate");
                             return Ok(String::new());
                         }
                         CellGateAcquisition::Waiting {
@@ -11964,7 +12060,7 @@ impl IoContext {
 
     /// The continuation id this context is registered under, which names
     /// the event to the cell's gate. `None` for a context V8 never captures.
-    fn continuation_id(&self) -> Option<u64> {
+    pub(crate) fn continuation_id(&self) -> Option<u64> {
         self.continuation.as_ref().map(|(id, _)| *id)
     }
 

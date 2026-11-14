@@ -186,6 +186,14 @@ pub(super) fn ws_capture_flush_touched(tc: &mut v8::PinScope, runtime_state: &Ac
 /// gated against A, not the checkpoint's owner.
 fn ws_emit(context: &Arc<IoContext>, id: u64, out: WsOut) {
     let mut capture = context.ws_capture.lock().unwrap();
+    tracing::debug!(
+        target: "celld::ws_egress",
+        ws_id = id,
+        context = ?context.continuation_id(),
+        captures = capture.len(),
+        channel = ?ws_channel(id),
+        "frame emitted"
+    );
     if !capture.is_empty() && ws_channel(id) == celld_logic::Channel::WsHibernatable {
         capture.last_mut().unwrap().frames.capture(id, out);
         let runtime_state = context
@@ -211,6 +219,7 @@ fn ws_emit(context: &Arc<IoContext>, id: u64, out: WsOut) {
     // is resolved by the replicator, which does not need this event loop -- so
     // the frame can be held without deadlocking the script that sent it.
     let gate = egress_gate_request(context, ws_channel(id));
+    tracing::debug!(target: "celld::ws_egress", ws_id = id, gate = gate.describe(), "frame gate");
     // Resolved here, on the thread the frame was sent from; the registry is
     // moved into the flush below. The flush runs on a runtime that has no
     // services of its own, so a lookup inside it would answer with whichever
@@ -237,6 +246,7 @@ fn ws_emit(context: &Arc<IoContext>, id: u64, out: WsOut) {
     // dispatch returns. Either way the frames never left the process.
     asyncrt::op_handle().spawn(async move {
         let held = await_egress_gate(gate).await;
+        tracing::debug!(target: "celld::ws_egress", ws_id = id, verdict = ?held, "frame gate answered");
         flushing.release(&registry, held);
     });
 }

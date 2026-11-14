@@ -3355,6 +3355,21 @@ async fn drive_cell_inner(
     // a parked event (denoland/celld#147).
     let slot = affiliation.slot().clone();
     let scope = job.scope().to_string();
+    // For the `celld::cell_event` debug trace only: which event this is.
+    let event_label = if !tracing::enabled!(target: "celld::cell_event", tracing::Level::DEBUG) {
+        String::new()
+    } else {
+        match &job {
+            CellJob::Fetch { method, url, .. } => format!("fetch {method} {url}"),
+            CellJob::Rpc { method, .. } => format!("rpc {method}"),
+            CellJob::Alarm { .. } => "alarm".to_string(),
+            CellJob::WsOpen { ws_id, .. } => format!("ws_open {ws_id}"),
+            CellJob::WsMessage { ws_id, .. } => format!("ws_message {ws_id}"),
+            CellJob::WsClosed { ws_id, .. } => format!("ws_closed {ws_id}"),
+            _ => "other".to_string(),
+        }
+    };
+    tracing::debug!(target: "celld::cell_event", cell = %scope, event = %event_label, "cell event queued");
     let _queue_producer = if job.is_queue_producer() {
         match slot.queue_producer(&scope) {
             Some(permit) => Some(permit),
@@ -3430,6 +3445,7 @@ async fn drive_cell_inner(
             .turn_cell(&scope, |worker| {
                 let job = pending.take().expect("one job per attempt");
                 if let Some(open) = js::cell_gate_wait(job.scope()) {
+                    tracing::debug!(target: "celld::input_gate", cell = %job.scope(), "event waits for the input gate");
                     waiting = Some(open);
                     pending = Some(job);
                     return None;
@@ -3478,6 +3494,14 @@ async fn drive_cell_inner(
         drop(started);
         return Ok(None);
     };
+    tracing::debug!(
+        target: "celld::cell_event",
+        cell = %scope,
+        event = %event_label,
+        context = ?entry.io_context().continuation_id(),
+        answered = entry.answered(),
+        "cell event delivered"
+    );
     if entry.keeps_native_ops() {
         #[cfg(celld_internal_tests)]
         adopt_cell_ops_for_test(&mut ops, started, &mut test_observers.native_op_dropped);
@@ -3495,7 +3519,18 @@ async fn drive_cell_inner(
         notify_gated_failure_for_test(&mut entry, &mut test_observers.gated_failure);
     }
 
-    while !entry.finished() {
+    loop {
+        if entry.finished() {
+            // Close the mailbox inside the isolate, so no turn hands this
+            // event an op between the check and the close; what was handed
+            // in the gap is still this event's to poll.
+            let late = slot.turn(|_| entry.close_handed_ops_taking()).await;
+            if late.is_empty() {
+                break;
+            }
+            adopt(&mut ops, late);
+            continue;
+        }
         let (started, moves) = match wake_with_cross_entry_gate(&mut ops, &mut entry, budget).await
         {
             Wake::Op(op, result) => {
@@ -3614,6 +3649,14 @@ async fn drive_cell_inner(
         span.parent_remote = parent.map(|_| false);
         crate::telemetry::record(span);
     }
+    tracing::debug!(
+        target: "celld::cell_event",
+        cell = %scope,
+        event = %event_label,
+        context = ?entry.io_context().continuation_id(),
+        failure = ?entry.failure(),
+        "cell event finished"
+    );
     slot.turn(|worker| worker.turn_abandon_input_gates(&entry))
         .await;
     entry.abandon();

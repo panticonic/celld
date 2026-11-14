@@ -36,8 +36,8 @@ export default {
       t.expect(await t.fetch(`/arm-orphan?url=${encodeURIComponent(t.srv.url)}`), { status: 202 });
       t.expect(await t.fetch("/release"), { status: 202 });
     })),
-    ...["alarm", "alarm-block", "alarm-detached"].map((mode) =>
-      run(`from an alarm that ${{ alarm: "awaits the dial", "alarm-block": "dials in a critical section", "alarm-detached": "returns before the dial ends" }[mode]}`, (t) =>
+    ...["alarm", "alarm-block", "alarm-detached", "alarm-write", "alarm-transaction"].map((mode) =>
+      run(`from an alarm that ${{ alarm: "awaits the dial", "alarm-block": "dials in a critical section", "alarm-detached": "returns before the dial ends", "alarm-write": "writes, then sends and awaits the reply", "alarm-transaction": "commits a transaction, then sends and awaits the reply" }[mode]}`, (t) =>
         roundTrips(t, mode, async () => {
           t.expect(await t.fetch(`/arm?mode=${mode}&url=${encodeURIComponent(t.srv.url)}`), { status: 202 });
         }))),

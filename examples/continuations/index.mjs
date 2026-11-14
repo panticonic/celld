@@ -141,6 +141,30 @@ export class Agent extends DurableObject {
         const recorded = this.ctx.storage.kv.get(`result:${op}`);
         return Response.json(this.results[op] ?? (recorded ? JSON.parse(recorded) : "unknown"));
       }
+      // A request that answers in its first turn and leaves a continuation
+      // behind, which another request's turn runs while the first is still
+      // on its way out, and which starts an op (a timer). The op belongs to
+      // the first request until it has gone: that request must poll it.
+      // `/late-arm` holds the isolate long enough that `/late-release`,
+      // sent just before it, is due by then and runs the continuation in the
+      // very next turn.
+      case "/late-arm": {
+        this.results.late = "pending";
+        const released = new Promise((resolve) => (this.lateRelease = resolve));
+        released
+          .then(() => new Promise((resolve) => setTimeout(resolve, 20)))
+          .then(() => (this.results.late = { ok: "timer settled" }));
+        // The clock does not move inside a turn, so the hold is counted work.
+        let spin = 0;
+        for (let i = Number(url.searchParams.get("spin") ?? 2e9); i > 0; i--) spin ^= i;
+        this.spin = spin;
+        return Response.json({ armed: "late" });
+      }
+      case "/late-release": {
+        await new Promise((resolve) => setTimeout(resolve, Number(url.searchParams.get("after") ?? 100)));
+        this.lateRelease?.();
+        return Response.json({ released: "late" });
+      }
       case "/instance":
         return Response.json({ instance: this.instance });
       case "/peer":

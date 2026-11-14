@@ -25,7 +25,7 @@ const call = async (t, route, options) => {
 };
 const bodies = (notes) => notes.map((note) => note.body);
 
-const killAndRestore = run(
+export const killAndRestore = run(
   "SIGKILL, delete the local runtime state, start: the cell is restored from the replication log",
   async (t) => {
     const c = t.celld;
@@ -35,13 +35,13 @@ const killAndRestore = run(
   },
 );
 
-const eq = (t, actual, expected, what) => t.assert(
+export const eq = (t, actual, expected, what) => t.assert(
   JSON.stringify(actual) === JSON.stringify(expected),
   `${what}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
 );
 
-/** Run `act`, kill and restore, and check `after` against what `before` saw. */
-const survives = (name, act, check) => [
+/** Run `act`, kill and restore, then `check`. */
+export const survives = (name, act, check) => [
   run(`${name}: acknowledged`, async (t) => { await act(t); }),
   killAndRestore,
   run(`${name}: survived the kill`, async (t) => { await check(t); }),

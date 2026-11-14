@@ -1540,9 +1540,17 @@ class DoltStorage {
         revoke(id) { return dolt._blob("revoke", { id: String(id) }); },
         // The source's handler for a carrier of your own: one request in, one
         // response out (a refusal is a response).
+        // An accepted push also runs the class's `ondoltpush` handler before
+        // this returns (a handler that returns a promise keeps the event alive).
         serve(request, options = {}) {
-          return dolt._blob("remoteServe", { peer: options.peer ?? null },
+          const response = dolt._blob("remoteServe", { peer: options.peer ?? null },
             __doltBytes(request, "request"));
+          const event = __doltAcceptedPush(response);
+          if (event !== null) {
+            const pending = __doltPushHandled(__cell.instances[dolt._scope], event);
+            if (pending !== undefined) dolt._state.waitUntil(pending);
+          }
+          return response;
         },
       });
     }
@@ -1919,6 +1927,41 @@ function __doltBytes(value, what) {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   throw new TypeError(`dolt.execute: ${what} must be bytes`);
+}
+// The push a `remoteServe` response says this cell accepted, as the event its
+// class's `ondoltpush` receives, or null (a fetch, a refusal, a push that
+// changed nothing). The response is the framing `dolt_remote.rs` defines:
+// [u8 status][u32 length, little endian][json][bytes].
+function __doltAcceptedPush(response) {
+  if (!(response instanceof Uint8Array) || response.length < 5 || response[0] !== 0) return null;
+  const length = new DataView(response.buffer, response.byteOffset, response.byteLength).getUint32(1, true);
+  if (5 + length > response.length) return null;
+  let accepted;
+  try {
+    accepted = JSON.parse(new TextDecoder().decode(response.subarray(5, 5 + length))).accepted;
+  } catch {
+    return null;
+  }
+  if (accepted === null || typeof accepted !== "object") return null;
+  return Object.freeze({
+    remote: accepted.remote, grant: accepted.grant, branch: accepted.branch,
+    from: accepted.from ?? null, to: accepted.to, created: accepted.created === true,
+  });
+}
+// Tell the class of `instance` that a push was accepted (`ondoltpush`), in the
+// event that served it, after the branch moved. The push is already made: a
+// handler that throws, or rejects, is logged and changes nothing.
+function __doltPushHandled(instance, event) {
+  if (typeof instance?.ondoltpush !== "function") return undefined;
+  const failed = (error) => console.error("ondoltpush failed:", error);
+  try {
+    const result = instance.ondoltpush(event);
+    return result !== null && typeof result === "object" && typeof result.then === "function"
+      ? Promise.resolve(result).catch(failed) : undefined;
+  } catch (error) {
+    failed(error);
+    return undefined;
+  }
 }
 function __doltBase64Url(bytes) {
   let binary = "";
@@ -6498,7 +6541,16 @@ const __doltRemoteServeHere = async (scope, body, bodyStreamId) => {
       : body;
     // In this object's own turn, on its own connection: what it reads is
     // committed, and the response leaves through its output gate.
-    return new Response(__dolt_blob_op(scope, "remoteServe", "{}", bytes), { status: 200 });
+    const response = __dolt_blob_op(scope, "remoteServe", "{}", bytes);
+    // An accepted push is told to the class in this same turn, after the
+    // branch moved and before the pusher is answered.
+    const event = __doltAcceptedPush(response);
+    if (event !== null && typeof __cell.classes[className]?.prototype?.ondoltpush === "function") {
+      const instance = await _readyInstance(scope);
+      const pending = __ctxRun(undefined, () => __doltPushHandled(instance, event));
+      if (pending !== undefined) await pending;
+    }
+    return new Response(response, { status: 200 });
   } catch (error) {
     return refuse(500, "ERR_DOLT_REMOTE_FAILED", String(error && error.message || error));
   }

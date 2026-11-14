@@ -649,7 +649,15 @@ fn apply(connection: &Connection, args: &Value, input: &[u8]) -> anyhow::Result<
         bail!("{}", tagged(&response_error(&json)));
     }
     match arg_op(args) {
-        "refs" | "push" => Ok(json),
+        "refs" => Ok(json),
+        "push" => {
+            // What the target tells its own class is not for the pusher.
+            let mut json = json;
+            if let Some(object) = json.as_object_mut() {
+                object.remove("accepted");
+            }
+            Ok(json)
+        }
         "fetch" => {
             let text: String = connection
                 .query_row("SELECT dolt_pack_fetch(?1, ?2)", params![remote.name, bytes], |row| row.get(0))
@@ -882,7 +890,18 @@ fn serve_push(
     } else {
         crate::dolt_cell::call(connection, "dolt_branch", &[branch.clone(), tip.clone()])?;
     }
-    Ok((json!({ "branch": branch, "hash": tip, "created": current.is_none(), "unchanged": false }), Vec::new()))
+    // `accepted` is for the target's own runtime, which tells the class
+    // (`ondoltpush`); the pusher's `apply` drops it.
+    Ok((
+        json!({
+            "branch": branch, "hash": tip, "created": current.is_none(), "unchanged": false,
+            "accepted": {
+                "remote": remote, "grant": grant.id, "branch": branch,
+                "from": current, "to": tip, "created": current.is_none(),
+            },
+        }),
+        Vec::new(),
+    ))
 }
 
 #[cfg(test)]

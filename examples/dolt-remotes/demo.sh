@@ -130,11 +130,22 @@ check "the private branch was never revealed" "$(state agent-a)"        '(.track
 check "pushes are recorded as tracking branches" "$(state gad)"           '(.tracking | map(select(test("^pushed-"))) | length) == 2'
 check "the active branch had no uncommitted change" "$(state gad)"       '.status == []'
 
+echo "-- the target is told of each accepted push (ondoltpush)"
+check "the graph was told of both accepted pushes, and of nothing else" "$(get "/pushes?g=gad")" \
+  "map({branch,from,to,created}) == [{\"branch\":\"main\",\"from\":\"$BASE_HASH\",\"to\":\"$A_WORK\",\"created\":false},{\"branch\":\"main\",\"from\":\"$A_WORK\",\"to\":\"$M\",\"created\":false}]"
+check "it names the grant and the tracking remote" "$(get "/pushes?g=gad")" \
+  '(.[0].grant | length == 16) and (.[0].remote == "pushed-" + .[0].grant)'
+check "the branch had moved when the handler ran" "$(get "/pushes?g=gad")" \
+  '.[0].tipNow == .[0].to and .[1].tipNow == .[1].to and .[1].activeNow == "main" and .[1].notesNow == 4'
+check "the pusher is not shown the notification" "$(get "/push?g=agent-a&branch=main")" '.unchanged == true and (has("accepted") | not)'
+
 echo "-- a carrier of the application's own (what a P2P stream would carry)"
 get "/set?g=agent-a&id=5&body=a-five" >/dev/null
 L1=$(get "/commit?g=agent-a&message=a-five" | jq -r .hash)
 check "loopback fetch of the graph" "$(get "/fetch?g=agent-b&transport=loopback&source=gad")" '.branches.main | length == 40'
 check "loopback push to the graph" "$(get "/push?g=agent-a&branch=main&transport=loopback&source=gad")" ".hash == \"$L1\""
+check "remote.serve tells the class too" "$(get "/pushes?g=gad")" \
+  "length == 3 and .[2].to == \"$L1\" and .[2].tipNow == \"$L1\""
 check "pull from the graph"    "$(get "/pull?g=agent-b&branch=main")"     '.fastForward == true'
 
 echo "-- revoke and expiry"
@@ -161,17 +172,47 @@ FACET=$(get "/hub/commit?message=facet-work" | jq -r .hash)
 check "the facet pushes a branch of its own" "$(get "/hub/push?branch=main&to=hub/main")" ".hash == \"$FACET\" and .created == true"
 check "the graph holds it"            "$(state gad)"                      ".branches[\"hub/main\"] == \"$FACET\""
 check "and nothing else moved"        "$(state gad)"                      ".branches.main == \"$(head_of agent-a)\""
+check "the graph was told of the new branch" "$(get "/pushes?g=gad")"     "length == 4 and .[3].branch == \"hub/main\" and .[3].created == true and .[3].from == null and .[3].to == \"$FACET\""
+
+echo "-- a handler that fails does not undo the push"
+get "/pull?g=agent-b&branch=main" >/dev/null
+get "/set?g=agent-b&id=8&body=b-eight" >/dev/null
+L3=$(get "/commit?g=agent-b&message=b-eight" | jq -r .hash)
+get "/push-mode?g=gad&mode=throw" >/dev/null
+check "the push is accepted" "$(get "/push?g=agent-b&branch=main")"       ".hash == \"$L3\" and .unchanged == false"
+get "/push-mode?g=gad&mode=record" >/dev/null
+check "the branch moved and the handler ran" "$(state gad)"               ".branches.main == \"$L3\""
+check "it was told" "$(get "/pushes?g=gad")"                              "length == 5 and .[4].to == \"$L3\""
+
+echo "-- a Dolt facet is a source and a push target through its parent"
+RELAY=$(get "/hub/grant?label=relay&fetch=1&push=relay/*&branches=main" | jq -r .token)
+check "agent-c names the facet as a remote" "$(get "/remote-add-raw?g=agent-c&name=hub&ref=Hub:relay&token=$RELAY")" '.name == "hub"'
+check "agent-c fetches the facet through its parent" "$(get "/fetch?g=agent-c&remote=hub&transport=loopback&source=hub")" '.branches.main | length == 40'
+check "the tracking branch is the facet's head" "$(get "/hash?g=agent-c&ref=hub/main")" ".hash == \"$FACET\""
+CWORK=$(get "/hash?g=agent-c&ref=main" | jq -r .hash)
+check "agent-c pushes a branch to the facet" "$(get "/push?g=agent-c&remote=hub&branch=main&to=relay/c&transport=loopback&source=hub")" ".hash == \"$CWORK\" and .created == true"
+check "the facet holds it" "$(get "/hub/state")"                           ".branches[\"relay/c\"] == \"$CWORK\""
+check "the facet's own branch did not move" "$(get "/hub/state")"         ".branches.main == \"$FACET\""
+check "the facet was told" "$(get "/hub/pushes")"                         "map({branch,from,to,created}) == [{\"branch\":\"relay/c\",\"from\":null,\"to\":\"$CWORK\",\"created\":true}]"
+get "/set?g=agent-c&id=9&body=c-nine" >/dev/null
+CWORK2=$(get "/commit?g=agent-c&message=c-nine" | jq -r .hash)
+check "a fast-forward of it is accepted" "$(get "/push?g=agent-c&remote=hub&branch=main&to=relay/c&transport=loopback&source=hub")" ".hash == \"$CWORK2\" and .created == false"
+check "a push to a branch the grant does not name is refused" "$(get "/push?g=agent-c&remote=hub&branch=main&to=main&transport=loopback&source=hub")" '.code == "ERR_DOLT_REMOTE_FORBIDDEN"'
+check "and the refused one told nobody" "$(get "/hub/pushes")"            "length == 2 and .[1].from == \"$CWORK\" and .[1].to == \"$CWORK2\""
 
 echo "-- restart"
 H=$(head_of gad)
 stop
 start
 check "head after a restart"   "{\"g\":\"$(head_of gad)\"}"               ".g == \"$H\""
+check "the notifications survive" "$(get "/pushes?g=gad")"                  'length == 5'
+check "the facet's notifications survive" "$(get "/hub/pushes")"            'length == 2'
 check "remotes survive"        "$(state agent-a)"                         '(.remotes | length) == 3'
 check "fetch after a restart"  "$(get "/fetch?g=agent-b")"                '.branches.main | length == 40'
 
 echo "-- restore from replication (the node's cell files deleted)"
 get "/pull?g=agent-b&branch=main" >/dev/null
+get "/pull?g=agent-a&branch=main" >/dev/null
 HG=$(head_of gad)
 HA=$(head_of agent-a)
 HB=$(head_of agent-b)

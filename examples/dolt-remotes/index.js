@@ -34,6 +34,26 @@ export class Graph {
     return this.sql.exec("SELECT id, body FROM notes ORDER BY id").toArray();
   }
 
+  // Called by the runtime in this cell's turn when a push into it was
+  // accepted, after the branch moved and before the pusher is answered. The
+  // canonical graph of a decentralized workspace reacts to published work
+  // here. This one records what it was told (in the unversioned key-value
+  // store, so a record never enters a commit) and what it could see.
+  async ondoltpush(event) {
+    const mode = (await this.ctx.storage.get("pushMode")) ?? "record";
+    const pushes = (await this.ctx.storage.get("pushes")) ?? [];
+    pushes.push({
+      ...event,
+      // The branch has already moved: its tip is the pushed commit.
+      tipNow: this.dolt.hashOf(event.branch),
+      // And what is checked out sees the pushed rows when it was the target.
+      activeNow: this.dolt.branch.current(),
+      notesNow: this.notes().length,
+    });
+    await this.ctx.storage.put("pushes", pushes);
+    if (mode === "throw") throw new Error("the handler failed after the push");
+  }
+
   state() {
     return {
       branch: this.dolt.branch.current(),
@@ -129,6 +149,11 @@ export class Graph {
           const bytes = new Uint8Array(await request.arrayBuffer());
           return new Response(dolt.remote.serve(bytes, { peer: q("peer") ?? undefined }));
         }
+        case "pushes":
+          return Response.json((await this.ctx.storage.get("pushes")) ?? []);
+        case "push-mode":
+          await this.ctx.storage.put("pushMode", q("mode", "record"));
+          return Response.json({ mode: q("mode", "record") });
         case "has-remote-api":
           return Response.json({ remote: dolt.remote !== undefined, fetch: typeof dolt.fetch });
         default:
@@ -142,7 +167,12 @@ export class Graph {
   // A carrier of the application's own: the source is reached through its
   // `/serve` route. A stream of the P2P binding would carry the same bytes.
   loopback(source) {
-    const stub = this.env.GRAPH.get(this.env.GRAPH.idFromName(source));
+    // `hub` is the Dolt facet of the supervisor: it has no id of its own to
+    // route to, so its parent relays the request bytes (Hub.fetch passes
+    // `/serve` on to the facet, whose handler is `remote.serve`).
+    const stub = source === "hub"
+      ? this.env.HUB.get(this.env.HUB.idFromName("hub"))
+      : this.env.GRAPH.get(this.env.GRAPH.idFromName(source));
     return async (bytes) => {
       const response = await stub.fetch("https://graph/serve", { method: "POST", body: bytes });
       return new Uint8Array(await response.arrayBuffer());

@@ -2071,6 +2071,95 @@ mod tests {
         assert!(format!("{error:#}").contains("no storage"), "{error:#}");
     }
 
+    /// DoltLite re-renders the `sql` of every table and index in
+    /// `sqlite_master` when the transaction that created it commits (its
+    /// catalog stores a canonical form, which is also what its schema hashes
+    /// cover, so that `ADD COLUMN` and a typed-final `CREATE TABLE` compare
+    /// equal). Neither a Dolt commit, a checkout nor a reopen changes the text
+    /// again, and rendering a rendered text gives the same text. A class that
+    /// fingerprints its schema from `sqlite_master.sql` must fingerprint this
+    /// form (docs/services/dolt-cells.md, "Schema text"). The test pins the
+    /// rules so that an engine upgrade that changes them is noticed.
+    #[test]
+    fn schema_text_is_rendered_when_the_creating_transaction_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, c) = cell(dir.path());
+        let master = |c: &Connection| -> Vec<(String, Option<String>)> {
+            let mut statement = c
+                .prepare(
+                    "SELECT name, sql FROM sqlite_master \
+                     WHERE name NOT LIKE '\\_cf\\_%' ESCAPE '\\' AND name NOT LIKE 'dolt%' \
+                       AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name",
+                )
+                .unwrap();
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        let ddl = [
+            "CREATE TABLE \"q\" ( a INTEGER , b TEXT )",
+            "CREATE TABLE [br] (x)",
+            "CREATE TABLE t3 (\n  a INTEGER, -- comment\n  b /* c */ TEXT\n)",
+            "CREATE UNIQUE INDEX u ON t3 ( a )",
+            "CREATE TABLE t4 (a TEXT DEFAULT 'it''s  spaced  ', \"Mixed Case\" INT)",
+            "CREATE TABLE \"my table\" (a)",
+            "CREATE VIEW v1 AS SELECT  a ,  b FROM t3",
+            "CREATE TRIGGER tr1 AFTER INSERT ON t3 BEGIN  SELECT 1 ;  END",
+            "CREATE TABLE t6 (a)",
+        ];
+        c.execute_batch("BEGIN").unwrap();
+        for sql in ddl {
+            c.execute_batch(sql).unwrap();
+        }
+        c.execute_batch("ALTER TABLE t6 ADD COLUMN  tag  TEXT").unwrap();
+        // Inside the creating transaction the text is what SQLite stored.
+        let written = master(&c);
+        assert!(written.contains(&(
+            "t3".to_string(),
+            Some("CREATE TABLE t3 (\n  a INTEGER, -- comment\n  b /* c */ TEXT\n)".to_string())
+        )), "{written:?}");
+        c.execute_batch("COMMIT").unwrap();
+
+        let rendered = master(&c);
+        let text = |name: &str| {
+            rendered.iter().find(|(n, _)| n == name).and_then(|(_, sql)| sql.clone()).unwrap()
+        };
+        // Whitespace runs are one space, none before `(`, `)` and `,`;
+        // comments go; quoting is kept only where the name needs it; string
+        // literals and quoted identifiers are untouched.
+        assert_eq!(text("q"), "CREATE TABLE q( a INTEGER, b TEXT)");
+        assert_eq!(text("br"), "CREATE TABLE br(x)");
+        assert_eq!(text("t3"), "CREATE TABLE t3( a INTEGER, b TEXT)");
+        assert_eq!(text("u"), "CREATE UNIQUE INDEX u ON t3( a)");
+        assert_eq!(
+            text("t4"),
+            "CREATE TABLE t4(a TEXT DEFAULT 'it''s  spaced  ', \"Mixed Case\" INT)"
+        );
+        assert_eq!(text("my table"), "CREATE TABLE \"my table\"(a)");
+        assert_eq!(text("t6"), "CREATE TABLE t6(a, tag TEXT)");
+        // Views and triggers are kept as written.
+        assert_eq!(text("v1"), "CREATE VIEW v1 AS SELECT  a ,  b FROM t3");
+        assert_eq!(text("tr1"), "CREATE TRIGGER tr1 AFTER INSERT ON t3 BEGIN  SELECT 1 ;  END");
+
+        // Nothing later changes it again.
+        run(&c, "commit", &json!({"message": "schema"})).unwrap();
+        run(&c, "checkout", &json!({"branch": "other", "create": true})).unwrap();
+        run(&c, "checkout", &json!({"branch": "main"})).unwrap();
+        assert_eq!(master(&c), rendered);
+        drop(c);
+        let c = open_connection(&path, celld_ltx::Engine::Dolt, None).unwrap();
+        attach_active_branch(&c).unwrap();
+        assert_eq!(master(&c), rendered);
+        // And a rendered text renders to itself.
+        c.execute_batch("CREATE TABLE again( a INTEGER, b TEXT)").unwrap();
+        assert_eq!(
+            master(&c).iter().find(|(n, _)| n == "again").and_then(|(_, sql)| sql.clone()).unwrap(),
+            "CREATE TABLE again( a INTEGER, b TEXT)"
+        );
+    }
+
     /// What a reader of the store sees, for comparing the live cell with the
     /// store a capture would restore.
     fn observed(c: &Connection) -> Value {

@@ -38,6 +38,7 @@ has not been run yet.
 | Compatibility fixes from the Vibestudio cutover: continuations after their event (E6), facet abort, streaming `Response.clone()`, WebSocket upgrade from an alarm, retry and delete of an unfinished fork target, error codes, inspector titles | done (branch `fix/cutover-compat`), §3b.14, `docs/fork/upstream-findings.md` E6-E9 | |
 | Dolt durability and remotes follow-ups: an acknowledged hard reset (and DDL) was lost by a kill because the write position went down; `sqlite_master` text rendering documented and pinned; `ondoltpush`; facet relay tested | done (branch `fix/dolt-reset-durability`) | §3b.15, `docs/services/dolt-cells.md`, `docs/services/dolt-remotes.md` |
 | Swap does not wait for residency holds; per-call CPU limit on a facet stub (requests from the Dolt redesign, P0) | done (branch `feature/swap-holds-cpu`) | §3b.16, `docs/services/residency.md` ("Generation swaps"), `docs/services/dynamic-workers.md` ("Limits of one call") |
+| A call ended by its CPU limit keeps the object's pending I/O and rolls back the transaction it interrupted (E12, E13; found by the Dolt redesign's kernel) | done (branch `fix/cpu-limit-wedge`) | §3b.17, `docs/fork/upstream-findings.md`, `docs/services/dynamic-workers.md` ("Limits of one call") |
 | Vibestudio Dolt redesign | design done, P0 not started (Vibestudio branch `design/dolt-redesign`, `docs/dolt-redesign.md`); questions Q1–Q5 open | |
 
 ### Single-track backlog (from 2026-11-13, in order)
@@ -950,6 +951,48 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       back to the unit's; six calls of 0.4 s each under a 1.5 s limit complete,
       because the limit is per call; subrequests; invalid values), and unit tests
       for the effective-limit rule and the event context.
+17. **What a call ended by its CPU limit leaves behind (2026-11-14).** Source:
+    Vibestudio, an `eval run` of `while (true) {}` with `--timeout 4000` on a
+    product build: after the limit ended the run, every later call of that
+    session waited forever. Traced with `celld::cell_event`, `celld::ops` and the
+    host's `VIBESTUDIO_DO_CALL_TRACE`: the later calls never reached celld. The
+    host admits one run per session at a time and waits for the running one to
+    report its end. The kernel reports it after `await ran`, and `ran` is the
+    promise of the call V8 unwound. The kernel's deadline timer, which should have
+    ended the run, had been dropped by celld with the event that armed it
+    (`an op was handed to an event that no longer takes ops`). The fork fixes
+    (upstream findings E12, E13):
+    - **The object keeps its pending I/O.** A Durable Object event that its CPU
+      limit ends keeps its referenced operations, as a completed event does,
+      releases its critical sections, and counts its CPU from zero again, so the
+      timer fires and the work it left runs under the same limit. Rejected: (a)
+      dropping the operations (the old behaviour: promises left pending forever
+      in a heap the object keeps using); (b) resetting the object on every limit,
+      as workerd does: the fork keeps the heap (`docs/services/dynamic-workers.md`),
+      and a reset object would still not settle the run, because the kernel's
+      new instance hears of it only on a later call. The cost: code that re-arms
+      a spinning timer forever is ended once per limit, each time, and other
+      events of the isolate run between the ends.
+    - **A transaction a termination interrupted is rolled back and the object
+      reset**, for any termination in a cell's turn. Before, the next
+      `transactionSync()` nested inside the dead transaction and committed its
+      writes; on a Dolt cell every later `transactionSync({ commit })` and
+      `transaction()` failed.
+    - **Not changed, and why:** the promise of a function V8 unwound never
+      settles (V8 also drops the microtask queue on termination), so code that
+      awaits the call its limit ended must race it against its own deadline. The
+      Vibestudio kernel awaits it (`EvalKernel.executeRun`, `result = await ran`),
+      so its run still settles only when something pulls (`reapOverdueRuns`). A
+      subrequest limit is a thrown error, not a termination, and holds nothing.
+      The loaded unit's own limit takes the same path as a call's (tested).
+    - Test: e2e scenario `facet-limit-recovery` (example `facet-limits`): a run
+      whose code spins under `waitUntil` is settled by its deadline after a
+      per-call limit and after the unit's own limit, twice in a row, and the next
+      run completes on the same heap; a spin inside `transactionSync`,
+      `transaction()` (SQLite and Dolt facets, with `{ commit }`) rolls back, and
+      inside `blockConcurrencyWhile` keeps the committed write; each object takes
+      the next transaction. Before the fix the run step never settles and four of
+      the five transaction steps fail.
 
 ## 4. Determinism: fixes over the earlier plans
 

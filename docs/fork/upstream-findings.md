@@ -84,10 +84,37 @@ seeds.
 | E4 | static-assets: `/index.html` redirects with 307 rather than a permanent redirect. A 404 is served as `Not found` with `content-type: application/json`. | No. | |
 | E10 | An op started by a continuation of event A, run in another event's turn while A's driver is on its way out (A answered and has no op of its own left), is handed to A and dropped with A: its promise never settles, and whatever awaits it hangs. The driver decides an event is finished between turns, without the isolate, so another turn can hand it an op in that gap; `abandon` then closes the mailbox and drops the op's resolver. Found by Vibestudio: an agent `__alarm` that never completed (no model frame sent, a commit or reply that never resumed), about one console-streaming run in three. | **Yes.** See below. | |
 | E11 | A continuation of an event that has answered but still runs (it keeps I/O it left pending) is refused when it starts a block in another event's turn ("the cell event ended before it could acquire an input gate"): the origin's cross-entry claim lifecycle closed at its retirement check, and the refused claim was taken as a refusal of the block. A gap of the E6 fix. Found by Vibestudio: a fresh agent failing its first alarm pass, about one session in five. | **Yes.** See below. | |
+| E12 | A Durable Object event that its CPU limit ends drops every operation it left pending: a timer, a subrequest or a storage read its continuations wait on. Their promises never settle (`celld::ops`: "an op was handed to an event that no longer takes ops; its promise never settles"), although the object keeps its heap and keeps serving. A completed event keeps the same operations (`completed_cell_event`); a terminated one did not. A kernel that runs code under `waitUntil` behind a deadline timer never saw the timer fire, so its run never settled. Found by Vibestudio (an `eval run` of `while (true) {}` with `--timeout`). | **Yes.** See below. |
+| E13 | A termination (a CPU limit, `ctx.abort()`, `process.exit()`) inside `transactionSync()` or `transaction()` leaves the transaction open: the `catch` and `finally` that roll it back never run. The connection stays inside `BEGIN IMMEDIATE`, and the instance's storage still names the dead transaction, so the next `transactionSync()` nests inside it and its commit makes the unwound writes durable. On a Dolt cell, every later `transactionSync({ commit })` fails ("{ commit } is only for the outermost transaction"), and every `transaction()` fails with "cannot start a transaction within a transaction". | **Yes.** See below. |
 | E9 | `fetch(url, { headers: { Upgrade: "websocket" } })` from a Durable Object fails with "WebSocket upgrade failed: isolate stopped reading WebSocket" when it runs in a continuation that outlived its event (an alarm's detached work, a promise another request released): the object's socket is taken for a Worker's, polled by the isolate and closed when the running event ends. Separately, the same call inside `blockConcurrencyWhile` (an alarm that dials in its initialisation block) waited for the 30 s limit and reset the object. | **Yes.** See below. | |
 | E8 | `Response.clone()` of a response whose body is a stream throws "Cannot clone a streaming response before consumption". workerd tees the body. `Request.clone()` already teed. | **Yes.** `Response.clone()` tees a streaming body as `Request.clone()` does: the response keeps one branch and the clone gets the other, so either can be read first, and a `fetch()` response (a host stream) tees through the host. Scenario `clone-stream`. | |
 | E7 | A request in flight to a facet is not ended when the facet is aborted (`ctx.facets.abort`, or the parent's release): the facet's handler keeps running, the caller's call never settles, and the caller's own response is never sent even when it caught or raced the call. A handler that another event's turn settles is not noticed either while one of its own operations is pending: the driver waits on that operation alone, and for an operation that never ends the event's response is never sent. workerd rejects the pending call with the abort reason. Found by Vibestudio (retiring an object with a request in flight). Both are in upstream code (`op_facet_fetch`, the drive loop's `wake`). | **Yes.** See below. | |
 | E6 | A promise continuation that runs after the event that created it ended cannot use its Durable Object. `blockConcurrencyWhile` (and so `transaction()`) rejects with "the cell event ended before it could acquire an input gate"; `fetch`, a stub call or an RPC call starts, and its promise never settles. workerd allows all of it while the object is alive. Found by Vibestudio's agent runtime, which starts blocks from background continuations. Upstream refuses it on purpose (`RETIRED_INPUT_GATE`, `op_gate_acquire`) and drops the op of an owner that is gone. | **Yes.** See below. | |
+
+**E12 and E13 detail.** A CPU limit terminates the isolate's execution; the turn
+that notices it (`finish_turn`, or the first turn in `start_limited_cell_event`)
+failed the event and called `abandon`, which drops the resolver of every
+operation the event still owned. That is right for code that ends with its
+event, and wrong for a Durable Object, whose pending I/O belongs to the object
+and outlives the event that started it (workerd keeps it on the actor's
+`IoContext`; celld keeps it after a completed event). The terminated event now
+keeps its referenced operations as a completed one does, releases the critical
+sections it held (as `finish_terminated_actor_event` does for an abort: a held
+block resets the object), and restarts its CPU count, so the work it left runs
+under the same limit counted from zero instead of being ended on its first turn.
+Other terminations, and a stateless request, still end with their operations.
+V8 itself discards the microtask queue on termination and never settles the
+promise of a function it unwound; nothing can settle those, so code that awaits
+the terminated call must race it against its own deadline.
+
+A termination taken in a cell's turn (either path, any kind) now checks the
+cell's connection (`storage::transaction_open`). If a transaction is open, the
+instance is reset (`__resetTerminatedActor`: its state is aborted, its queued
+puts dropped, the instance removed) and the connection rolled back
+(`storage::rollback_abandoned_transaction`); the next event constructs a new
+instance. The caller sees the termination's error. Scenario
+`facet-limit-recovery` (example `facet-limits`): before the fix (fork `ec0d6f5`), its run step
+stays `running` and four of its five transaction steps fail.
 
 **E10 detail.** `drive_cell_inner` (`crates/celld/runtime.rs`) leaves its loop
 when `entry.finished()`, which it decides between turns. An op a continuation of

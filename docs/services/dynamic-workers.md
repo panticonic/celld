@@ -93,6 +93,23 @@ heap, and its root and its sibling objects are not affected. WebSocket and
 alarm events of a facet are not calls through a stub and carry only the
 Worker's limit.
 
+What the ended call leaves behind (a fork rule):
+
+- **The object's pending I/O goes on.** A timer, subrequest or storage read
+  the call started still completes and its continuation runs, as it does after
+  a call that returned, under the same limit counted from zero. A deadline
+  timer the call armed therefore still fires.
+- **The code the limit ended does not.** V8 unwinds it, and the promise of
+  every function on that stack stays pending. Code that awaits such a call
+  must race it against its own deadline instead of awaiting it.
+- **A transaction it was in is rolled back** (`transactionSync()`,
+  `transaction()`, on SQLite and Dolt), and the object is reset: the next
+  event constructs a new instance. The same holds for `ctx.abort()` and
+  `process.exit()` inside a transaction.
+- A critical section (`blockConcurrencyWhile`) it held is released and the
+  object reset, as for any block that cannot reach its end. What the block
+  wrote outside a transaction is committed, as each statement is.
+
 ## The isolation boundary
 
 The loaded isolate has its own context and heap, but it runs in the process of

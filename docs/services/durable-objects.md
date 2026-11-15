@@ -63,6 +63,21 @@ response can reveal, as the Cloudflare
 [output gate](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/)
 does, so an application does not have to `await` a `put()`.
 
+A promise continuation can run after the event that created it has ended: a
+promise another event settled, a timer of an event that has answered, a chain
+of `transaction()` calls each queued behind the last. As in workerd, its work
+belongs to the object while the object lives: storage, `transaction()`,
+`blockConcurrencyWhile()`, `setAlarm()`, `fetch()`, stubs and RPC run, driven by
+whichever event's turn runs the continuation, which is kept until the work
+settles. The continuation's block queues behind a running one rather than
+nesting in it. An instance that was reset (`ctx.abort()`, a failed block, a
+termination inside a transaction) refuses a new block with "the Durable Object
+was reset before the block could start". "The cell event ended before it could
+acquire an input gate" means that no event of the object can drive the block:
+the event driving it was ended while the block queued (the node stopping the
+object, a handler timeout, a CPU limit ending that event), or the code runs outside every event of its object
+(in a stateless request's turn, where workerd refuses the I/O too).
+
 The output gate holds each WebSocket frame only for its own proof, so a
 `webSocketMessage()` handler that sends and then awaits delivers that frame
 while it runs. On one socket, celld starts message handlers in arrival order

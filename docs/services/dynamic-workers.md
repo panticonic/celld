@@ -98,7 +98,9 @@ What the ended call leaves behind (a fork rule):
 - **The object's pending I/O goes on.** A timer, subrequest or storage read
   the call started still completes and its continuation runs, as it does after
   a call that returned, under the same limit counted from zero. A deadline
-  timer the call armed therefore still fires.
+  timer the call armed therefore still fires, and the continuation can use
+  the object as any continuation can, including a `transaction()` or a
+  `blockConcurrencyWhile()` (one that records the run's end, for example).
 - **The code the limit ended does not.** V8 unwinds it, and the promise of
   every function on that stack stays pending. Code that awaits such a call
   must race it against its own deadline instead of awaiting it.

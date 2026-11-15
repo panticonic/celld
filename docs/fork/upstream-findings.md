@@ -86,10 +86,53 @@ seeds.
 | E11 | A continuation of an event that has answered but still runs (it keeps I/O it left pending) is refused when it starts a block in another event's turn ("the cell event ended before it could acquire an input gate"): the origin's cross-entry claim lifecycle closed at its retirement check, and the refused claim was taken as a refusal of the block. A gap of the E6 fix. Found by Vibestudio: a fresh agent failing its first alarm pass, about one session in five. | **Yes.** See below. | |
 | E12 | A Durable Object event that its CPU limit ends drops every operation it left pending: a timer, a subrequest or a storage read its continuations wait on. Their promises never settle (`celld::ops`: "an op was handed to an event that no longer takes ops; its promise never settles"), although the object keeps its heap and keeps serving. A completed event keeps the same operations (`completed_cell_event`); a terminated one did not. A kernel that runs code under `waitUntil` behind a deadline timer never saw the timer fire, so its run never settled. Found by Vibestudio (an `eval run` of `while (true) {}` with `--timeout`). | **Yes.** See below. |
 | E13 | A termination (a CPU limit, `ctx.abort()`, `process.exit()`) inside `transactionSync()` or `transaction()` leaves the transaction open: the `catch` and `finally` that roll it back never run. The connection stays inside `BEGIN IMMEDIATE`, and the instance's storage still names the dead transaction, so the next `transactionSync()` nests inside it and its commit makes the unwound writes durable. On a Dolt cell, every later `transactionSync({ commit })` fails ("{ commit } is only for the outermost transaction"), and every `transaction()` fails with "cannot start a transaction within a transaction". | **Yes.** See below. |
+| E14 | A continuation whose own event has ended is refused a block (`transaction()`, `blockConcurrencyWhile`: "the cell event ended before it could acquire an input gate") when it runs in a turn of an event that is still driving the object's I/O but no longer counts as running: an event polling ops handed to it on its way out (after E10 closed its mailbox), or a call its CPU limit ended (E12: its gate claims were retired for good). The refusal repeats: a retry's timer is polled by the same event, so the retry runs there again. A turn's closing checkpoints also ran with no event installed, so a continuation run there had no driver at all. Gaps of the E6, E10 and E12 fixes. Found by Vibestudio: Pi's commit chain in an agent on a Dolt facet, refused on all 41 attempts over 6 s, in about three agent instances in ten. | **Yes.** See below. |
 | E9 | `fetch(url, { headers: { Upgrade: "websocket" } })` from a Durable Object fails with "WebSocket upgrade failed: isolate stopped reading WebSocket" when it runs in a continuation that outlived its event (an alarm's detached work, a promise another request released): the object's socket is taken for a Worker's, polled by the isolate and closed when the running event ends. Separately, the same call inside `blockConcurrencyWhile` (an alarm that dials in its initialisation block) waited for the 30 s limit and reset the object. | **Yes.** See below. | |
 | E8 | `Response.clone()` of a response whose body is a stream throws "Cannot clone a streaming response before consumption". workerd tees the body. `Request.clone()` already teed. | **Yes.** `Response.clone()` tees a streaming body as `Request.clone()` does: the response keeps one branch and the clone gets the other, so either can be read first, and a `fetch()` response (a host stream) tees through the host. Scenario `clone-stream`. | |
 | E7 | A request in flight to a facet is not ended when the facet is aborted (`ctx.facets.abort`, or the parent's release): the facet's handler keeps running, the caller's call never settles, and the caller's own response is never sent even when it caught or raced the call. A handler that another event's turn settles is not noticed either while one of its own operations is pending: the driver waits on that operation alone, and for an operation that never ends the event's response is never sent. workerd rejects the pending call with the abort reason. Found by Vibestudio (retiring an object with a request in flight). Both are in upstream code (`op_facet_fetch`, the drive loop's `wake`). | **Yes.** See below. | |
 | E6 | A promise continuation that runs after the event that created it ended cannot use its Durable Object. `blockConcurrencyWhile` (and so `transaction()`) rejects with "the cell event ended before it could acquire an input gate"; `fetch`, a stub call or an RPC call starts, and its promise never settles. workerd allows all of it while the object is alive. Found by Vibestudio's agent runtime, which starts blocks from background continuations. Upstream refuses it on purpose (`RETIRED_INPUT_GATE`, `op_gate_acquire`) and drops the op of an owner that is gone. | **Yes.** See below. | |
+
+**E14 detail.** The E6 rule gives a block from a continuation whose event has
+ended to the event whose turn runs it: that event is the block's driver
+(`op_with_input_gate_context`), takes the gate (`op_gate_acquire`) and polls the
+block's ops. The driver had to be *live* (`live_io_context`: its mailbox open)
+and able to take claims (`acquire_cell_gate`: not retired), and three turns ran
+JavaScript for an event that was neither:
+
+- **An event polling what it was handed on its way out.** E10 made the driver
+  close the mailbox inside a turn once the event is finished, and poll what was
+  handed in the gap. It kept the mailbox closed while it did, and the continuation
+  those ops resume runs in its turns: a `transaction()` there named that event
+  as driver, which was "not live", and was refused. Every retry ran in the same
+  event, because the retry's timer, attributed to no live event, was polled by
+  the turn that started it. The mailbox now closes only when it is empty
+  (`IoContext::close_handed_ops_if_empty`): an event that stays to poll ops is
+  running, and its driver asks again when it next finds the event finished.
+- **A call its CPU limit ended (E12).** It keeps driving the object's pending
+  I/O, and its gate claims were retired when its blocks were released
+  (`finish_retired_input_gate_context`), so every block a later continuation
+  asked for in its turns was refused (a kernel's deadline continuation that
+  records the run in a transaction). The claims are taken again after the
+  release (`IoContext::reopen_input_gates`); a block that had queued is still
+  refused through the retirement it already saw.
+- **A turn's closing checkpoints** (`finish_turn`: after `settle`, and after the
+  foreground task queue is pumped) ran with no event installed as current, so a
+  continuation run there had no driver and its block named its own dead event.
+  The turn's event is now current there, as it is in `deliver`.
+
+Refused still: a block of an instance that was reset ("the Durable Object was
+reset before the block could start"); a queued block whose driving event is
+ended while it waits (the node stopping the object, a handler timeout, a CPU
+limit ending that event); and a block asked for outside every event of its
+object (a stateless request's turn in the same isolate, where workerd refuses
+the I/O as belonging to another request). Upstream v0.6.3 refuses every block
+of a continuation whose event has ended (E6), so it has this refusal in a
+wider form; the three turns above are the fork's own E6, E10 and E12 code,
+except the unguarded closing checkpoints, which upstream has too. Scenarios
+`continuations` ("a continuation resumed by a request on its way out runs a
+chain of transactions") and `facet-limit-recovery` (a run recorded by a
+transaction after its call's CPU limit, on SQLite and Dolt facets); both fail
+on fork `2d1749d` with the refusal.
 
 **E12 and E13 detail.** A CPU limit terminates the isolate's execution; the turn
 that notices it (`finish_turn`, or the first turn in `start_limited_cell_event`)

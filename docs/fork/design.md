@@ -39,6 +39,7 @@ has not been run yet.
 | Dolt durability and remotes follow-ups: an acknowledged hard reset (and DDL) was lost by a kill because the write position went down; `sqlite_master` text rendering documented and pinned; `ondoltpush`; facet relay tested | done (branch `fix/dolt-reset-durability`) | §3b.15, `docs/services/dolt-cells.md`, `docs/services/dolt-remotes.md` |
 | Swap does not wait for residency holds; per-call CPU limit on a facet stub (requests from the Dolt redesign, P0) | done (branch `feature/swap-holds-cpu`) | §3b.16, `docs/services/residency.md` ("Generation swaps"), `docs/services/dynamic-workers.md` ("Limits of one call") |
 | A call ended by its CPU limit keeps the object's pending I/O and rolls back the transaction it interrupted (E12, E13; found by the Dolt redesign's kernel) | done (branch `fix/cpu-limit-wedge`) | §3b.17, `docs/fork/upstream-findings.md`, `docs/services/dynamic-workers.md` ("Limits of one call") |
+| A continuation's block is driven by an event that still drives the object's I/O: one polling ops handed on its way out, one its CPU limit ended (E14; the agents' persistent `transaction()` refusal) | done (branch `fix/retired-input-gate`) | §3b.18, `docs/fork/upstream-findings.md`, `docs/services/durable-objects.md` |
 | Vibestudio Dolt redesign | design done, P0 not started (Vibestudio branch `design/dolt-redesign`, `docs/dolt-redesign.md`); questions Q1–Q5 open | |
 
 ### Single-track backlog (from 2026-11-13, in order)
@@ -993,6 +994,43 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       inside `blockConcurrencyWhile` keeps the committed write; each object takes
       the next transaction. Before the fix the run step never settles and four of
       the five transaction steps fail.
+
+18. **A continuation's block and the event that drives it (2026-11-15).** Source:
+    Vibestudio's dolt-p0 handoff, "P4 second pass", item 3: Pi's commit chain in
+    an agent (a Dolt facet of `UniversalDO`) refused by
+    `DurableObjectStorage.transaction()` with "the cell event ended before it
+    could acquire an input gate" on every attempt (41 over 6 s), with no other
+    block of the object open, in about three agent instances in ten. Branch
+    `fix/retired-input-gate`; upstream finding E14.
+    - **The rule (E6, unchanged):** a continuation whose event has ended is the
+      object's own, and the event whose turn runs it drives its block. What was
+      wrong is which events could drive: one that is still running turns for
+      the object counted as gone in two states, and the refusal came from the
+      very event that was running the continuation. (1) An event that, on its
+      way out, polls ops handed to it in the gap (E10) kept its mailbox closed
+      while it did; it now closes only an empty mailbox. (2) A call its CPU
+      limit ended keeps the object's I/O (E12) but its gate claims stayed
+      retired; they are taken again once its blocks are released. (3) The
+      closing checkpoints of a turn ran with no event current; the turn's event
+      is current there now. The refusal was persistent because the retry's
+      timer belonged to no live event, so the turn that started it polled it,
+      and the retry ran in the same event again.
+    - **Refused still:** a reset instance (its own message), a queued block whose
+      driving event is ended while it waits (node stop, handler timeout, CPU
+      limit of that event), and a block asked for outside every event of the
+      object (a stateless request's turn; workerd refuses that I/O as well).
+    - **Rejected:** letting any event take a block whatever its state (an event
+      that has really left polls nothing, and the block would hang holding the
+      gate); queueing the refused block until some event comes (nothing names
+      which one, and the object could stay shut with no driver).
+    - Test: e2e `continuations` ("a continuation resumed by a request on its way
+      out runs a chain of transactions": the E10 shape, then three chained
+      transactions) and `facet-limit-recovery` (a spinning run's deadline
+      records the run through `transaction()`, SQLite and Dolt facets). Both
+      fail on `2d1749d` with the refusal and pass with the fix. The agent's own
+      shape (alarm right after a `subscribeChannel` activation, Pi over a Dolt
+      facet) was not run here; the late-op state is the one that matches its
+      persistence.
 
 ## 4. Determinism: fixes over the earlier plans
 

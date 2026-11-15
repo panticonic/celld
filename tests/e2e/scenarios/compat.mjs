@@ -52,6 +52,18 @@ const continuations = {
       t.expect(await release, { status: 200, json: { released: "late" } });
       await t.poll(async () => t.expect(await t.fetch("/result?op=late"), { status: 200, json: { ok: "timer settled" } }), settled);
     }),
+    // The same, and the continuation then runs a chain of transactions. The
+    // timer settles in a turn of the first request, which is still driving it
+    // after its mailbox closed: that request must be able to drive the
+    // transaction's block, not refuse it as an event that has ended (Pi's
+    // commit chain in a Vibestudio agent, refused on every retry).
+    run("a continuation resumed by a request on its way out runs a chain of transactions", async (t) => {
+      const release = t.fetch("/late-release?after=100");
+      const arm = t.fetch("/late-arm?then=transaction");
+      t.expect(await arm, { status: 200, json: { armed: "late" } });
+      t.expect(await release, { status: 200, json: { released: "late" } });
+      await t.poll(async () => t.expect(await t.fetch("/result?op=late"), { status: 200, json: { ok: "transactions 1,2,3:1,2,3" } }), settled);
+    }),
     // A block that throws resets the object, as a block in a request does: the
     // object that answers afterwards is a new instance, and the block ran.
     get("/instance", { status: 200, json: { instance: M.capture("before", M.type("string")) } }),

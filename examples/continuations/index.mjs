@@ -148,12 +148,40 @@ export class Agent extends DurableObject {
       // `/late-arm` holds the isolate long enough that `/late-release`,
       // sent just before it, is due by then and runs the continuation in the
       // very next turn.
+      //
+      // `then=transaction`: after the timer, the continuation runs a chain of
+      // transactions, each queued behind the last (Pi's `NativeDatabase`
+      // tail). The timer settles in a turn of the first request, which still
+      // drives it after its mailbox closed; the first transaction is asked
+      // for there. Refusing it ("the cell event ended before it could acquire
+      // an input gate") was the agents' persistent refusal: every retry ran
+      // in that same driver again.
       case "/late-arm": {
         this.results.late = "pending";
         const released = new Promise((resolve) => (this.lateRelease = resolve));
+        const then = url.searchParams.get("then");
         released
           .then(() => new Promise((resolve) => setTimeout(resolve, 20)))
-          .then(() => (this.results.late = { ok: "timer settled" }));
+          .then(async () => {
+            if (then !== "transaction") return "timer settled";
+            let tail = Promise.resolve();
+            const done = [];
+            for (const n of [1, 2, 3]) {
+              tail = tail.then(() =>
+                this.ctx.storage.transaction(async (txn) => {
+                  await txn.put(`late:${n}`, n);
+                  done.push(n);
+                }),
+              );
+            }
+            await tail;
+            const stored = await this.ctx.storage.get(["late:1", "late:2", "late:3"]);
+            return `transactions ${done.join(",")}:${[...stored.values()].join(",")}`;
+          })
+          .then(
+            (value) => (this.results.late = { ok: value }),
+            (error) => (this.results.late = { error: String(error?.message ?? error) }),
+          );
         // The clock does not move inside a turn, so the hold is counted work.
         let spin = 0;
         for (let i = Number(url.searchParams.get("spin") ?? 2e9); i > 0; i--) spin ^= i;

@@ -42,17 +42,22 @@ const KERNEL = `
     // writes its terminal row; a run that timed out orphans the chain, as a
     // kernel's force reset does, so the next run is not queued behind it.
     chain = Promise.resolve();
-    start(id, timeoutMs, spin) {
+    start(id, timeoutMs, spin, tx = false) {
       this.calls++;
       const sql = this.ctx.storage.sql;
       sql.exec("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, status TEXT)");
       sql.exec("INSERT OR REPLACE INTO runs VALUES (?, 'running')", id);
       this.ctx.waitUntil(
-        new Promise((resolve) => setTimeout(resolve, 0)).then(() => this.execute(id, timeoutMs, spin)),
+        new Promise((resolve) => setTimeout(resolve, 0)).then(() => this.execute(id, timeoutMs, spin, tx)),
       );
       return { started: id };
     }
-    async execute(id, timeoutMs, spin) {
+    // With \`tx\`, the terminal row is written by an asynchronous transaction
+    // (a product kernel commits it). The deadline that settles a spinning run
+    // fires in a turn of the call the limit ended, which still drives the
+    // object's pending I/O: the transaction must run there, not be refused
+    // as the block of an event that has ended. A refusal is recorded.
+    async execute(id, timeoutMs, spin, tx = false) {
       let timer;
       const deadline = new Promise((resolve) => {
         timer = setTimeout(() => resolve("timed-out"), timeoutMs);
@@ -65,7 +70,14 @@ const KERNEL = `
       const status = await Promise.race([ran, deadline]);
       clearTimeout(timer);
       if (status === "timed-out") this.chain = Promise.resolve();
-      this.ctx.storage.sql.exec("UPDATE runs SET status = ? WHERE id = ?", status, id);
+      const record = (value) => this.ctx.storage.sql.exec("UPDATE runs SET status = ? WHERE id = ?", value, id);
+      if (!tx) return record(status);
+      const commit = this.ctx.storage.dolt ? { commit: { message: id } } : undefined;
+      try {
+        await this.ctx.storage.transaction(async () => record(status), commit);
+      } catch (error) {
+        record("refused: " + String(error?.message ?? error));
+      }
     }
     run(id) {
       const sql = this.ctx.storage.sql;
@@ -178,6 +190,7 @@ export class Owner extends DurableObject {
                     url.searchParams.get("id"),
                     Number(url.searchParams.get("timeout")),
                     url.searchParams.get("spin") === "1",
+                    url.searchParams.get("tx") === "1",
                   )
                   : rest === "run" ? await kernel.run(url.searchParams.get("id"))
                     : rest === "tx-spin" ? await kernel.txSpin(url.searchParams.get("kind"))

@@ -4197,8 +4197,8 @@ impl InFlight {
         }
     }
 
-    /// Close this event's mailbox and take what it still holds, as this
-    /// event's own ops.
+    /// Close this event's mailbox, unless it still holds ops, and take what
+    /// it holds as this event's own ops.
     ///
     /// An event's driver decides it is done between turns, without the
     /// isolate. Another event's turn can run one of this event's continuations
@@ -4207,12 +4207,15 @@ impl InFlight {
     /// resolver: the continuation never resumed and whatever awaited it hung
     /// (Vibestudio's agent alarm: a frame or a commit that never went out).
     /// The caller holds the isolate, so no turn can hand an op between the
-    /// close and the take. A non-empty answer means the event still has work:
-    /// the driver polls it to the end, as for any pending op of a completed
-    /// event. From the close on, the event no longer counts as running, so a
-    /// later continuation's op goes to the turn that runs it.
+    /// check and the close. An empty answer closes the mailbox: from then on
+    /// the event no longer counts as running, so a later continuation's op
+    /// goes to the turn that runs it. A non-empty answer means the event still
+    /// has work: the driver polls it to the end, as for any pending op of a
+    /// completed event, and the mailbox stays open, because an event that is
+    /// still driving turns is running (it takes ops and drives blocks); the
+    /// driver asks again when it next finds the event finished.
     pub(crate) fn close_handed_ops_taking(&mut self) -> Vec<Op> {
-        let handed = self.context.close_handed_ops();
+        let handed = self.context.close_handed_ops_if_empty();
         let mut ops = Vec::with_capacity(handed.len());
         for (id, future, lifetime) in handed {
             self.ops.insert(id);
@@ -4798,6 +4801,11 @@ fn finish_turn(tc: &mut v8::PinScope, entry: &mut InFlight) -> Vec<Op> {
     entry.context.begin_cpu_turn();
     {
         let _cpu_watchdog = cpu_watchdog_for_context(tc, &entry.context);
+        // This turn is the entry's, as in `deliver`: a continuation that runs
+        // in these checkpoints and has no live event of its own takes the
+        // entry as its driver (E6). Without the guard the turn named no event
+        // at all, and such a continuation's block was refused (E14).
+        let _current = CurrentGuard::enter(entry.context.clone());
         settle(tc, entry);
         tc.perform_microtask_checkpoint();
         // V8 schedules FinalizationRegistry cleanup as a foreground task,
@@ -4905,6 +4913,7 @@ fn end_terminated_turn(
     if cpu_limit && entry.scope.is_some() {
         entry.completed_cell_event = true;
         finish_retired_input_gate_context(tc, &entry.context);
+        entry.context.reopen_input_gates();
         entry.context.restart_cpu_budget();
         ws_capture_flush_touched(tc, &entry.runtime_state);
         return adopt(entry);
@@ -5681,6 +5690,7 @@ fn start_limited_cell_event<'s>(
             let keeps_ops = terminated && cpu_limit;
             if keeps_ops {
                 finish_retired_input_gate_context(tc, &context);
+                context.reopen_input_gates();
                 context.restart_cpu_budget();
             }
             let begun = if gated_reply.is_none() && background.is_none() && !keeps_ops {
@@ -12497,6 +12507,28 @@ impl IoContext {
         handed.take().unwrap_or_default()
     }
 
+    /// Close the mailbox if it is empty; otherwise take what it holds and
+    /// leave it open.
+    ///
+    /// For a driver that found its event finished: an empty mailbox means it
+    /// leaves, and from then on it refuses every hand-off. A non-empty one
+    /// means it stays to poll what it was handed, and an event that stays is
+    /// running. It must keep taking ops and driving blocks like any running
+    /// event: closed, it ran turns in which it counted as gone, and a
+    /// continuation that asked for a block in one of them was refused ("the
+    /// cell event ended before it could acquire an input gate") by the very
+    /// event that was running it (E14).
+    #[must_use]
+    fn close_handed_ops_if_empty(&self) -> Vec<HandedOp> {
+        let mut handed = self.handed.lock().unwrap();
+        self.handed_len.store(0, Ordering::Release);
+        let taken = handed.as_mut().map(std::mem::take).unwrap_or_default();
+        if taken.is_empty() {
+            *handed = None;
+        }
+        taken
+    }
+
     fn begin_event(&self) {
         self.events
             .lock()
@@ -12512,6 +12544,21 @@ impl IoContext {
         }
         claims.held.remove(&event);
         true
+    }
+
+    /// Take gate claims again after `retire_input_gates`, for an event that
+    /// keeps running: a call its CPU limit ended keeps driving the object's
+    /// pending I/O (E12). Its blocks were released when the limit ended it;
+    /// a continuation that runs in one of its later turns is the object's
+    /// own, and the event is what drives it, so its block must be taken, not
+    /// refused as one of an event that has ended (E14). A block that queued
+    /// before the retirement was already refused through the old watch, and
+    /// replacing the sender cannot revive it.
+    fn reopen_input_gates(&self) {
+        let mut claims = self.input_gates.lock().unwrap();
+        debug_assert!(claims.held.is_empty(), "a retired event still holds an input gate");
+        claims.retired = false;
+        claims.retirement = tokio::sync::watch::channel(false).0;
     }
 
     fn retire_input_gates(&self) -> Vec<(String, celld_logic::gate::EventId)> {

@@ -3525,7 +3525,8 @@ async fn drive_cell_inner(
         if entry.finished() {
             // Close the mailbox inside the isolate, so no turn hands this
             // event an op between the check and the close; what was handed
-            // in the gap is still this event's to poll.
+            // in the gap is still this event's to poll, and then the mailbox
+            // stays open: the event is still running (E14).
             let late = slot.turn(|_| entry.close_handed_ops_taking()).await;
             if late.is_empty() {
                 break;

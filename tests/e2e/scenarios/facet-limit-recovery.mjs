@@ -16,9 +16,9 @@ const EXCEEDED = /Worker exceeded CPU limit of (\d+) ms/;
 const call = (t, path) => t.fetch(path, { timeoutMs: 30_000 });
 
 // Start a run, then wait for its row to reach a terminal status.
-async function runToEnd(t, { object, id, timeout, spin, cpu, within }) {
+async function runToEnd(t, { object, id, timeout, spin, cpu, within, tx = false }) {
   const limit = cpu === undefined ? "" : `&cpu=${cpu}`;
-  const started = (await call(t, `/rpc/start?object=${object}&id=${id}&timeout=${timeout}&spin=${spin ? 1 : 0}${limit}`)).json;
+  const started = (await call(t, `/rpc/start?object=${object}&id=${id}&timeout=${timeout}&spin=${spin ? 1 : 0}${limit}${tx ? "&tx=1" : ""}`)).json;
   t.assert(started.ok === true && started.body.started === id, `start ${id}: ${JSON.stringify(started)}`);
   let status = null;
   await t.poll(async () => {
@@ -60,6 +60,20 @@ export default {
       const last = await runToEnd(t, { object: "k3", id: "s3", timeout: 5_000, spin: false, cpu: 300, within: 15_000 });
       t.assert(last === "done", `the third run: ${last}`);
     }),
+
+    // The run's deadline settles it in a turn of the call the limit ended,
+    // which still drives the object's pending I/O, and the run records its
+    // status with an asynchronous transaction there (on a Dolt facet, one
+    // that commits, as a product kernel's does). The transaction must run:
+    // the object is alive, and nothing else could drive it.
+    ...[["", "", "kt"], ["a Dolt facet: ", "&dolt=1", "kt-dolt"]].map(([what, dolt, object]) =>
+      run(`${what}a transaction in a continuation of a call ended by its CPU limit runs, and so does the next run's`, async (t) => {
+        const first = await runToEnd(t, { object: `${object}${dolt}`, id: "t1", timeout: 300, spin: true, cpu: 500, within: 15_000, tx: true });
+        t.assert(first === "timed-out", `the spinning run: ${first}`);
+        const second = await runToEnd(t, { object: `${object}${dolt}`, id: "t2", timeout: 5_000, spin: false, cpu: 500, within: 15_000, tx: true });
+        t.assert(second === "done", `the next run: ${second}`);
+      }),
+    ),
 
     // A transaction's writes roll back. A critical section is no transaction:
     // what it wrote before the spin is committed, as each statement is, and

@@ -7,10 +7,10 @@ The detailed per-stream handoffs it points to are authoritative for their own
 details; this file is authoritative for the overall order and the rules.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
-Host `feat/dolt-p0` is now `9549eeccb`; both system-testing feature branches are
+Host `feat/dolt-p0` is now `9dc8ae35d`; both system-testing feature branches are
 at `ea84ad3`. Read "P4 continuation (2026-11-17)" in
 `~/vibestudio-worktrees/dolt-p0/HANDOFF-dolt-redesign.md` before the older pass
-records. Four defects were fixed and committed locally:
+records. Five defects were fixed and committed locally:
 
 - Host `f2fa90aa2`: a scoped native extension can explicitly materialize its
   absent context projection. The old readiness guard rejected the operation
@@ -24,22 +24,46 @@ records. Four defects were fixed and committed locally:
 - System-testing `ea84ad3`: join installed-consumer calls by native target
   receipts; a handle retained in `scope` need not use its creation cell's local
   variable. The actual captured execution passes revalidation.
+- Host `025cea4bd`: desktop and headless console history share filtering and
+  cursor pagination. The headless producer previously returned a schema-invalid
+  result for the correct `h.cdp.consoleHistory()` call. All 184 focused tests
+  pass; `create-panel` now passes on the real stack.
 
 The stopped sweep's five failures have each had their required rerun: four pass;
 `worker-env` still has the known model descriptor-export error (the model then
 recovered, observed the value and cleaned up). The two unfinished worker cases
-are verified after the validator repairs. Harness resilience is **5/5 green**.
-The focused validator suites pass (91 and 25 tests); the three captured failing
-executions all pass revalidation; host and template typechecks and lint pass.
-The full commit gate fails only the documented formatting baseline in eight
-untouched host files. No input-gate or saturation warnings in the six instances
-used so far. The fork runtime and binary pin remain `75f1700`.
+are verified after the validator repairs. Harness resilience is **5/5 green**,
+applicable panels **4/4**, and non-steering subagent/channel cases **3/3**.
+BrowserImport remains inapplicable to this workspace. The validator suites pass
+(91 and 25 tests); three captured executions pass revalidation; host/template
+typechecks and lint pass. The full commit gate fails only the documented
+formatting baseline in eight untouched host files.
 
-**Next:** finish panels and subagents (including `steer-a-running-child`), rerun
-new failures once and inspect them, then continue §5.1 items 2–5. The saturation
-and S6b investigations, compaction soak, WorkspaceStateDO compaction, restart
-probe and 10k-turn fork measurement remain open. Nothing outside the fork has
-been pushed; the owner's main checkouts remain untouched.
+**Steering remains open.** `st_173afc94b7614ac08ca73454fbd914b0` returned the
+correct counts, then errored in cleanup; its required fresh rerun
+`st_9865195d85204b4282b7ca1dfd5a7970` ended before returning counts and failed
+validation, with no tool or cleanup errors. Both reproduced transient
+`in_flight=64` refusals and slow child retirement with sealed-activation alarm
+errors. Successful reads continue after the refusal bursts; a permanent event
+leak is not established. The first run shows 621 child-channel `getEnvelope`
+reads, mostly causal provenance inspection. Child lifecycle prepares took
+28.9 s and 14.2 s. Investigate fanout and retirement separately; do not introduce
+retries, raise caps or cache authority results to hide the symptoms.
+
+**Next:** §5.1 item 2, then S6b and items 4–5. Capture native cell event DEBUG
+with **both** `RUST_LOG=info,celld::cell_event=debug` and
+`VIBESTUDIO_LOG_LEVEL=verbose`: the host routes native stdout through its verbose
+logger, so the last run's DEBUG events were filtered. Confirm the event lines
+before relying on that trace. The compaction soak, WorkspaceStateDO compaction,
+restart probe and 10k-turn fork measurement also remain open.
+
+All owned instances, observers, release producer and registry were stopped and
+joined. The private exhaustive-release scratch was removed after consumers
+stopped; bounded evidence remains at
+`~/.local/state/celld-p4-continuation/` and in the individual system-test run
+artifacts. The fork runtime and binary pin remain `75f1700`; only handover docs
+changed in this repo. Nothing was pushed; the owner's main checkouts remain
+untouched.
 
 Read in this order: §1 (goal and decisions), §2 (rules), §3 (map of repos),
 §4 (state per stream), §5 (the plan to finish), §6 (how to run things),
@@ -489,10 +513,9 @@ Each step ends with its gate green, the per-stream handoff updated, and a
 commit. Vibestudio, the templates, Pi and Chronolog stay local; the owner
 pushes them.
 
-1. **Close P4.** Read `HANDOFF-dolt-redesign.md`, "P4 third pass", first.
-   1. Re-run the lane groups the last sweep did not reach (resilience,
-      panels, subagents). Re-run each failure once, and investigate
-      `eval-exact-authority`.
+1. **Close P4.** Read `HANDOFF-dolt-redesign.md`, "P4 continuation (2026-11-17)", first.
+   1. The stopped-sweep reruns and unfinished lane selections are complete;
+      outcomes and repaired defects are recorded above. Steering remains open.
    2. Investigate the `in_flight=64` saturation in `steer-a-running-child`.
       If the fork is at fault, fix it in the fork with an e2e repro (§6).
    3. Debug the S6b self-addressed-call hang (suspect: `evalOrigin` is lost
@@ -554,11 +577,11 @@ pushes them.
    - Base: `vcs-skill-release-generator`, a stale content manifest;
    - system-testing: 4 failures in `cli.test.ts`;
    - Pi: 51 failures on its `main`;
-   - lanes: `create-panel`, `workspace-test-runner-extension`, and
-     `state-args-immediate-snapshot`, whose model script has a guest type
-     error;
-   - model-sample flakes: `call-do-method`, `eval-exact-authority`,
-     `steer-a-running-child`;
+   - lane: `state-args-immediate-snapshot`, whose model script has a guest type
+     error. `create-panel`, `workspace-test-runner-extension`, `call-do-method`
+     and `eval-exact-authority` had concrete host/validator defects repaired in
+     the Nov 17 continuation. Steering belongs to the mandatory P4 investigation
+     in item 1, not this optional baseline list;
    - `agent-debug-state-method`, an unexpected `channel.admin` prompt;
    - a rare ModelGatewayDO alarm hang, seen once in about 25 runs.
 

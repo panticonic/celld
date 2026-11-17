@@ -7,8 +7,8 @@ The detailed per-stream handoffs it points to are authoritative for their own
 details; this file is authoritative for the overall order and the rules.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
-Host `feat/dolt-p0` is now `d7e48c3a6`; Base feature branches are at
-`13085f3`, and both system-testing feature branches are at `8b0f329`. Read "P4 continuation (2026-11-17)" in
+Host `feat/dolt-p0` is now `d3b8745cb`; both Base feature branches are at
+`4132392`, and both system-testing feature branches are at `b2e01ac`. Read "P4 continuation (2026-11-17)" in
 `~/vibestudio-worktrees/dolt-p0/HANDOFF-dolt-redesign.md` before the older pass
 records. The initial five defects were fixed and committed locally:
 
@@ -78,12 +78,41 @@ worked. No persistent credential grant or provider policy changed. A killed CLI
 caller does not itself join a retained model turn: use its explicit cancellation
 or retire the owned instance. Keep this evidence separate from older rare hangs.
 
-**Next:** S6b self-addressed-call investigation (§5.1 item 3), then compaction
-soak/scheduling, restart probe and 10k-turn measurement. Continue the remaining
+**S6b is now complete (2026-11-17).** The held branches are merged locally.
+Two independent RPC loopbacks caused the self-call failure: the hosted kernel's
+request must leave its client, and the owner's reply to a distinct endpoint
+with the same principal id must return through its incoming transport. Host
+`11be2a5a0` restores hosted-client routing; `ddb4b356d` fixes replies, including
+streaming and retirement terminals. No evalOrigin change or authority bypass
+was needed. All 117 focused RPC/HTTP tests pass; the complete commit gate
+passes through lint and reaches only the eight untouched formatting baselines.
+
+Real-stack verification passes for actual `agent.describe()` and `chatOp`
+self-calls (23 ms receiver calls), exact authority, live kernel continuity,
+activation-loss replay without duplication, finite cancellation and forked
+subagent inheritance. Each has zero tool failures; inspected trajectories have
+no cleanup errors. The self-call group has zero overload refusals and zero
+outstanding native events. One initial debug-state sample used `gad.inspectAgent`
+and hit the existing channel.admin approval baseline; its required single rerun
+exercised the self-call and passed. Full run ids and evidence are in the host
+handoff's S6b completion record and `~/.local/state/celld-p4-s6b/`.
+
+**Next:** product compaction soak and verification of WorkspaceStateDO's inherited
+schedule, then restart and 10k-turn measurement. Source inspection confirms
+WorkspaceStateDO already uses the common `committedTransaction` schedule;
+prove it on the real class instead of adding another scheduler. The strict
+steering/model-completion acceptance result remains open. Continue remaining
 work; a checkpoint or passing subset is not project completion. Capture native
 cell DEBUG with both `RUST_LOG=info,celld::cell_event=debug` and
-`VIBESTUDIO_LOG_LEVEL=verbose`, and confirm the event lines before using them.
-The strict steering/model-completion case remains an open acceptance result.
+`VIBESTUDIO_LOG_LEVEL=verbose`, and confirm event lines before using them.
+
+Development releases must use the canonical producer after
+`NODE_ENV=development node build.mjs --source-server-prereqs`:
+`scripts/prepare-development-workspace-release.mjs` with separate owned output
+and scratch paths plus the explicit template checkout root. A plain build can
+leave the source-generation pointer stale. The canonical producer validates
+that pointer before compiling; startup also validates the completed release.
+Do not reuse the earlier private preparation helper or bypass an input mismatch.
 
 All verification instances, observers and release producers have been stopped
 and joined. Their private release/cache scratch was removed. Bounded evidence
@@ -420,31 +449,13 @@ those of `docs/dolt-redesign.md` §10.
   the channel's own `fork` RPC, including edit-and-fork.
 - **S5, subagent `mode: "fork"`: done.** Scenario
   `subagent-fork-inherits-context`.
-- **S6a: done. S6b, the agent hosting its own eval kernel: half done and
-  held.**
-  - **Live on `feat/dolt-p0` (`7b8a6ddd3`, `db0e8c7dd`, `e3ca7401b`):** the
-    host side.
-    - The host recognises an eval host by a class manifest's `hosts`.
-    - `dynamicCode.admit` hosts a run on the owner itself only when the
-      owner asks for a persistent scope.
-    - Finite scopes and `owner-session` targets stay session entities.
-    - No class declares `hosts` yet, so the product still uses session
-      entities, the designed fallback; nothing is lost.
-  - **Built and held on branches:** the agent side, which adds `hosts` in
-    the agent manifests, the vessel's relay to the kernel, and the eval tool
-    addressing the owner. The branches are Base
-    `feat/dolt-p2-s6b-agent-hosting` (`3553a91`) and host
-    `feat/dolt-p0-s6b-agent-hosting`; Base's main line reverts it in
-    `adc9993`.
-  - **Why it is held:**
-    - the kernel acts as the agent, so its calls to the agent (`agent.*`,
-      `chat.*`, the outside-content report) were answered by its own client
-      with "not exposed";
-    - routing them out of the process hangs them at the host, and
-      `agent-debug-state-method` and the harness's retire then hang too.
-  - First suspect: a session entity carries `evalOrigin` (the owner), and an
-    agent-hosted run loses it. The read-first list is in the handoff's "P4
-    third pass".
+- **S6a and S6b: done.** The executor fact is dynamic-code, and an agent
+  hosts its persistent eval kernel through the general `hostCode` mechanism.
+  Host `11be2a5a0` and `ddb4b356d`, Base `4132392` on both feature branches.
+  Requests and replies distinguish endpoints sharing one principal id. The
+  actual self-call, authority, continuity, crash replay, finite cancellation
+  and forked-subagent cases pass. Finite scopes and owner-session targets
+  remain session entities by design. See the Nov 17 completion record above.
 - **Dolt compaction (gc): done** (host `a0663ac02`, Base `46b86c1`, kept
   through the revert).
   - Every Dolt class compacts on a geometric schedule: after 64 commits,
@@ -547,12 +558,11 @@ pushes them.
    2. The observed saturation was host causal-read fanout and is repaired
       above. The stricter steering completion case still fails on a premature
       model answer; preserve that acceptance failure while continuing P4.
-   3. Debug the S6b self-addressed-call hang (suspect: `evalOrigin` is lost
-      for an agent-hosted run), then merge the two held branches; or record
-      why the agent should keep a session entity.
+   3. **S6b complete:** both held branches are merged locally; the real
+      self-call and targeted lifecycle/fork regression checks pass.
    4. Run a model-free soak of an agent cell past 64 turns, so compaction
-      runs in the product. Put `WorkspaceStateDO` on the compaction
-      schedule.
+      runs in the product. Verify `WorkspaceStateDO`'s inherited common
+      compaction schedule on the real class.
    5. Add a product restart probe of an agent cell mid-run, and measure fork
       latency at 10,000 turns.
    - **Gate:** §10, row P4, of the redesign.

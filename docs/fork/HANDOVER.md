@@ -63,8 +63,9 @@ formatting baseline in eight untouched host files.
 `st_a584ecee9e6a428a9eb687289f0a4488` ended with a promise to report later and
 returned no numbers (51 s, zero tool/refusal/cleanup failures). Earlier numeric
 harness passes had unresolved count conflicts; do not call them correct task
-answers. The follow-up case `st_b5659669c216479bae7ea32f2653d597` reached its
-420 s deadline while still working, with no tool/refusal/cleanup failures.
+answers. The separate `subagent-followup-after-report` case
+`st_b5659669c216479bae7ea32f2653d597` reached its 420 s deadline with
+`model.generation` and `suspend_turn` still pending.
 Retirement prepares in the fresh runs stayed below 0.6 s. This does not prove
 that every archived slow prepare had the same cause.
 
@@ -166,6 +167,12 @@ P2 is now `b64e74c`. The complete comparison release is held for the fresh
 Native TypeScript checks separately peaked at 5.84 GiB; keep all heavy phases
 serial under 6 GiB and zero swap. Continue monitoring and completing the
 measurement; the strict steering result and later redesign phases remain open.
+
+The long benchmark is run `st_508a958252c04cd2a2ed577f117b6df0`. It survived
+the coding session restart and was still running at 2,304 validated turns,
+with no OOM kill. The last two 64-turn batches averaged 5.2 seconds per turn.
+If that rate holds, the 12-hour bound will expire before the fork. Capture
+the terminal result and keep it distinct from the passed 65-turn fork.
 
 The preceding diagnostic instance is stopped/joined. Its whole scope peaked at 3.66 GiB,
 then fell below 2.85 GiB, with no quota hits or OOM kills. Native RSS peaked at
@@ -521,8 +528,9 @@ those of `docs/dolt-redesign.md` §10.
   - On the real fork, a 19-commit cell is 0.66 MB after collection against
     5.4 MB uncollected. A collection changes no state, and a fork after it
     equals its parent.
-  - Product lanes never reach 64 commits, so the agent's hook is tested at
-    unit level only. `WorkspaceStateDO` is not yet on the schedule.
+  - The 65-turn product soak exercises collection at the default threshold.
+    The real `WorkspaceStateDO` test verifies the same inherited schedule,
+    restart, and preservation of state and history.
 - **Bugs fixed on the way:** fork selection asked a headless `SessionDO` for
   `forkFrontier`, so a conversation fork from a CLI session had never worked;
   a forked subagent's adoption conflicted with its later open. Both are fixed
@@ -535,8 +543,8 @@ those of `docs/dolt-redesign.md` §10.
     10,000 events.
   - Agent: 23 storage transactions and 1 commit per turn; turn mean 558 ms,
     p95 799 ms; a fork copy of 3.06 MB takes 247 ms.
-- **Not measured or not exercised:** a product-level restart of an agent
-  cell mid-run, and fork latency at 10,000 turns.
+- **Still being measured:** fork latency at 10,000 turns. Activation-loss
+  replay already verified restart of an agent cell during a run.
 
 **The P4 wrap-up pass** (the handoff's "P4 third pass"; host head
 `c8e2511a3`):

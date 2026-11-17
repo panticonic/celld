@@ -8,7 +8,7 @@ details; this file is authoritative for the overall order and the rules.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
-compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `1d8104e` (65 real turns and clean cleanup verified). Read "P4 continuation (2026-11-17)" in
+compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified; 10k measurement next). Read "P4 continuation (2026-11-17)" in
 `~/vibestudio-worktrees/dolt-p0/HANDOFF-dolt-redesign.md` before the older pass
 records. The initial five defects were fixed and committed locally:
 
@@ -120,8 +120,8 @@ Do not reuse the earlier private preparation helper or bypass an input mismatch.
 Completed verification instances, observers and release producers have been stopped
 and joined. Their private release/cache scratch was removed. Bounded evidence
 is at `~/.local/state/celld-p4-steering/` and the individual system-test artifacts.
-The owned npm registry was replaced after joining the preceding fixture and remains live for P4 (node PID 216656,
-timeout parent 216655; verify the command before stopping), and must be joined
+The owned npm registry was replaced after joining the preceding fixture and remains live for P4 (node PID 472729,
+timeout parent 472728; verify the command before stopping), and must be joined
 at final cleanup. The fork runtime and binary pin remain `75f1700`; only handover
 docs changed in this repo. Nothing pushed; main checkouts remain untouched.
 
@@ -154,6 +154,18 @@ complete comparison release was removed. Proof and memory summaries are
 `soak7-workload-evidence.json` and `soak7-memory-summary.json` in the private
 compaction state directory. Continue with the 10k native-turn fork measurement;
 strict steering completion and later redesign phases are still open.
+
+The extended short gate also passes: `st_ba15f3a72fc14833af2ebd3783c5df5e`,
+223.8 s, including an ordinary channel fork after 65 native turns, clone
+adoption/history/model checks, and explicit clone/session/context retirement.
+Fork RPC: 9,895 ms; exported native facets: 35,008,303 bytes. Its scope peaked
+at 3.91 GiB with no MemoryMax/OOM events; all processes are joined. System-testing
+P2 is now `b64e74c`. The complete comparison release is held for the fresh
+`p4-agent-10k` instance, not abandoned. The explicit-only benchmark has a
+12-hour investigation bound and sparse bounded progress/memory evidence.
+Native TypeScript checks separately peaked at 5.84 GiB; keep all heavy phases
+serial under 6 GiB and zero swap. Continue monitoring and completing the
+measurement; the strict steering result and later redesign phases remain open.
 
 The preceding diagnostic instance is stopped/joined. Its whole scope peaked at 3.66 GiB,
 then fell below 2.85 GiB, with no quota hits or OOM kills. Native RSS peaked at

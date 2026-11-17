@@ -7,8 +7,8 @@ The detailed per-stream handoffs it points to are authoritative for their own
 details; this file is authoritative for the overall order and the rules.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
-Host `feat/dolt-p0` is now `d3b8745cb`; both Base feature branches are at
-`4132392`, and both system-testing feature branches are at `b2e01ac`. Read "P4 continuation (2026-11-17)" in
+Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
+compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `1d8104e` (65 real turns and clean cleanup verified). Read "P4 continuation (2026-11-17)" in
 `~/vibestudio-worktrees/dolt-p0/HANDOFF-dolt-redesign.md` before the older pass
 records. The initial five defects were fixed and committed locally:
 
@@ -97,10 +97,13 @@ and hit the existing channel.admin approval baseline; its required single rerun
 exercised the self-call and passed. Full run ids and evidence are in the host
 handoff's S6b completion record and `~/.local/state/celld-p4-s6b/`.
 
-**Next:** product compaction soak and verification of WorkspaceStateDO's inherited
-schedule, then restart and 10k-turn measurement. Source inspection confirms
-WorkspaceStateDO already uses the common `committedTransaction` schedule;
-prove it on the real class instead of adding another scheduler. The strict
+**Next:** the 10k-turn fork measurement, after the passed product compaction
+soak recorded below. WorkspaceStateDO's
+inherited common schedule passes on the real class (65 mutations, collection,
+crash/restart, history and local-state preservation). The passed activation-loss
+replay already provides the requested agent-cell restart probe: a fresh vessel
+uses the same durable storage and completes once. Whole workspace-node restart
+is outside that requirement. The strict
 steering/model-completion acceptance result remains open. Continue remaining
 work; a checkpoint or passing subset is not project completion. Capture native
 cell DEBUG with both `RUST_LOG=info,celld::cell_event=debug` and
@@ -114,13 +117,53 @@ leave the source-generation pointer stale. The canonical producer validates
 that pointer before compiling; startup also validates the completed release.
 Do not reuse the earlier private preparation helper or bypass an input mismatch.
 
-All verification instances, observers and release producers have been stopped
+Completed verification instances, observers and release producers have been stopped
 and joined. Their private release/cache scratch was removed. Bounded evidence
 is at `~/.local/state/celld-p4-steering/` and the individual system-test artifacts.
-The owned npm registry remains live for the next P4 slice (node PID 64646,
-timeout parent 64582; verify the command before stopping), and must be joined
+The owned npm registry was replaced after joining the preceding fixture and remains live for P4 (node PID 216656,
+timeout parent 216655; verify the command before stopping), and must be joined
 at final cleanup. The fork runtime and binary pin remain `75f1700`; only handover
 docs changed in this repo. Nothing pushed; main checkouts remain untouched.
+
+**Memory and compaction diagnostic (2026-11-17).** The latest isolated run
+`st_ee67575c9ef94e20a62a41cd864e54db` retains 65 distinct native turns, the
+64-commit collection marker, and zero model calls. It is still **red**:
+critical mission retirement and subsequent context cleanup failed. Host
+`2659eaa6f` fixes the reproduced critical-confirmation principal error (81
+focused tests pass; full host gate reaches only the same eight formatting
+baselines). The SQLite fault is now located at the first schema read during
+`release blob retentions`, but its competing lock owner remains unproven.
+Do not raise waits or treat the native turn evidence as a passing cleanup gate.
+
+Host `763409214` initializes the shared retention registry in WAL mode before
+native producers start. A traced diagnostic identifies the native writer as
+the conflicting lock owner, and reproduces exhaustion at namespace DELETE as
+well as the earlier schema read. The root-reader regression fails before the
+change; all 12 interop/retention/GC/node tests now pass, including 65 real Dolt
+writes retained across durable shutdown and restart. Full host checks pass
+through lint and reach only the eight formatting baselines. The fresh untraced
+actual-agent soak passes and P2 is promoted; the 10k-turn fork measurement remains
+outstanding. No native binary, wait duration, retry policy or deadline changed.
+
+**65-turn gate passed:** `st_444e20c9d29f4ffb8847b8ce350b4753`, 205.9 s,
+65 distinct native receipts, zero model calls, collection at the default 64
+commits, and no mission/session/context cleanup errors. Base and System-testing
+P2 branches are fast-forwarded to the verified P4 heads above. The scope peaked
+at 3.22 GiB, had no MemoryMax/OOM events, and all its processes are joined. The
+complete comparison release was removed. Proof and memory summaries are
+`soak7-workload-evidence.json` and `soak7-memory-summary.json` in the private
+compaction state directory. Continue with the 10k native-turn fork measurement;
+strict steering completion and later redesign phases are still open.
+
+The preceding diagnostic instance is stopped/joined. Its whole scope peaked at 3.66 GiB,
+then fell below 2.85 GiB, with no quota hits or OOM kills. Native RSS peaked at
+1.59 GiB and settled around 1.1–1.2 GiB. This is substantial overhead, not a
+proven accumulating leak. Heavy verification is strictly serial, each scope
+has MemoryMax=6G/MemorySwapMax=0, and its bounded observer runs outside it.
+The owner’s other applications/processes remain untouched. Keep private release
+output only through the immediate corrected comparison; join exact owned
+processes before retiring their scratch. Bounded evidence lives under
+`~/.local/state/celld-p4-compaction/`.
 
 Read in this order: §1 (goal and decisions), §2 (rules), §3 (map of repos),
 §4 (state per stream), §5 (the plan to finish), §6 (how to run things),
@@ -563,8 +606,8 @@ pushes them.
    4. Run a model-free soak of an agent cell past 64 turns, so compaction
       runs in the product. Verify `WorkspaceStateDO`'s inherited common
       compaction schedule on the real class.
-   5. Add a product restart probe of an agent cell mid-run, and measure fork
-      latency at 10,000 turns.
+   5. The agent-cell restart probe passes through activation-loss replay.
+      Measure fork latency at 10,000 turns.
    - **Gate:** §10, row P4, of the redesign.
 2. **P5, decentralized GAD** (about 20 agent-days, the largest phase). The
    design is `docs/dolt-redesign.md` §5.

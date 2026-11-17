@@ -97,6 +97,16 @@ header, because DoltLite can create prolly-format files and `node:sqlite` could
 not read one. Namespace is `["celld", id]`, byte-identical to
 `blobRetentionNamespace`.
 
+The host must configure this shared registry before admitting native producers.
+Vibestudio's `CelldNode` initializes/validates it and selects WAL journaling
+before `deploy` or node startup. This allows GC-root snapshots during native
+publication without weakening full synchronous writes. The native opener
+preserves that mode. With rollback journaling, the real agent soak exhausted
+the host's SQLite busy wait under native write traffic, both on schema reads
+and namespace cleanup; a traced `F_GETLK` identified the native writer.
+The host regression covers a committed root read under another writer and 65
+interleaved real Dolt writes surviving durable shutdown and restart.
+
 **The index** has `objects(key, etag, size, modified_ms, digest | body,
 attributes)` and a one-row `sequence`. `key` is the percent-encoded
 `object_store::Path`, compared as UTF-8 bytes (S3's order). `digest` or `body`

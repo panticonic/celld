@@ -7,10 +7,10 @@ The detailed per-stream handoffs it points to are authoritative for their own
 details; this file is authoritative for the overall order and the rules.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
-Host `feat/dolt-p0` is now `9dc8ae35d`; both system-testing feature branches are
-at `ea84ad3`. Read "P4 continuation (2026-11-17)" in
+Host `feat/dolt-p0` is now `d7e48c3a6`; Base feature branches are at
+`13085f3`, and both system-testing feature branches are at `8b0f329`. Read "P4 continuation (2026-11-17)" in
 `~/vibestudio-worktrees/dolt-p0/HANDOFF-dolt-redesign.md` before the older pass
-records. Five defects were fixed and committed locally:
+records. The initial five defects were fixed and committed locally:
 
 - Host `f2fa90aa2`: a scoped native extension can explicitly materialize its
   absent context projection. The old readiness guard rejected the operation
@@ -39,31 +39,59 @@ BrowserImport remains inapplicable to this workspace. The validator suites pass
 typechecks and lint pass. The full commit gate fails only the documented
 formatting baseline in eight untouched host files.
 
-**Steering remains open.** `st_173afc94b7614ac08ca73454fbd914b0` returned the
-correct counts, then errored in cleanup; its required fresh rerun
-`st_9865195d85204b4282b7ca1dfd5a7970` ended before returning counts and failed
-validation, with no tool or cleanup errors. Both reproduced transient
-`in_flight=64` refusals and slow child retirement with sealed-activation alarm
-errors. Successful reads continue after the refusal bursts; a permanent event
-leak is not established. The first run shows 621 child-channel `getEnvelope`
-reads, mostly causal provenance inspection. Child lifecycle prepares took
-28.9 s and 14.2 s. Investigate fanout and retirement separately; do not introduce
-retries, raise caps or cache authority results to hide the symptoms.
+**Further continuation.** Four additional defects were repaired locally:
 
-**Next:** §5.1 item 2, then S6b and items 4–5. Capture native cell event DEBUG
-with **both** `RUST_LOG=info,celld::cell_event=debug` and
-`VIBESTUDIO_LOG_LEVEL=verbose`: the host routes native stdout through its verbose
-logger, so the last run's DEBUG events were filtered. Confirm the event lines
-before relying on that trace. The compaction soak, WorkspaceStateDO compaction,
-restart probe and 10k-turn fork measurement also remain open.
+- Host `d155d0093`: share only outstanding reads of the same canonical original
+  envelope. Every ingress still verifies its own task and rechecks its owner;
+  no result cache remains after settlement. The native trace proves burst
+  pressure: 64 channel events arrived within 0.3–0.4 s and all later finished.
+  The comparison had zero refusals and a child-channel peak of seven. All 35
+  causal-proof tests pass; the fresh exact-authority case passes.
+- Base `724b34e`: child retirement aborts and joins foreground and background
+  tools. The previous flush path returned `retired:true` with a waiting tool
+  still owned. All 93 focused tests and four Base typecheck configurations pass.
+- System-testing `34b45b1`: preserve an expired test deadline across its own
+  RPC cancellation wrappers, including synchronous-abort races; keep foreign
+  cancellations and actual cleanup failures. All 46 focused tests and three
+  template typecheck configurations pass.
+- System-testing `8b0f329`: require a resolved file count and line total for the
+  same set using the existing semantic claim checker. The old digit check
+  accepted conflicting counts. Actual semantic replay accepts the retained
+  resolved answer and rejects both conflicting-count answers.
 
-All owned instances, observers, release producer and registry were stopped and
-joined. The private exhaustive-release scratch was removed after consumers
-stopped; bounded evidence remains at
-`~/.local/state/celld-p4-continuation/` and in the individual system-test run
-artifacts. The fork runtime and binary pin remain `75f1700`; only handover docs
-changed in this repo. Nothing was pushed; the owner's main checkouts remain
-untouched.
+**Steering remains unpassed for model completion.** The strict fresh case
+`st_a584ecee9e6a428a9eb687289f0a4488` ended with a promise to report later and
+returned no numbers (51 s, zero tool/refusal/cleanup failures). Earlier numeric
+harness passes had unresolved count conflicts; do not call them correct task
+answers. The follow-up case `st_b5659669c216479bae7ea32f2653d597` reached its
+420 s deadline while still working, with no tool/refusal/cleanup failures.
+Retirement prepares in the fresh runs stayed below 0.6 s. This does not prove
+that every archived slow prepare had the same cause.
+
+**ModelGateway diagnostic.** Base `13085f3` exposes pending task state and open
+connection count in its inspector (15 gateway tests and four typechecks pass).
+An apparent gateway stall was a pending first-use credential approval, missed
+when an earlier queue inspection happened after cancellation. In the isolated
+verification instance, the known managed source received a session-scoped
+credential-use decision; its native call then completed and the semantic replay
+worked. No persistent credential grant or provider policy changed. A killed CLI
+caller does not itself join a retained model turn: use its explicit cancellation
+or retire the owned instance. Keep this evidence separate from older rare hangs.
+
+**Next:** S6b self-addressed-call investigation (§5.1 item 3), then compaction
+soak/scheduling, restart probe and 10k-turn measurement. Continue the remaining
+work; a checkpoint or passing subset is not project completion. Capture native
+cell DEBUG with both `RUST_LOG=info,celld::cell_event=debug` and
+`VIBESTUDIO_LOG_LEVEL=verbose`, and confirm the event lines before using them.
+The strict steering/model-completion case remains an open acceptance result.
+
+All verification instances, observers and release producers have been stopped
+and joined. Their private release/cache scratch was removed. Bounded evidence
+is at `~/.local/state/celld-p4-steering/` and the individual system-test artifacts.
+The owned npm registry remains live for the next P4 slice (node PID 64646,
+timeout parent 64582; verify the command before stopping), and must be joined
+at final cleanup. The fork runtime and binary pin remain `75f1700`; only handover
+docs changed in this repo. Nothing pushed; main checkouts remain untouched.
 
 Read in this order: §1 (goal and decisions), §2 (rules), §3 (map of repos),
 §4 (state per stream), §5 (the plan to finish), §6 (how to run things),
@@ -516,8 +544,9 @@ pushes them.
 1. **Close P4.** Read `HANDOFF-dolt-redesign.md`, "P4 continuation (2026-11-17)", first.
    1. The stopped-sweep reruns and unfinished lane selections are complete;
       outcomes and repaired defects are recorded above. Steering remains open.
-   2. Investigate the `in_flight=64` saturation in `steer-a-running-child`.
-      If the fork is at fault, fix it in the fork with an e2e repro (§6).
+   2. The observed saturation was host causal-read fanout and is repaired
+      above. The stricter steering completion case still fails on a premature
+      model answer; preserve that acceptance failure while continuing P4.
    3. Debug the S6b self-addressed-call hang (suspect: `evalOrigin` is lost
       for an agent-hosted run), then merge the two held branches; or record
       why the agent should keep a session entity.

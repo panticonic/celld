@@ -6,6 +6,41 @@ work lives, what is done and how it was verified, and what is left, in order.
 The detailed per-stream handoffs it points to are authoritative for their own
 details; this file is authoritative for the overall order and the rules.
 
+**Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
+Host `feat/dolt-p0` is now `9549eeccb`; both system-testing feature branches are
+at `ea84ad3`. Read "P4 continuation (2026-11-17)" in
+`~/vibestudio-worktrees/dolt-p0/HANDOFF-dolt-redesign.md` before the older pass
+records. Four defects were fixed and committed locally:
+
+- Host `f2fa90aa2`: a scoped native extension can explicitly materialize its
+  absent context projection. The old readiness guard rejected the operation
+  intended to establish readiness. The workspace test now passes on the real
+  stack, as does file search/read; all 77 filesystem tests pass.
+- System-testing `f86aef1`: permission-read validators use native inventory
+  receipts instead of requiring an array-shaped guest result. The archived
+  final-sweep authority failure was a false negative for `{count, rows}`.
+- System-testing `d21afc8`: parse each eval in its own lexical scope; repeated
+  local declarations across separate cells are valid. The DO probe now passes.
+- System-testing `ea84ad3`: join installed-consumer calls by native target
+  receipts; a handle retained in `scope` need not use its creation cell's local
+  variable. The actual captured execution passes revalidation.
+
+The stopped sweep's five failures have each had their required rerun: four pass;
+`worker-env` still has the known model descriptor-export error (the model then
+recovered, observed the value and cleaned up). The two unfinished worker cases
+are verified after the validator repairs. Harness resilience is **5/5 green**.
+The focused validator suites pass (91 and 25 tests); the three captured failing
+executions all pass revalidation; host and template typechecks and lint pass.
+The full commit gate fails only the documented formatting baseline in eight
+untouched host files. No input-gate or saturation warnings in the six instances
+used so far. The fork runtime and binary pin remain `75f1700`.
+
+**Next:** finish panels and subagents (including `steer-a-running-child`), rerun
+new failures once and inspect them, then continue §5.1 items 2–5. The saturation
+and S6b investigations, compaction soak, WorkspaceStateDO compaction, restart
+probe and 10k-turn fork measurement remain open. Nothing outside the fork has
+been pushed; the owner's main checkouts remain untouched.
+
 Read in this order: §1 (goal and decisions), §2 (rules), §3 (map of repos),
 §4 (state per stream), §5 (the plan to finish), §6 (how to run things),
 §7 (lessons).
@@ -92,6 +127,9 @@ Decisions (dates are when the owner made them; none of these are open):
   `systemd-run --user --scope --quiet -p MemoryMax=6G -p MemorySwapMax=0 env CARGO_BUILD_JOBS=3 …`.
   Vibestudio system-test instances need about 150 s between groups to stay
   under the 6 GiB scope.
+  For TypeScript 7's native compiler, also set `GOMEMLIMIT=3GiB GOMAXPROCS=3`:
+  the template typecheck otherwise exceeded the scope in the continuation.
+  Node heap limits do not control that compiler.
 - **Waits.** Every wait has a timeout. A subagent must not end its turn while
   its own background work is running; stop it with TaskStop if it lingers.
 - **AGENTS.md.** The Vibestudio `AGENTS.md` rules (for example "no parallel

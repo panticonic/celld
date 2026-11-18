@@ -209,7 +209,14 @@ Dolt capture now streams LTX output from the input pages and reads only
 headers on an ordinary reopen. In a separate 96 MiB Dolt collection,
 peak anonymous memory fell from 827 MiB to 644 MiB under the same cap.
 The storage regression verifies byte-for-byte snapshot compatibility.
-The effect on the 10,000-turn fork remains to be measured.
+All four focused Dolt end-to-end scenarios pass. On native build `1ea8681`,
+`st_b75930306d734129ae39111a0555377d` passed 65 native turns with collection
+at 64, zero model calls, a 10.2-second fork, and clean retirement.
+The fresh 10,000-turn model-free measurement is
+`st_171e03fc4df7457eab8afc6b2f0faf5a` in `p4-stream-capture10k`. It runs the
+same build under the 6 GiB cap and a 24-hour test budget. The latency at
+10,000 turns is pending. The private state directory records the benchmark's
+progress and the exact managed instance.
 
 The preceding diagnostic instance is stopped/joined. Its whole scope peaked at 3.66 GiB,
 then fell below 2.85 GiB, with no quota hits or OOM kills. Native RSS peaked at

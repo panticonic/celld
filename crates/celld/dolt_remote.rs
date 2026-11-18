@@ -396,8 +396,37 @@ fn remote_target(connection: &Connection, args: &Value) -> anyhow::Result<Value>
 struct Grant {
     id: String,
     fetch: bool,
-    push: Vec<String>,
+    push: PushPolicy,
     branches: Vec<String>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct PushTransition {
+    previous: String,
+    next: String,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(untagged)]
+enum PushPolicy {
+    Patterns(Vec<String>),
+    Exact { branch: String, transition: PushTransition },
+}
+
+impl PushPolicy {
+    fn patterns(&self) -> &[String] {
+        match self {
+            Self::Patterns(patterns) => patterns,
+            Self::Exact { branch, .. } => std::slice::from_ref(branch),
+        }
+    }
+
+    fn transition(&self) -> Option<&PushTransition> {
+        match self {
+            Self::Patterns(_) => None,
+            Self::Exact { transition, .. } => Some(transition),
+        }
+    }
 }
 
 fn grant(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
@@ -411,6 +440,17 @@ fn grant(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
     let push = patterns(args.get("push"), "grant push")?;
     let mut branches = patterns(args.get("branches"), "grant branches")?;
     anyhow::ensure!(fetch || !push.is_empty(), "a grant must allow fetch, push, or both");
+    let push = match args.get("pushTransition").filter(|value| !value.is_null()) {
+        Some(value) => {
+            anyhow::ensure!(push.len() == 1, "a push transition requires one exact branch");
+            let branch = crate::dolt_cell::branch_name(&json!(push[0]), "push branch")?;
+            let transition: PushTransition = serde_json::from_value(value.clone())?;
+            anyhow::ensure!(hash_text(&transition.previous) && hash_text(&transition.next),
+                "a push transition requires exact previous and next commit hashes");
+            PushPolicy::Exact { branch, transition }
+        }
+        None => PushPolicy::Patterns(push),
+    };
     if branches.is_empty() {
         branches.push("*".to_string());
     }
@@ -449,7 +489,8 @@ fn grant(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
     )?;
     Ok(json!({
         "id": id, "token": token, "label": label, "fetch": fetch,
-        "push": push, "branches": branches, "peer": peer, "expiresAt": expires,
+        "push": push.patterns(), "pushTransition": push.transition(),
+        "branches": branches, "peer": peer, "expiresAt": expires,
     }))
 }
 
@@ -460,11 +501,14 @@ fn grants(connection: &Connection) -> anyhow::Result<Value> {
     ))?;
     let list = statement
         .query_map([], |row| {
+            let push = serde_json::from_str::<PushPolicy>(&row.get::<_, String>(3)?)
+                .map_err(|error| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(error)))?;
             Ok(json!({
                 "id": row.get::<_, String>(0)?,
                 "label": row.get::<_, String>(1)?,
                 "fetch": row.get::<_, i64>(2)? != 0,
-                "push": serde_json::from_str::<Value>(&row.get::<_, String>(3)?).unwrap_or(Value::Null),
+                "push": push.patterns(),
+                "pushTransition": push.transition(),
                 "branches": serde_json::from_str::<Value>(&row.get::<_, String>(4)?).unwrap_or(Value::Null),
                 "peer": row.get::<_, Option<String>>(5)?,
                 "expiresAt": row.get::<_, Option<i64>>(6)?,
@@ -746,7 +790,7 @@ fn authenticate(connection: &Connection, json: &Value, peer: Option<&str>) -> Re
     Ok(Grant {
         id,
         fetch: fetch != 0,
-        push: serde_json::from_str(&push).unwrap_or_default(),
+        push: serde_json::from_str(&push).map_err(|_| Refusal::forbidden("invalid grant push policy"))?,
         branches: serde_json::from_str(&branches).unwrap_or_default(),
     })
 }
@@ -764,11 +808,11 @@ fn serve_refs(connection: &Connection, grant: &Grant) -> Result<(Value, Vec<u8>)
     let mut visible = serde_json::Map::new();
     for (name, hash) in branch_tips(connection)? {
         let fetchable = grant.fetch && any_matches(&grant.branches, &name);
-        if fetchable || any_matches(&grant.push, &name) {
+        if fetchable || any_matches(grant.push.patterns(), &name) {
             visible.insert(name, Value::String(hash));
         }
     }
-    Ok((json!({ "branches": visible, "fetch": grant.fetch, "push": grant.push }), Vec::new()))
+    Ok((json!({ "branches": visible, "fetch": grant.fetch, "push": grant.push.patterns() }), Vec::new()))
 }
 
 fn serve_fetch(connection: &Connection, grant: &Grant, request: &Value) -> Result<(Value, Vec<u8>), Refusal> {
@@ -824,8 +868,18 @@ fn serve_push(
     let branch = request["branch"].as_str().ok_or_else(|| Refusal::bad("a push names its branch"))?.to_string();
     crate::dolt_cell::branch_name(&Value::String(branch.clone()), "branch").map_err(|error| Refusal::bad(error.to_string()))?;
     let tip = request["tip"].as_str().filter(|tip| hash_text(tip)).ok_or_else(|| Refusal::bad("a push names its tip"))?.to_string();
-    if !any_matches(&grant.push, &branch) {
+    if !any_matches(grant.push.patterns(), &branch) {
         return Err(Refusal::forbidden(format!("the grant does not allow pushing to {branch:?}")));
+    }
+    let current = branch_tips(connection)?.into_iter().find(|(name, _)| *name == branch).map(|(_, hash)| hash);
+    if let Some(transition) = grant.push.transition() {
+        if tip != transition.next {
+            return Err(Refusal::forbidden("the grant approves a different commit"));
+        }
+        if current.as_deref() != Some(transition.previous.as_str()) && current.as_deref() != Some(tip.as_str()) {
+            return Err(Refusal::new("ERR_DOLT_NON_FAST_FORWARD", "the approved previous commit is no longer the branch head")
+                .with(json!({ "current": current })));
+        }
     }
     // The fetch lands the pack as `pushed-<grant>/<branch>`, the engine's own
     // checks included: every chunk hashed, the whole graph present.
@@ -851,7 +905,6 @@ fn serve_push(
     if landed.as_deref() != Some(tip.as_str()) {
         return Err(Refusal::bad("the pack does not carry the pushed branch at the tip it names"));
     }
-    let current = branch_tips(connection)?.into_iter().find(|(name, _)| *name == branch).map(|(_, hash)| hash);
     if current.as_deref() == Some(tip.as_str()) {
         return Ok((json!({ "branch": branch, "hash": tip, "created": false, "unchanged": true }), Vec::new()));
     }
@@ -1110,6 +1163,43 @@ mod tests {
         let response = exchange(&holder, &source, json!({ "name": "origin", "op": "fetch", "branches": ["private"] }), &[]);
         let error = run(&holder, "remoteApply", &json!({ "name": "origin", "op": "fetch" }), &response).unwrap_err();
         assert!(format!("{error:#}").contains("[ERR_DOLT_REMOTE_NOT_FOUND]"), "{error:#}");
+    }
+
+    #[test]
+    fn a_push_transition_binds_the_previous_and_next_heads() {
+        let (_dir, source, holder) = pair();
+        let genesis = head(&source, "main");
+        holder.execute("INSERT INTO notes VALUES (2, 'first')", []).unwrap();
+        let first = commit(&holder, "first");
+        crate::dolt_cell::run(&holder, "branchCreate", &json!({ "name": "first" })).unwrap();
+        holder.execute("INSERT INTO notes VALUES (3, 'second')", []).unwrap();
+        let second = commit(&holder, "second");
+
+        let transition = json!({ "previous": genesis, "next": second });
+        let approval = grant(&source, json!({ "push": ["main"], "pushTransition": transition }));
+        assert_eq!(approval["pushTransition"], transition);
+        add_remote(&holder, approval["token"].as_str().unwrap());
+        let error = format!("{:#}", push(&holder, &source, "first", Some("main")).unwrap_err());
+        assert!(error.contains("[ERR_DOLT_REMOTE_FORBIDDEN]"), "{error}");
+        assert_eq!(head(&source, "main"), genesis);
+
+        let ordinary = grant(&source, json!({ "push": ["main"] }));
+        run(&holder, "remoteRemove", &json!({ "name": "origin" }), &[]).unwrap();
+        add_remote(&holder, ordinary["token"].as_str().unwrap());
+        push(&holder, &source, "first", Some("main")).unwrap();
+        run(&holder, "remoteRemove", &json!({ "name": "origin" }), &[]).unwrap();
+        add_remote(&holder, approval["token"].as_str().unwrap());
+        let error = format!("{:#}", push(&holder, &source, "main", None).unwrap_err());
+        assert!(error.contains("[ERR_DOLT_NON_FAST_FORWARD]"), "{error}");
+        assert_eq!(head(&source, "main"), first);
+
+        let approved = grant(&source, json!({
+            "push": ["main"], "pushTransition": { "previous": first, "next": second }
+        }));
+        run(&holder, "remoteRemove", &json!({ "name": "origin" }), &[]).unwrap();
+        add_remote(&holder, approved["token"].as_str().unwrap());
+        assert_eq!(push(&holder, &source, "main", None).unwrap()["hash"], second);
+        assert_eq!(push(&holder, &source, "main", None).unwrap()["unchanged"], true);
     }
 
     #[test]

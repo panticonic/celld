@@ -58,6 +58,12 @@ back. It is a bearer capability: hand it to the holder over any channel the
 application has (the demo passes it in a function call). `remote.grants()`
 lists grants (never tokens), and `remote.revoke(id)` ends one at once.
 
+For an approved publication, pass `push: ["main"]` and
+`pushTransition: { previous, next }` with the two approved commit hashes.
+The grant applies to one exact branch. Every carrier checks the proposed
+commit and the branch's current head before importing the pack. Repeating
+the same push after the branch reaches `next` succeeds without moving it.
+
 Why a grant and not the class, a header or a list in the config: every fork is
 of the same class, so "same class" would let any fork read its source and every
 sibling; a header naming the caller cannot be believed, because any code that

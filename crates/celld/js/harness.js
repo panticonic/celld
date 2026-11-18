@@ -1535,6 +1535,7 @@ class DoltStorage {
           return dolt._blob("grant", {
             label: options.label ?? null, fetch: !!options.fetch,
             push: options.push ?? [], branches: options.branches ?? [],
+            pushTransition: options.pushTransition ?? null,
             peer: options.peer ?? null, expiresAt: options.expiresAt ?? null,
           });
         },

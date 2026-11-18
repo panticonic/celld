@@ -8,7 +8,7 @@ details; this file is authoritative for the overall order and the rules.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
-compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified; 10k measurement next). Read "P4 continuation (2026-11-17)" in
+compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in
 `~/vibestudio-worktrees/dolt-p0/HANDOFF-dolt-redesign.md` before the older pass
 records. The initial five defects were fixed and committed locally:
 
@@ -59,13 +59,21 @@ formatting baseline in eight untouched host files.
   accepted conflicting counts. Actual semantic replay accepts the retained
   resolved answer and rejects both conflicting-count answers.
 
-**Steering remains unpassed for model completion.** The strict fresh case
+**Strict steering passed on November 18.** Run
+`st_4985fd0bd204444c833b08e4cb8d4474` returned 117 files and 22,510 lines,
+explicitly correcting the initial count, and passed semantic validation
+with zero tool failures. The agent took 85 s. The checker waited on a
+first-use model credential approval until the known gateway received a
+decision scoped to the disposable test session. The earlier strict case
 `st_a584ecee9e6a428a9eb687289f0a4488` ended with a promise to report later and
 returned no numbers (51 s, zero tool/refusal/cleanup failures). Earlier numeric
 harness passes had unresolved count conflicts; do not call them correct task
 answers. The separate `subagent-followup-after-report` case
 `st_b5659669c216479bae7ea32f2653d597` reached its 420 s deadline with
-`model.generation` and `suspend_turn` still pending.
+`model.generation` and `suspend_turn` still pending. Its fresh run
+`st_d540ac6d1f9b4ca2a466bc26925edc1d` passed in 260 s. Both November 18
+runs had zero tool failures and no cleanup errors. The test instance and its
+resource observer are stopped. Evidence is in `~/.local/state/celld-p4-compaction/`.
 Retirement prepares in the fresh runs stayed below 0.6 s. This does not prove
 that every archived slow prepare had the same cause.
 
@@ -105,7 +113,7 @@ crash/restart, history and local-state preservation). The passed activation-loss
 replay already provides the requested agent-cell restart probe: a fresh vessel
 uses the same durable storage and completes once. Whole workspace-node restart
 is outside that requirement. The strict
-steering/model-completion acceptance result remains open. Continue remaining
+steering case now passes as recorded above. Continue remaining
 work; a checkpoint or passing subset is not project completion. Capture native
 cell DEBUG with both `RUST_LOG=info,celld::cell_event=debug` and
 `VIBESTUDIO_LOG_LEVEL=verbose`, and confirm event lines before using them.
@@ -154,7 +162,7 @@ at 3.22 GiB, had no MemoryMax/OOM events, and all its processes are joined. The
 complete comparison release was removed. Proof and memory summaries are
 `soak7-workload-evidence.json` and `soak7-memory-summary.json` in the private
 compaction state directory. Continue with the 10k native-turn fork measurement;
-strict steering completion and later redesign phases are still open.
+later redesign phases are still open.
 
 The extended short gate also passes: `st_ba15f3a72fc14833af2ebd3783c5df5e`,
 223.8 s, including an ordinary channel fork after 65 native turns, clone
@@ -166,7 +174,7 @@ P2 is now `b64e74c`. The complete comparison release is held for the fresh
 12-hour investigation bound and sparse bounded progress/memory evidence.
 Native TypeScript checks separately peaked at 5.84 GiB; keep all heavy phases
 serial under 6 GiB and zero swap. Continue monitoring and completing the
-measurement; the strict steering result and later redesign phases remain open.
+measurement. The later redesign phases remain open.
 
 The long benchmark `st_508a958252c04cd2a2ed577f117b6df0` confirmed 6,784
 native turns before the kernel killed `celld` in its 6 GiB group at 07:21 CET
@@ -618,11 +626,11 @@ commit. Vibestudio, the templates, Pi and Chronolog stay local; the owner
 pushes them.
 
 1. **Close P4.** Read `HANDOFF-dolt-redesign.md`, "P4 continuation (2026-11-17)", first.
-   1. The stopped-sweep reruns and unfinished lane selections are complete;
-      outcomes and repaired defects are recorded above. Steering remains open.
+   1. The stopped-sweep reruns and unfinished lane selections are complete.
+      Outcomes and repaired defects are recorded above.
    2. The observed saturation was host causal-read fanout and is repaired
-      above. The stricter steering completion case still fails on a premature
-      model answer; preserve that acceptance failure while continuing P4.
+      above. The fresh strict steering completion case passes with resolved
+      counts. Keep the separate retained-collaborator follow-up result distinct.
    3. **S6b complete:** both held branches are merged locally; the real
       self-call and targeted lifecycle/fork regression checks pass.
    4. Run a model-free soak of an agent cell past 64 turns, so compaction

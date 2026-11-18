@@ -234,7 +234,11 @@ and socket hibernation. Its product check
 made zero model calls, forked in 11.5 seconds and retired cleanly. The
 full-size measurement is now running on the same build as
 `st_55ddfbaa2da24973ac95f24de722772f` in `p4-handoff-stream10k`, with the
-6 GiB cap and a 24-hour test budget.
+6 GiB cap and a 24-hour test budget. At 576 validated turns, file cache
+held the pressure latch and four cold activations waited. A scoped
+1 GiB reclaim cleared the latch and unblocked those activations. The
+test scope also uses a 5 GiB soft reclaim threshold from that point.
+The 6 GiB hard cap and zero swap remain in force.
 
 The preceding diagnostic instance is stopped/joined. Its whole scope peaked at 3.66 GiB,
 then fell below 2.85 GiB, with no quota hits or OOM kills. Native RSS peaked at

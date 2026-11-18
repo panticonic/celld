@@ -304,6 +304,9 @@ Only the allocated participant can use its remote grant through the class's
 relay. The class exposes context reads, prepared edits, saved revisions,
 publication and retirement. Retirement fences new work, archives saved
 revisions, revokes grants and requests the existing runtime's deletion.
+An approved push grant is bound to the exact previous and proposed main
+commits and expires after five minutes. The focused test verifies that an
+expired grant leaves main unchanged.
 
 The disposable native probe used the real class and the replayed 5,135-file
 workspace. Two copies retained the whole starting tree and retried their
@@ -316,11 +319,36 @@ the class and native storage, with the existing UniversalDO fork and host
 retirement covered separately. The four new host tests, 25 focused Base
 tests, and both type checks pass.
 
-Continue with the actual managed host and UniversalDO lifecycle using this
-class. The live planner's reads still need the Dolt graph, and the existing
-approval and context materialization paths need to address the verified owner
-before switching the editor and agents. Native probe evidence is in
-`p5-hosted-retire-final.log` in the private state directory.
+The managed system workspace passed its startup doctor. Normal runtime
+admission registered `GadHistoryDO`, but the first call reached a 404 on the
+UniversalDO engine check. The shared durable base now dispatches the existing
+root-authenticated `__legacy` route. A fresh managed instance admitted the
+class and reached application authority, where an ordinary session was
+correctly refused access to participant allocation. The corrected scope
+peaked at 4.66 GiB with zero memory-limit or OOM events. See
+`p5-managed-hosted-fixed-admission.log` in the private state directory.
+Its graceful stop stalled while draining the extension host. The disposable
+supervisor and workspace process were stopped by verified PID, and their
+reapers completed retirement. The three real-celld facet tests for fresh
+storage, fork and SQLite migration passed after teardown.
+
+An authenticated probe in the managed host replayed the template workspace
+and recovered four original context tips. Allocation initially failed on a
+missing `__lifecycle/initializeClone` handler. The durable base now binds
+that call to host authority and the exact clone witness, commits versioned
+initialization with its local receipt, and returns the same result on retry.
+The rerun opened two copies through normal runtime allocation, retried one
+allocation, and retired it while the other copy stayed readable. The probe
+used a temporary test entry point and the ordinary host dispatcher. Its
+scope peaked at 5.50 GiB with zero OOM events and shut down normally. The
+36 durable and dispatch tests and three channel fork tests pass. See
+`p5-managed-replay-fixed-evidence.log` in the private state directory.
+
+The live planner's reads still need the Dolt graph. Approval and context
+materialization need to address the verified owner before switching the
+editor and agents. The managed probe checked replay and lifecycle. The
+independent-edit, publication and saved-revision archive evidence is from
+the native fixture in `p5-hosted-retire-final.log`.
 
 The real replay also supplied a checkout benchmark with 10,000 local rows
 and two distinct committed file states. At the runtime's default NORMAL

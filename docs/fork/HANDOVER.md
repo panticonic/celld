@@ -648,6 +648,22 @@ of an automatic text merge. Host and Base typechecks, 76 host and package
 tests, and 38 Base tests passed. See `p5-native-change-edges.log` and
 `p5-change-graph-check-exact.log`.
 
+Fork `f9b25fb` repairs DoltLite historical reads for tables with implicit
+clustered primary keys. The host's stock SQLite default had caused the
+historical schema reader to decode committed rows using a different layout
+from their writer. A minimal native reproduction returned blank values
+from a key-only table. The runtime regression test verifies both key-only
+rows and rows whose primary-key order differs from declared column order.
+The disposable fixture with the new runtime verified that the saved text
+merge decision identifies its actual source, target, recorded outcome,
+resulting change, and source authorship. Base `e7702ad` and host
+`464d6e861` expose and validate the decision. The release build, eight
+runtime tests, both typechecks, 76 host and package tests, and 38 Base
+tests passed. The pinned test binary is `celld-uf-f9b25fb` with SHA-256
+`61b299f63ea44f85ead170d1fd6b965851711b351974d447577d4d62f8674dc5`.
+See `p5-versioned-schema-rust94.log`, `p5-native-decision-fixed.log`,
+and `p5-decision-graph-check.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

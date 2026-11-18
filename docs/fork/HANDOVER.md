@@ -622,6 +622,15 @@ removed. See `p5-native-context-retire-3.log`,
 `p5-managed-retirement-archive-proof.log`, and
 `p5-managed-retirement-reader-after.log`.
 
+Base `20320fe` and host `872c69cfb` inspect work units and commands
+through the participant's visible native history. The fixture verified
+the exact command-to-work-to-application relationships, bounded edge
+previews, and intent derived from recorded effects. The other participant
+could read the same command only after it was published. Host and Base
+typechecks, 44 host tests and 38 Base tests passed. See
+`p5-native-provenance-inspect-2.log` and
+`p5-provenance-inspect-check.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

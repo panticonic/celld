@@ -578,6 +578,22 @@ receipts and exact retry. Both typechecks, 117 host tests and 11 Base
 tests passed. See `p5-native-public-merge-2.log` and
 `p5-public-merge-check.log`.
 
+Disposable instance `p5-managed-divergent-1118` passed the paired
+conflict-and-publication case through the public CLI. The temporary
+host hook replayed and attached the 5,135-file workspace. Two separate
+tasks edited and saved different text at the same file. Alice's exact
+one-file publication received a once approval. Bob's saved copy kept
+his text, and comparison identified the conflicting content and its
+three exact digests. Bob kept his text in an explicit merge, saved the
+two-parent result, recovered the same merge application on retry, and
+published with a separate once approval. A third task read the exact
+published bytes. Bob's polling for the incoming change filled the CLI
+journal limit, so the evidence for later steps is the completed script's
+assertions, paired approvals and the independent reader. The instance
+stopped normally at a 5.50 GiB peak, with no hard-limit or OOM events.
+The hook and registry were removed. See `p5-managed-divergent-resume.log`,
+`p5-managed-divergent-bob.log`, and `p5-managed-divergent-stop.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

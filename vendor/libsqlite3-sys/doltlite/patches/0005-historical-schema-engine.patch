@@ -1,0 +1,18 @@
+Replay versioned table schemas with Dolt's primary-key layout when reading
+historical rows. The host defaults memory databases to stock SQLite, which
+would parse implicit clustered keys as rowid tables.
+
+--- a/sqlite3.c
++++ b/sqlite3.c
+@@ -574187,7 +574187,10 @@
+   HashElem *pElem;
+   int i, rc;
+   *ppTmp = 0;
+-  rc = sqlite3_open(":memory:", &tmp);
++  /* Historical records use Dolt's implicit clustered primary keys. */
++  rc = sqlite3_open_v2("file::memory:?doltlite_engine=prolly", &tmp,
++                       SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI,
++                       0);
+   sqlite3_mutex_enter(db->mutex);
+   for(pElem=sqliteHashFirst(&db->aCollSeq); rc==SQLITE_OK && pElem;
+       pElem=sqliteHashNext(pElem)){

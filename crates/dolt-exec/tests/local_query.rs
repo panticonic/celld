@@ -110,6 +110,37 @@ fn local_reads_can_read_history_diff_blame_and_the_merge_base() {
 }
 
 #[test]
+fn historical_reads_decode_implicit_clustered_primary_keys() {
+    let (_dir, conn) = fresh_dolt();
+    conn.execute_batch(
+        "CREATE TABLE sources (change_id TEXT NOT NULL, decision_id TEXT NOT NULL,
+             PRIMARY KEY (decision_id, change_id));
+         CREATE TABLE entries (name TEXT NOT NULL, value TEXT NOT NULL, section TEXT NOT NULL,
+             PRIMARY KEY (section, name));
+         INSERT INTO sources VALUES ('change-1', 'decision-1');
+         INSERT INTO entries VALUES ('setting', 'recorded', 'group');",
+    )
+    .unwrap();
+    let saved: String = conn.query_row("SELECT dolt_commit('-Am', 'saved decisions')", [], |r| r.get(0)).unwrap();
+    conn.execute_batch("DELETE FROM sources; UPDATE entries SET value = 'working';").unwrap();
+
+    for (sql, expected) in [
+        (
+            "SELECT change_id, decision_id FROM dolt_at_sources(?1) WHERE decision_id = 'decision-1'",
+            vec![SqlValue::Text("change-1".into()), SqlValue::Text("decision-1".into())],
+        ),
+        (
+            "SELECT name, value, section FROM dolt_at_entries(?1) WHERE section = 'group' AND name = 'setting'",
+            vec![SqlValue::Text("setting".into()), SqlValue::Text("recorded".into()), SqlValue::Text("group".into())],
+        ),
+    ] {
+        let statement = q(sql).bind(Parameter::Index(1), SqlValue::Text(saved.clone()));
+        let rows = local_query(&conn, &statement, &Limits::default(), 10).unwrap();
+        assert_eq!(rows.rows, vec![expected], "{sql}");
+    }
+}
+
+#[test]
 fn multiple_statements_and_bad_sql_are_refused() {
     let (_dir, conn) = fresh_dolt();
     assert_eq!(

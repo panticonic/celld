@@ -228,7 +228,11 @@ out of the source tree. The handoff now reads Dolt input in chunks and
 publishes from a temporary file. An isolated 96 MiB fixture published a
 97 MiB VibeStore snapshot, restored all 96 rows after removing local state,
 and reduced publication's peak anonymous memory from 399 MiB to 178 MiB.
-The 10,000-turn fork measurement remains open.
+Build `497f018` passes all eight LTX tests, four focused Dolt scenarios,
+and socket hibernation. Its product check
+`st_a6fb72de38b14fdf85dc466100f768a9` passed 65 turns, collected at 64,
+made zero model calls, forked in 11.5 seconds and retired cleanly. The
+10,000-turn fork measurement remains open.
 
 The preceding diagnostic instance is stopped/joined. Its whole scope peaked at 3.66 GiB,
 then fell below 2.85 GiB, with no quota hits or OOM kills. Native RSS peaked at

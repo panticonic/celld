@@ -432,10 +432,27 @@ and content transferred to canonical history during retirement. Host and
 Base typechecks, 75 host tests and 8 Base participant tests passed.
 See `p5-native-history-gc-roots.log` and `p5-history-gc-check.log`.
 
+Base `52aec77` keeps the discard intent and receipt in the participant's
+local storage. After an interruption following the native reset, the
+next operation completes the receipt before accepting new work. A later
+retry returns that result and leaves newer work intact. Host `88cc536d9`
+repairs the folder from the current participant revision on retry.
+The native discard probe, both typechecks, 56 host tests and eight
+participant tests passed. See `p5-native-history-discard.log`.
+
+Base `5650347` composes disjoint edits to the same text placement and
+records exact content mappings to both parents. Host `cc0bbc679` reads
+the selected bytes, stores the composed content under its verified
+digest and keeps it protected until the merge commits. The native
+fixture composed separate line edits, rejected incorrect observed
+content and an incorrect storage receipt, and checked both content
+edges and exact retry. Both typechecks, 71 host tests and 44 Base tests
+passed. See `p5-native-history-text-merge.log`.
+
 The normal editor and agent routes still need to use these participant
 owners. The native test supplied explicit resolutions and approvals.
-Text composition, placement collisions, peer-context integration and
-the normal interactive approval path still need their cutover checks.
+Mixed placement and text changes, structural collisions, peer-context
+integration and interactive approval still need their cutover checks.
 The managed probes enter through a temporary host-only hook and use the
 ordinary dispatcher.
 

@@ -193,8 +193,14 @@ makes Linux pressure handling read the nested group that owns the memory
 limit. The old runtime returned null readings inside the 6 GiB scope.
 The repaired runtime reports the group charge and enters and clears pressure
 mode as a small controlled allocation is made and released. The long fork
-benchmark remains open. The next workspace check uses the new binary in a
-fresh prepared release.
+benchmark remains open. On the final host `25cc0ece9`, Base `bb4bd05` and
+System-testing `b64e74c`, the 65-turn case
+`st_da87a35ae59540f985a26795a751a317` passed with collection at 64, zero
+model calls, a 7.4-second fork and clean retirement. The host and Base
+scheduling fix counts commits while a check is queued. The fresh long
+comparison `st_d70af7029dba4c5db94c709a569cbd8e` is running under the same
+6 GiB cap. It has a 24-hour test-only budget based on the measured first
+run. Evidence and owned process state are in `~/.local/state/celld-p4-compaction/`.
 
 The preceding diagnostic instance is stopped/joined. Its whole scope peaked at 3.66 GiB,
 then fell below 2.85 GiB, with no quota hits or OOM kills. Native RSS peaked at

@@ -42,6 +42,7 @@
 //! 1 GiB, which [`unmap_restored_image`] removes before the store opens it.
 //! A chunk file can therefore grow past 1 GiB.
 
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use crate::cell_store::{CellStore, Engine};
@@ -300,16 +301,16 @@ impl DoltStore {
             captured: None,
             pos_cache: None,
         };
-        let file = store.read_file()?;
-        if let Some(file) = &file {
-            anyhow_engine(file)?;
+        let prefix = store.file_prefix()?;
+        if let Some((_, bytes)) = &prefix {
+            anyhow_engine(bytes)?;
         }
         let pos = store.pos()?;
         if pos.txid == TXID(0) {
             // No local capture: a new cell, or an image a restore just
             // wrote. Drop the zero padding a page image carries past its
             // cut, so DoltLite opens a clean tail.
-            if let Some(file) = file {
+            if let Some(file) = store.read_file()? {
                 if let Some(cut) = scan_file(&file) {
                     if cut.end < file.len() as u64
                         && file[cut.end as usize..].iter().all(|byte| *byte == 0)
@@ -321,15 +322,15 @@ impl DoltStore {
         } else {
             // Continue the newest L0 when it describes this file generation.
             let header = store.newest_header()?;
-            if let (Some(header), Some(file)) = (header, file) {
+            if let (Some(header), Some((len, prefix))) = (header, prefix) {
                 let cut = Cut {
                     end: header.wal_size.max(0) as u64,
                     resume: header.wal_offset.max(0) as u64,
                 };
                 let same = header.wal_salt1 == DOLT_LTX_TAG
-                    && file.len() as u64 >= cut.end
-                    && file.len() >= MANIFEST_SIZE
-                    && generation_of(&file) == header.wal_salt2;
+                    && len >= cut.end
+                    && prefix.len() >= MANIFEST_SIZE
+                    && generation_of(&prefix) == header.wal_salt2;
                 if same {
                     store.captured = Some(Captured {
                         cut,
@@ -374,16 +375,17 @@ impl DoltStore {
         Ok(Some((len, bytes)))
     }
 
-    fn header_bytes(&self) -> Result<Option<Vec<u8>>> {
+    fn file_prefix(&self) -> Result<Option<(u64, Vec<u8>)>> {
         let mut file = match self.host.open(&self.path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error.into()),
         };
-        if file.file_len()? < MANIFEST_SIZE as u64 {
+        let len = file.file_len()?;
+        if len == 0 {
             return Ok(None);
         }
-        Ok(Some(file.read_exact_at(0, MANIFEST_SIZE)?))
+        Ok(Some((len, file.read_exact_at(0, len.min(MANIFEST_SIZE as u64) as usize)?)))
     }
 
     fn level_dir(&self) -> String {
@@ -414,18 +416,29 @@ impl DoltStore {
         if max == TXID(0) {
             return Ok(None);
         }
-        let bytes = self.read_ltx_file(0, min, max)?;
+        let path = self.ltx_path(0, min, max);
+        let bytes = self.host.open(Path::new(&path))?.read_exact_at(0, ltx::HEADER_SIZE)?;
         Ok(Some(ltx::Header::parse(&bytes)?))
     }
 
-    fn write_l0(&mut self, txid: TXID, bytes: &[u8]) -> Result<()> {
+    fn write_l0(
+        &mut self,
+        txid: TXID,
+        header: ltx::Header,
+        bytes: &[u8],
+        first_page_offset: u64,
+        cut: Cut,
+    ) -> Result<()> {
         let dir = self.level_dir();
         self.host.create_dir_all(Path::new(&dir))?;
         let path = crate::ltx_file_path(&self.meta_path.to_string_lossy(), 0, txid, txid);
         let tmp = format!("{path}.tmp");
         let result = (|| -> Result<()> {
             let mut file = self.host.create(Path::new(&tmp))?;
-            file.write_all(bytes)?;
+            let mut output = BufWriter::new(&mut file);
+            Self::encode_pages(&mut output, header, bytes, first_page_offset, cut.end)?;
+            output.flush()?;
+            drop(output);
             file.sync_all()?;
             drop(file);
             self.host.rename(Path::new(&tmp), Path::new(&path))?;
@@ -450,22 +463,72 @@ impl DoltStore {
         cut: u64,
         lock: u32,
     ) -> Result<(u32, Vec<(u32, Vec<u8>)>)> {
+        let commit = Self::page_count(cut, lock)?;
+        let mut pages = Vec::new();
+        Self::visit_pages(buf, first_page_offset, cut, lock, |pgno, data| {
+            pages.push((pgno, data.to_vec()));
+            Ok(())
+        })?;
+        Ok((commit, pages))
+    }
+
+    fn page_count(cut: u64, lock: u32) -> Result<u32> {
+        let too_large = || Error::Other("dolt chunk file too large to capture".into());
+        let last = u32::try_from(cut.div_ceil(DOLT_PAGE_SIZE as u64)).map_err(|_| too_large())?;
+        ltx_pgno_with_lock(last, lock).ok_or_else(too_large)
+    }
+
+    fn visit_pages(
+        buf: &[u8],
+        first_page_offset: u64,
+        cut: u64,
+        lock: u32,
+        mut visit: impl FnMut(u32, &[u8]) -> Result<()>,
+    ) -> Result<()> {
         let page_size = DOLT_PAGE_SIZE as u64;
         let too_large = || Error::Other("dolt chunk file too large to capture".into());
         let last = u32::try_from(cut.div_ceil(page_size)).map_err(|_| too_large())?;
-        let commit = ltx_pgno_with_lock(last, lock).ok_or_else(too_large)?;
         let first = (first_page_offset / page_size) as u32 + 1;
-        let mut pages = Vec::with_capacity((last + 1).saturating_sub(first) as usize);
         for file_page in first..=last {
             let start = (file_page as u64 - 1) * page_size;
             let end = (start + page_size).min(cut);
-            let mut data = vec![0u8; page_size as usize];
             let from = (start - first_page_offset) as usize;
             let to = (end - first_page_offset) as usize;
-            data[..to - from].copy_from_slice(&buf[from..to]);
-            pages.push((ltx_pgno_with_lock(file_page, lock).ok_or_else(too_large)?, data));
+            let pgno = ltx_pgno_with_lock(file_page, lock).ok_or_else(too_large)?;
+            let bytes = &buf[from..to];
+            if bytes.len() == DOLT_PAGE_SIZE as usize {
+                visit(pgno, bytes)?;
+            } else {
+                let mut tail = [0; DOLT_PAGE_SIZE as usize];
+                tail[..bytes.len()].copy_from_slice(bytes);
+                visit(pgno, &tail)?;
+            }
         }
-        Ok((commit, pages))
+        Ok(())
+    }
+
+    /// Encode borrowed pages straight into the caller's writer. Only the
+    /// final partial page needs a copy, so a generation rewrite does not
+    /// hold a second chunk file and a complete encoded LTX at the same time.
+    fn encode_pages(
+        output: &mut dyn Write,
+        header: ltx::Header,
+        bytes: &[u8],
+        first_page_offset: u64,
+        cut: u64,
+    ) -> Result<crate::Checksum> {
+        let checksummed = header.flags & ltx::HEADER_FLAG_NO_CHECKSUM == 0;
+        let mut rolling = if checksummed { crate::CHECKSUM_FLAG } else { 0 };
+        let mut encoder = crate::codec::Encoder::new_legacy(output);
+        encoder.encode_header(header)?;
+        Self::visit_pages(bytes, first_page_offset, cut, lock_pgno(DOLT_PAGE_SIZE), |pgno, data| {
+            if checksummed {
+                rolling = crate::CHECKSUM_FLAG | (rolling ^ ltx::checksum_page(pgno, data));
+            }
+            encoder.encode_page(ltx::PageHeader { pgno, flags: 0 }, data)
+        })?;
+        encoder.close(rolling)?;
+        Ok(rolling)
     }
 
     fn header(&self, txid: TXID, commit: u32, cut: Cut, generation: u32) -> ltx::Header {
@@ -550,15 +613,16 @@ impl CellStore for DoltStore {
                         true
                     }
                 };
-                match self.header_bytes()? {
-                    Some(header) if same_inode && generation_of(&header) == captured.generation => {
+                match self.file_prefix()? {
+                    Some((_, header)) if same_inode && header.len() == MANIFEST_SIZE
+                        && generation_of(&header) == captured.generation => {
                         Some(captured)
                     }
                     _ => None,
                 }
             }
         };
-        let (cut, generation, commit, pages) = match incremental {
+        let (cut, generation, first_page_offset, bytes) = match incremental {
             Some(captured) => {
                 let page_size = DOLT_PAGE_SIZE as u64;
                 let first_page_offset = captured.cut.end / page_size * page_size;
@@ -576,20 +640,18 @@ impl CellStore for DoltStore {
                     // only through a capture, so the L0 and the state agree.
                     return Ok(());
                 }
-                let (commit, pages) = Self::pages(&buf, first_page_offset, cut.end)?;
-                (cut, captured.generation, commit, pages)
+                (cut, captured.generation, first_page_offset, buf)
             }
             None => {
                 let Some((file, cut, generation)) = self.whole()? else {
                     return Ok(());
                 };
-                let (commit, pages) = Self::pages(&file, 0, cut.end)?;
-                (cut, generation, commit, pages)
+                (cut, generation, 0, file)
             }
         };
+        let commit = Self::page_count(cut.end, lock_pgno(DOLT_PAGE_SIZE))?;
         let header = self.header(txid, commit, cut, generation);
-        let encoded = ltx::encode_file(&header, &pages, 0)?;
-        self.write_l0(txid, &encoded)?;
+        self.write_l0(txid, header, &bytes, first_page_offset, cut)?;
         self.captured = Some(Captured {
             cut,
             generation,
@@ -665,16 +727,11 @@ impl CellStore for DoltStore {
                 "dolt chunk file changed generation since its last capture".into(),
             ));
         }
-        let (commit, pages) = Self::pages(&file, 0, captured.cut.end)?;
-        let mut rolling: crate::Checksum = crate::CHECKSUM_FLAG;
-        for (pgno, data) in &pages {
-            rolling = crate::CHECKSUM_FLAG | (rolling ^ ltx::checksum_page(*pgno, data));
-        }
+        let commit = Self::page_count(captured.cut.end, lock_pgno(DOLT_PAGE_SIZE))?;
         let mut header = self.header(pos.txid, commit, captured.cut, captured.generation);
         header.flags = 0;
         header.min_txid = TXID(1);
-        let encoded = ltx::encode_file(&header, &pages, rolling)?;
-        w.write_all(&encoded)?;
+        let rolling = Self::encode_pages(w, header, &file, 0, captured.cut.end)?;
         Ok(Pos::new(pos.txid, rolling))
     }
 
@@ -708,6 +765,48 @@ mod tests {
             .read_dir(Path::new(&store.level_dir()))
             .map(|entries| entries.len())
             .unwrap_or(0)
+    }
+
+    #[test]
+    fn streamed_snapshot_matches_the_existing_ltx_format() {
+        struct PageWriter(Vec<u8>);
+
+        impl Write for PageWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                assert!(bytes.len() < 8192, "snapshot emitted a whole-file buffer");
+                self.0.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cell.db");
+        let connection = open_prolly(&path);
+        connection
+            .execute_batch("CREATE TABLE t(data BLOB); INSERT INTO t VALUES (randomblob(65536));")
+            .unwrap();
+        let mut store = DoltStore::open(&path, crate::LtxHost::default()).unwrap();
+        store.sync().unwrap();
+        let mut output = PageWriter(Vec::new());
+        let pos = store.snapshot_to_writer(&mut output).unwrap();
+        assert!(output.0.len() > 8192);
+
+        let captured = store.captured.unwrap();
+        let file = std::fs::read(path).unwrap();
+        let (commit, pages) = DoltStore::pages(&file, 0, captured.cut.end).unwrap();
+        let actual = ltx::Header::parse(&output.0).unwrap();
+        assert_eq!(actual.commit, commit);
+        assert_eq!(actual.min_txid, TXID(1));
+        assert_eq!(actual.flags, 0);
+        let checksum = pages.iter().fold(crate::CHECKSUM_FLAG, |checksum, (pgno, data)| {
+            crate::CHECKSUM_FLAG | (checksum ^ ltx::checksum_page(*pgno, data))
+        });
+        assert_eq!(pos.post_apply_checksum, checksum);
+        assert_eq!(output.0, ltx::encode_file(&actual, &pages, checksum).unwrap());
     }
 
     /// Restore the L0 chain into a fresh file, the way the replica does.

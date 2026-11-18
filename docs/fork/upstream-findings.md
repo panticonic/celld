@@ -109,6 +109,16 @@ from `/proc/self/cgroup` and reads the charge from the visible group with
 the lowest finite limit. When there is no finite limit it samples the
 nearest group with a memory controller. The legacy cgroup v1 paths remain.
 
+**E17. Dolt capture allocated extra copies of whole generations.** Full
+captures copied every page and built a full encoded LTX before writing it.
+An ordinary reopen also read the entire chunk file and newest L0 just to
+inspect their headers. Capture and snapshot export now encode pages directly
+into a writer, and reopen reads just the headers when it can resume an existing
+capture. A 96 MiB Dolt collection under the 6 GiB cap brought peak anonymous
+memory in the scope from 827 MiB to 644 MiB, with all 96 rows and their byte
+counts preserved. The regression checks that snapshot output arrives in
+small writes and matches the previous wire format byte for byte.
+
 **E14 detail.** The E6 rule gives a block from a continuation whose event has
 ended to the event whose turn runs it: that event is the block's driver
 (`op_with_input_gate_context`), takes the gate (`op_gate_acquire`) and polls the

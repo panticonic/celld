@@ -198,9 +198,18 @@ System-testing `b64e74c`, the 65-turn case
 `st_da87a35ae59540f985a26795a751a317` passed with collection at 64, zero
 model calls, a 7.4-second fork and clean retirement. The host and Base
 scheduling fix counts commits while a check is queued. The fresh long
-comparison `st_d70af7029dba4c5db94c709a569cbd8e` is running under the same
-6 GiB cap. It has a 24-hour test-only budget based on the measured first
-run. Evidence and owned process state are in `~/.local/state/celld-p4-compaction/`.
+comparison `st_d70af7029dba4c5db94c709a569cbd8e` used the same 6 GiB cap
+and a 24-hour test budget. It crossed pressure thresholds and recovered from
+several shedding episodes, then the kernel killed `celld` after 960 verified
+turns. The final allocation spike was anonymous memory, with almost all
+file cache already reclaimed. The 10,000-turn fork still has no result.
+Evidence and owned process state are in `~/.local/state/celld-p4-compaction/`.
+
+Dolt capture now streams LTX output from the input pages and reads only
+headers on an ordinary reopen. In a separate 96 MiB Dolt collection,
+peak anonymous memory fell from 827 MiB to 644 MiB under the same cap.
+The storage regression verifies byte-for-byte snapshot compatibility.
+The effect on the 10,000-turn fork remains to be measured.
 
 The preceding diagnostic instance is stopped/joined. Its whole scope peaked at 3.66 GiB,
 then fell below 2.85 GiB, with no quota hits or OOM kills. Native RSS peaked at
@@ -323,7 +332,7 @@ Decisions (dates are when the owner made them; none of these are open):
 - **Docs:**
   - `docs/fork/design.md`: status table, single-track backlog, and §3b,
     the decisions as built (§3b.1–§3b.18).
-  - `docs/fork/upstream-findings.md`: defects S1–S5 and E1–E14.
+  - `docs/fork/upstream-findings.md`: defects S1–S5 and E1–E17.
   - `docs/services/*.md`: per-feature docs, including dolt-cells,
     dolt-remotes, residency, dynamic-workers, p2p, object-fork and
     durable-objects.

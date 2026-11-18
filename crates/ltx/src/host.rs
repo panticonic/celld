@@ -73,6 +73,17 @@ impl HostFile {
     }
 }
 
+impl io::Write for HostFile {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.inner.write_all(bytes)?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 /// The complete local-file surface used by celld and the LTX engine.
 pub trait FileSystem: Send + Sync {
     /// Opens an anonymous read/write scratch file. The handle owns its storage,

@@ -11,7 +11,7 @@ use crate::ltx::{FileInfo, HEADER_FLAG_NO_CHECKSUM};
 use crate::ltx_file_path;
 use crate::LtxHost;
 use crate::TXID;
-use std::io::{BufReader, BufWriter, Cursor, Read, Write};
+use std::io::{BufReader, BufWriter, Cursor, Read};
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -339,7 +339,7 @@ impl<'a, C: ReplicaClient> ReplicaCompactor<'a, C> {
                 }
                 // Buffered adapters avoid a syscall for every codec field.
                 let mut compactor = Compactor::new(
-                    BufWriter::new(ScratchWriter(output)),
+                    BufWriter::new(output),
                     vec![BufReader::new(reader)],
                 );
                 compactor.header_flags = HEADER_FLAG_NO_CHECKSUM;
@@ -348,7 +348,7 @@ impl<'a, C: ReplicaClient> ReplicaCompactor<'a, C> {
                     .into_writer()
                     .into_inner()
                     .map_err(|error| Error::Io(error.into_error()))?;
-                Ok::<_, Error>(output.0)
+                Ok::<_, Error>(output)
             })
             .await
             .map_err(|_| invalid("the compaction merge task panicked"))??;
@@ -434,17 +434,5 @@ impl Read for ScratchReader {
         bytes[..len].copy_from_slice(&self.file.read_exact_at(self.offset, len)?);
         self.offset += len as u64;
         Ok(len)
-    }
-}
-
-struct ScratchWriter(crate::host::HostFile);
-
-impl Write for ScratchWriter {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.write_all(bytes)?;
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
     }
 }

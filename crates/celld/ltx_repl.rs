@@ -16,6 +16,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -28,6 +29,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use celld_ltx::client::epochs::EpochChain;
+use celld_ltx::host::HostFile;
 use celld_ltx::object_store::ObjectStore;
 use celld_ltx::replica;
 use celld_ltx::replica_compactor::{CompactionResult, ReplicaCompactor};
@@ -857,7 +859,7 @@ fn by_level(plan: &[celld_ltx::FileInfo]) -> String {
 
 struct HandoffSnapshot {
     max_txid: TXID,
-    data: Vec<u8>,
+    file: HostFile,
 }
 
 /// One resident cell's replication state: the `celld_ltx::Db` shadowing its WAL
@@ -1014,25 +1016,26 @@ fn note_proof(handle: &Cell) {
         .fetch_max(asyncrt::mono_ms(), Ordering::SeqCst);
 }
 
-/// A writer that refuses to grow past its budget, so an oversized snapshot
-/// stops at the budget instead of materializing the whole database.
-struct BoundedWriter<'a> {
-    data: &'a mut Vec<u8>,
-    budget: usize,
+/// Stop an oversized snapshot before passing the offending write to disk.
+struct BoundedWriter<W> {
+    output: W,
+    remaining: usize,
+    over_budget: bool,
 }
 
-impl std::io::Write for BoundedWriter<'_> {
+impl<W: Write> Write for BoundedWriter<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        if self.data.len().saturating_add(buf.len()) > self.budget {
-            self.data.resize(self.budget, 0);
+        if buf.len() > self.remaining {
+            self.over_budget = true;
             return Err(std::io::Error::other("handoff snapshot exceeds its budget"));
         }
-        self.data.extend_from_slice(buf);
-        Ok(buf.len())
+        let written = self.output.write(buf)?;
+        self.remaining -= written;
+        Ok(written)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
+        self.output.flush()
     }
 }
 
@@ -3444,9 +3447,10 @@ impl LtxRepl {
         let deadline = barrier_started_mono_ms.saturating_add(self.durability_timeout_ms);
         let mut artifact = None;
         if let Some(snapshot) = snapshot {
+            let max_txid = snapshot.max_txid;
             let published = asyncrt::timeout_at(
                 deadline,
-                self.publish_handoff_snapshot(cell, epoch, &snapshot),
+                self.publish_handoff_snapshot(cell, epoch, snapshot),
             )
             .await;
             if matches!(published, Ok(Ok(()))) && self.epoch_replicated(cell, epoch).await {
@@ -3459,7 +3463,7 @@ impl LtxRepl {
                 // records a false undrained tail without the per-cell credit.
                 // A failed snapshot does not credit: the L0 fallback reads
                 // `durable_txid` to choose which rows to upload.
-                credit_percell_upload(&handle, snapshot.max_txid.0);
+                credit_percell_upload(&handle, max_txid.0);
                 artifact = Some(EvictionRestoreArtifact::Snapshot);
             } else {
                 handle.snapshot_declined.store(true, Ordering::Relaxed);
@@ -3777,10 +3781,8 @@ impl LtxRepl {
         }
     }
 
-    /// Capture one full snapshot after the runtime closes.
-    ///
-    /// A retry reuses these bytes. Recreating the image for each failed PUT
-    /// would spend local I/O without changing the closed database.
+    /// Capture one full snapshot after the runtime closes. The scratch file
+    /// owns the encoded bytes until publication or abandonment.
     ///
     /// The returned pause holds compaction off until the caller drops it or
     /// hands the cell off. It comes back with the snapshot because a
@@ -3813,6 +3815,8 @@ impl LtxRepl {
         }
 
         let snapshot_handle = handle.clone();
+        let filesystem = self.ltx_host.filesystem();
+        let scratch_directory = self.watch.clone();
         // The deadline covers the snapshot's upload. A database the deadline
         // cannot carry at a conservative store rate is not attempted, so a
         // whale does not allocate and time out on its whole image at every
@@ -3833,13 +3837,15 @@ impl LtxRepl {
             if durable_txid == TXID(0) {
                 return Ok(None);
             }
-            let mut data = Vec::new();
-            let position = match db.snapshot_to_writer(&mut BoundedWriter {
-                data: &mut data,
-                budget,
-            }) {
+            let file = filesystem.temporary_file(Some(&scratch_directory))?;
+            let mut output = BoundedWriter {
+                output: BufWriter::new(file),
+                remaining: budget,
+                over_budget: false,
+            };
+            let position = match db.snapshot_to_writer(&mut output) {
                 Ok(position) => position,
-                Err(_) if data.len() >= budget => {
+                Err(_) if output.over_budget => {
                     snapshot_handle
                         .snapshot_declined
                         .store(true, Ordering::Relaxed);
@@ -3855,7 +3861,7 @@ impl LtxRepl {
             );
             Ok(Some(HandoffSnapshot {
                 max_txid: position.txid,
-                data,
+                file: output.output.into_inner().map_err(|error| error.into_error())?,
             }))
         })
         .await
@@ -3869,16 +3875,17 @@ impl LtxRepl {
         &self,
         cell: &str,
         epoch: u64,
-        snapshot: &HandoffSnapshot,
+        snapshot: HandoffSnapshot,
     ) -> anyhow::Result<()> {
         let started_mono_ms = asyncrt::mono_ms();
         let info = self
             .client_for(cell, epoch)
-            .write_ltx_file(
+            .write_ltx_file_from_file(
                 replica::SNAPSHOT_LEVEL,
                 TXID(1),
                 snapshot.max_txid,
-                &snapshot.data,
+                snapshot.file,
+                self.ltx_host.clone(),
             )
             .await
             .map_err(|error| anyhow!("publish handoff snapshot: {error}"))?;

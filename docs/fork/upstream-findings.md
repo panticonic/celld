@@ -119,6 +119,18 @@ memory in the scope from 827 MiB to 644 MiB, with all 96 rows and their byte
 counts preserved. The regression checks that snapshot output arrives in
 small writes and matches the previous wire format byte for byte.
 
+**E18. Eviction accumulated each handoff snapshot in memory.** A diagnostic
+run found an eviction snapshot growing the writer's buffer from 176 MiB
+to 352 MiB while the encoder also held a 275 MiB input file. The preceding
+run died in the allocator's large-buffer copy routine. The handoff now
+streams encoded bytes to an anonymous scratch file and publishes it through
+the existing multipart uploader. Dolt supplies the encoder with 1 MiB
+reads. The byte budget still sends oversized snapshots through the L0 proof.
+A 96 MiB Dolt fixture published a 97 MiB snapshot through VibeStore, then
+restored all 96 rows from the bucket after the local state was removed.
+Peak anonymous memory during publication fell from 399 MiB to 178 MiB
+in the same test scope.
+
 **E14 detail.** The E6 rule gives a block from a continuation whose event has
 ended to the event whose turn runs it: that event is the block's driver
 (`op_with_input_gate_context`), takes the gate (`op_gate_acquire`) and polls the

@@ -42,6 +42,7 @@
 //! 1 GiB, which [`unmap_restored_image`] removes before the store opens it.
 //! A chunk file can therefore grow past 1 GiB.
 
+use std::borrow::Cow;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
@@ -113,6 +114,7 @@ pub fn image_pages(image: &[u8]) -> Result<(u32, Vec<(u32, Vec<u8>)>)> {
 
 /// The page size of a Dolt cell's LTX frames.
 pub const DOLT_PAGE_SIZE: u32 = 4096;
+const CAPTURE_CHUNK_SIZE: usize = 256 * DOLT_PAGE_SIZE as usize;
 /// `wal_salt1` of every L0 a [`DoltStore`] writes ("DOLT").
 pub const DOLT_LTX_TAG: u32 = 0x444F_4C54;
 
@@ -436,7 +438,10 @@ impl DoltStore {
         let result = (|| -> Result<()> {
             let mut file = self.host.create(Path::new(&tmp))?;
             let mut output = BufWriter::new(&mut file);
-            Self::encode_pages(&mut output, header, bytes, first_page_offset, cut.end)?;
+            Self::encode_pages(&mut output, header, first_page_offset, cut.end, |offset, len| {
+                let start = (offset - first_page_offset) as usize;
+                Ok(Cow::Borrowed(&bytes[start..start + len]))
+            })?;
             output.flush()?;
             drop(output);
             file.sync_all()?;
@@ -507,26 +512,31 @@ impl DoltStore {
         Ok(())
     }
 
-    /// Encode borrowed pages straight into the caller's writer. Only the
-    /// final partial page needs a copy, so a generation rewrite does not
-    /// hold a second chunk file and a complete encoded LTX at the same time.
-    fn encode_pages(
+    /// Encode aligned chunks into the caller's writer, padding only the
+    /// final partial page. Captures borrow existing bytes and snapshots read
+    /// one chunk at a time.
+    fn encode_pages<'a>(
         output: &mut dyn Write,
         header: ltx::Header,
-        bytes: &[u8],
         first_page_offset: u64,
         cut: u64,
+        mut read_chunk: impl FnMut(u64, usize) -> Result<Cow<'a, [u8]>>,
     ) -> Result<crate::Checksum> {
         let checksummed = header.flags & ltx::HEADER_FLAG_NO_CHECKSUM == 0;
         let mut rolling = if checksummed { crate::CHECKSUM_FLAG } else { 0 };
         let mut encoder = crate::codec::Encoder::new_legacy(output);
         encoder.encode_header(header)?;
-        Self::visit_pages(bytes, first_page_offset, cut, lock_pgno(DOLT_PAGE_SIZE), |pgno, data| {
-            if checksummed {
-                rolling = crate::CHECKSUM_FLAG | (rolling ^ ltx::checksum_page(pgno, data));
-            }
-            encoder.encode_page(ltx::PageHeader { pgno, flags: 0 }, data)
-        })?;
+        let lock = lock_pgno(DOLT_PAGE_SIZE);
+        for offset in (first_page_offset..cut).step_by(CAPTURE_CHUNK_SIZE) {
+            let size = (cut - offset).min(CAPTURE_CHUNK_SIZE as u64);
+            let bytes = read_chunk(offset, size as usize)?;
+            Self::visit_pages(&bytes, offset, offset + size, lock, |pgno, data| {
+                if checksummed {
+                    rolling = crate::CHECKSUM_FLAG | (rolling ^ ltx::checksum_page(pgno, data));
+                }
+                encoder.encode_page(ltx::PageHeader { pgno, flags: 0 }, data)
+            })?;
+        }
         encoder.close(rolling)?;
         Ok(rolling)
     }
@@ -719,10 +729,20 @@ impl CellStore for DoltStore {
                 "dolt snapshot needs a capture of the current file generation".into(),
             ));
         };
-        let file = self
-            .read_file()?
-            .ok_or_else(|| Error::Other("dolt chunk file is missing".into()))?;
-        if (file.len() as u64) < captured.cut.end || generation_of(&file) != captured.generation {
+        let missing = || Error::Other("dolt chunk file is missing".into());
+        let mut file = match self.host.open(&self.path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err(missing()),
+            Err(error) => return Err(error.into()),
+        };
+        let len = file.file_len()?;
+        if len == 0 {
+            return Err(missing());
+        }
+        if len < captured.cut.end
+            || len < MANIFEST_SIZE as u64
+            || generation_of(&file.read_exact_at(0, MANIFEST_SIZE)?) != captured.generation
+        {
             return Err(Error::Other(
                 "dolt chunk file changed generation since its last capture".into(),
             ));
@@ -731,7 +751,9 @@ impl CellStore for DoltStore {
         let mut header = self.header(pos.txid, commit, captured.cut, captured.generation);
         header.flags = 0;
         header.min_txid = TXID(1);
-        let rolling = Self::encode_pages(w, header, &file, 0, captured.cut.end)?;
+        let rolling = Self::encode_pages(w, header, 0, captured.cut.end, |offset, len| {
+            Ok(Cow::Owned(file.read_exact_at(offset, len)?))
+        })?;
         Ok(Pos::new(pos.txid, rolling))
     }
 
@@ -787,13 +809,15 @@ mod tests {
         let path = dir.path().join("cell.db");
         let connection = open_prolly(&path);
         connection
-            .execute_batch("CREATE TABLE t(data BLOB); INSERT INTO t VALUES (randomblob(65536));")
+            .execute_batch(
+                "CREATE TABLE t(data BLOB); INSERT INTO t VALUES (randomblob(2097152));",
+            )
             .unwrap();
         let mut store = DoltStore::open(&path, crate::LtxHost::default()).unwrap();
         store.sync().unwrap();
         let mut output = PageWriter(Vec::new());
         let pos = store.snapshot_to_writer(&mut output).unwrap();
-        assert!(output.0.len() > 8192);
+        assert!(output.0.len() > CAPTURE_CHUNK_SIZE);
 
         let captured = store.captured.unwrap();
         let file = std::fs::read(path).unwrap();

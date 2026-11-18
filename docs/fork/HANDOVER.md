@@ -221,6 +221,15 @@ bytes of anonymous memory and 245,760 bytes of file cache at the kill.
 The managed test and observers are joined. The fork was never reached.
 The private state directory has the intervention and terminal evidence.
 
+A diagnostic rerun captured repeated buffer growth during Dolt handoff
+snapshots, including a reallocation from 176 MiB to 352 MiB while a 275 MiB
+input was held. The diagnostic is stopped and its local allocator patch is
+out of the source tree. The handoff now reads Dolt input in chunks and
+publishes from a temporary file. An isolated 96 MiB fixture published a
+97 MiB VibeStore snapshot, restored all 96 rows after removing local state,
+and reduced publication's peak anonymous memory from 399 MiB to 178 MiB.
+The 10,000-turn fork measurement remains open.
+
 The preceding diagnostic instance is stopped/joined. Its whole scope peaked at 3.66 GiB,
 then fell below 2.85 GiB, with no quota hits or OOM kills. Native RSS peaked at
 1.59 GiB and settled around 1.1–1.2 GiB. This is substantial overhead, not a
@@ -342,7 +351,7 @@ Decisions (dates are when the owner made them; none of these are open):
 - **Docs:**
   - `docs/fork/design.md`: status table, single-track backlog, and §3b,
     the decisions as built (§3b.1–§3b.18).
-  - `docs/fork/upstream-findings.md`: defects S1–S5 and E1–E17.
+  - `docs/fork/upstream-findings.md`: defects S1–S5 and E1–E18.
   - `docs/services/*.md`: per-feature docs, including dolt-cells,
     dolt-remotes, residency, dynamic-workers, p2p, object-fork and
     durable-objects.

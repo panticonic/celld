@@ -475,6 +475,17 @@ source is attached. Its tests kept the copied roots and handles separate
 for two callers of the same logical context. Both typechecks, 143 host
 tests and 50 Base tests passed.
 
+Disposable instance `p5-hosted-fs-1118` replayed its installed
+workspace, attached the participant filesystem source, and exercised
+ordinary filesystem write, read, copy and rename with two host test
+callers in one logical context. The second copy and main kept their
+original content. The scope peaked at 5.50 GiB with zero memory-limit
+events and zero OOM kills. Shutdown stalled while an automation agent's
+retirement tried to reserve a participant. The verified inner disposable
+workspace process was terminated, its supervisor completed cleanup,
+and the temporary registry and source hook were removed. See
+`p5-managed-filesystem-evidence.log` and its memory and stop receipts.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes, remaining structural choices and

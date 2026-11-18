@@ -362,11 +362,21 @@ probe used the class to compile and persist both edits, verified the
 preservation edge and recovered both origins, and staged a file creation
 without advancing the working branch. See `p5-history-complete-edit-plan.log`.
 
-The normal editor and agent routes still need to execute the participant
-planner, persist its content in the host, and drain its materialization
-effects. Approval needs to address the verified owner before cutover. The
-managed probe checked real replay and lifecycle independently of the native
-fixture's edit and publication checks.
+The host dispatcher now uses the existing blob store and its collection
+lock to persist a participant's content before the application commits.
+The participant recovers the exact prior edit result from its versioned
+command and application records after a lost reply. The managed edit
+probe used this host adapter to create a private file, checked the exact
+edit retry, and confirmed that the second copy and canonical history
+did not have the file. Its scope peaked at 5.50 GiB with zero OOM events
+and shut down normally. The 64 focused host tests and both type checks
+pass. See `p5-managed-edit-evidence.log` in the private state directory.
+
+The normal editor and agent routes still need participant-specific
+materialization and effect recovery. The protected gate and the complete
+save and integration lifecycle need to address the verified owner before
+switching them. The managed probes enter through a temporary host-only
+hook and use the ordinary dispatcher.
 
 The real replay also supplied a checkout benchmark with 10,000 local rows
 and two distinct committed file states. At the runtime's default NORMAL

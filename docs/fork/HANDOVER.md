@@ -245,6 +245,24 @@ The 10,000-turn fork latency remains outstanding. The isolated P5 worktrees
 are `base-gad-participants` and `gad-participant-admission`. The first
 participant fork and conflict-merge probe passes against the real runtime.
 
+P5 has a local implementation on Base `feat/gad-participant-cells` and
+host `feat/gad-participant-admission`. The tested host pin is `3ad2ea0`.
+The real runtime forked two independent GAD facets, refused a stale
+publication, resolved the conflict in the second work cell and kept both
+independent file changes on shared main. Remotes follow each host
+class's declaration. The fork's Dolt remote scenarios and 22 Base tests
+pass. The host and Base type checks pass.
+
+A read-only backup of a fresh managed workspace held one event,
+three working contexts and 5,135 files across 135 repositories. Replay
+verified every placement and located each context tip. The new Dolt
+facet exported 4,067,212 bytes. A native fork at the restored head took
+219 ms and the clone returned the original head and row counts. The
+separate multi-branch fixture proves restart-safe replay and preservation
+of both parents. Continue with the live workspace route, participant
+lifecycle and publication approval before the product cutover. The
+real replay fixtures and evidence are in the private state directory.
+
 The preceding diagnostic instance is stopped/joined. Its whole scope peaked at 3.66 GiB,
 then fell below 2.85 GiB, with no quota hits or OOM kills. Native RSS peaked at
 1.59 GiB and settled around 1.1–1.2 GiB. This is substantial overhead, not a
@@ -561,7 +579,7 @@ those of `docs/dolt-redesign.md` §10.
 | P2b General dynamic code    | **Done.**<br>• `hostCode` (`packages/durable/src/codeHost.ts`); the admission service `dynamicCodeService` (`admit`, `release`, `reset`, `dispose`); `EvalKernel` (Base `workers/eval-kernel`); `SessionDO` (Base `workers/session`).<br>• The CLI, panels, the system-test runner, the agent, the website spec and the headless test all pull.<br>• `evalService`, `EvalDO`, `UNSAFE_EVAL`, `resultReceiver`, redelivery, `evalEngine` and `settle` are deleted. The remaining `rg` hits are D5 migration code and deliberate guards. |
 | P3 Durable services         | **Done.** `WorkspaceStateDO` is a Dolt cell, with a replaying import from the retired `WorkspaceDO`; the maintenance journal and `cloneDO` are deleted.                                                                                                                                                                                                                                                                                                                                                                |
 | P4 Agent system             | **Mostly done**, see below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| P5 GAD decentralized        | **Not started.**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| P5 GAD decentralized        | Participant storage, remote admission and offline replay are implemented locally. A fresh disposable workspace with 5,135 files replayed and forked successfully. Live workspace routing and participant lifecycle remain open. |
 | P6 Chronolog capability     | **Not started.**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 **P4 in detail** (slices are in `docs/dolt-redesign.md` §6.8–§6.11):

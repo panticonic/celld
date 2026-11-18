@@ -466,8 +466,18 @@ parents and refused a cursor reused with a different prefix. Host and
 Base typechecks and 8 host and 39 Base tests passed. See
 `p5-native-participant-catalog.log`.
 
-The normal editor and agent routes still need to use these participant
-owners. Incremental peer prefixes, remaining structural choices and
+Base `278c79e` shares the move and copy planners with the existing
+semantic store. The runtime fixture copied across a merged parent's
+exact revision, retained the content lineage through a rename and moved
+a repository without changing its files or identity. Host `d8135817f`
+binds normal filesystem calls to the admitted copy when the participant
+source is attached. Its tests kept the copied roots and handles separate
+for two callers of the same logical context. Both typechecks, 143 host
+tests and 50 Base tests passed.
+
+Workspace startup still needs a complete cutover to the participant
+source and the remaining public semantic operations. Incremental peer
+prefixes, remaining structural choices and
 interactive approval still need their cutover checks. The native
 fixture uses synthetic approval receipts.
 The managed probes enter through a temporary host-only hook and use the

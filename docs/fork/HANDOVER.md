@@ -526,12 +526,26 @@ returned the saved event, the same command retried with the same
 receipt, and a separate session read the newly published bytes from
 shared history. The first cold approval preparation reached the
 180-second test deadline. Warm preparation finished in under a second.
-The test required separate one-time context approvals for native
-storage allocation. That extra prompt still needs to be removed from
-ordinary first use. The test scope peaked at 5.50 GiB, recorded no
+That test required separate one-time context approvals for native
+storage allocation. The test scope peaked at 5.50 GiB, recorded no
 hard-limit or OOM events, and shut down normally. The temporary hook and
 registry were removed. See `p5-publication-alice-retry.log`,
 `p5-publication-bob-after.log`, and `p5-managed-public-stop.log`.
+
+Base `4c77475` keeps the storage entity in the history provider's runtime
+context while the participant's admitted logical context still selects
+its separate working branch. Host `5ddba9be8` fixes inherited-context
+forks by reserving and activating them in the same resolved context.
+Host `0194f197f` admits an exact discard retry by its private receipt
+after the discarded state is gone. In fresh disposable instance
+`p5-managed-first-use-fixed-1118`, the paired CLI created its copy
+without an extra approval, edited, discarded, edited again and retried
+the original discard. The retry returned the same receipt, preserved
+the new edit and left main unchanged. The instance stopped normally
+with a 5.40 GiB peak and zero memory-limit or OOM events. Both
+typechecks, the native interruption fixture, and the focused host
+suites passed. See `p5-managed-first-use-fixed-cli.log`,
+`p5-public-retry-check.log`, and `p5-inherited-runtime-fork-check.log`.
 
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer

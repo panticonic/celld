@@ -232,7 +232,9 @@ Build `497f018` passes all eight LTX tests, four focused Dolt scenarios,
 and socket hibernation. Its product check
 `st_a6fb72de38b14fdf85dc466100f768a9` passed 65 turns, collected at 64,
 made zero model calls, forked in 11.5 seconds and retired cleanly. The
-10,000-turn fork measurement remains open.
+full-size measurement is now running on the same build as
+`st_55ddfbaa2da24973ac95f24de722772f` in `p4-handoff-stream10k`, with the
+6 GiB cap and a 24-hour test budget.
 
 The preceding diagnostic instance is stopped/joined. Its whole scope peaked at 3.66 GiB,
 then fell below 2.85 GiB, with no quota hits or OOM kills. Native RSS peaked at

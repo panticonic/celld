@@ -664,6 +664,15 @@ tests passed. The pinned test binary is `celld-uf-f9b25fb` with SHA-256
 See `p5-versioned-schema-rust94.log`, `p5-native-decision-fixed.log`,
 and `p5-decision-graph-check.log`.
 
+Base `0e41ed5` and host `57f7323df` inspect a file or repository at its
+exact working or saved revision. The native test verified stable file and
+repository IDs after moves, the reverse edge from a copied file to work
+that copied it, and prior state IDs for saved file and repository
+deletions. It also followed the decision back from the incoming authored
+change. Both typechecks, 76 host and package tests, and 38 Base tests
+passed. See `p5-native-placement-provenance-2.log` and
+`p5-placement-provenance-check.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

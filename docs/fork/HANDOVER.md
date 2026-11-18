@@ -594,6 +594,16 @@ stopped normally at a 5.50 GiB peak, with no hard-limit or OOM events.
 The hook and registry were removed. See `p5-managed-divergent-resume.log`,
 `p5-managed-divergent-bob.log`, and `p5-managed-divergent-stop.log`.
 
+Base `afa866d` records the completed replay and each exact migrated
+context tip in local canonical storage. It verifies saved ancestry
+before installing and rejects a changed retry. Host `08cb22a2b` verifies
+the recorded tips and uses them on reattachment. The native fixture
+read all three migrated tips after shared main advanced, recovered the
+original installation result without moving main, and rejected changing
+its context set. Both typechecks, 68 host tests and eight Base tests
+passed. See `p5-native-replay-receipt.log` and
+`p5-public-replay-receipt-check.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

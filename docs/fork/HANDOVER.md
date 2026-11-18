@@ -246,7 +246,7 @@ are `base-gad-participants` and `gad-participant-admission`. The first
 participant fork and conflict-merge probe passes against the real runtime.
 
 P5 has a local implementation on Base `feat/gad-participant-cells` and
-host `feat/gad-participant-admission`. Base `5703ad4` and host `1d1a673ee`
+host `feat/gad-participant-admission`. Base `69ffa6b` and host `ccf995f0b`
 use native pin `60f0bf8`.
 The real runtime forked two independent GAD facets, refused a stale
 publication, resolved the conflict in the second work cell and kept both
@@ -292,9 +292,35 @@ The migration now has an explicit fast-forward installation step for an
 empty destination. A real replay was installed twice, forked in 237 ms from a
 4,278,036-byte export, and projected all 5,135 original file placements in
 135 repositories. The test also rejects installing over a later destination
-commit. Production still needs the hosted canonical class, authenticated
-participant allocation and context projection, and live planner reads backed
-by the Dolt commit graph before the existing service can switch owners.
+commit.
+
+The manifest now admits `GadHistoryDO` as the hosted Dolt history class. The
+legacy owner exports ordered, individually verified replay steps. Each hosted
+step records the exact input and compares the full placement proof before
+committing. Repeating a completed step returns its original commit. The
+host can derive a participant from its verified task or user coordinates, and
+the class records the exact native fork commit before requesting allocation.
+Only the allocated participant can use its remote grant through the class's
+relay. The class exposes context reads, prepared edits, saved revisions,
+publication and retirement. Retirement fences new work, archives saved
+revisions, revokes grants and requests the existing runtime's deletion.
+
+The disposable native probe used the real class and the replayed 5,135-file
+workspace. Two copies retained the whole starting tree and retried their
+original allocations. A grant presented by the other copy was rejected.
+One copy published its saved revision while the other stayed at its initial
+head. Retirement retained the second copy's saved revision and resumed from
+the archival receipt after an injected deletion failure. This probe used a
+fixture for host approval, allocation and physical deletion. It verified
+the class and native storage, with the existing UniversalDO fork and host
+retirement covered separately. The four new host tests, 25 focused Base
+tests, and both type checks pass.
+
+Continue with the actual managed host and UniversalDO lifecycle using this
+class. The live planner's reads still need the Dolt graph, and the existing
+approval and context materialization paths need to address the verified owner
+before switching the editor and agents. Native probe evidence is in
+`p5-hosted-retire-final.log` in the private state directory.
 
 The real replay also supplied a checkout benchmark with 10,000 local rows
 and two distinct committed file states. At the runtime's default NORMAL

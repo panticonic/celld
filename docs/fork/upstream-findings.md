@@ -101,6 +101,14 @@ example checks both a declared and an undeclared owner with the same loaded
 code and a custom id. The Vibestudio probe relays a push from another cell and
 checks that the loaded target's callback observes the new head and rows.
 
+**E16. Memory pressure ignored nested Linux cgroup v2 limits.** The node read
+only the controller mount root, so an ordinary systemd scope reported no
+cgroup charge or limit. A model-free Vibestudio benchmark was killed inside
+its 6 GiB scope after 6,784 observed turns. The node now resolves its group
+from `/proc/self/cgroup` and reads the charge from the visible group with
+the lowest finite limit. When there is no finite limit it samples the
+nearest group with a memory controller. The legacy cgroup v1 paths remain.
+
 **E14 detail.** The E6 rule gives a block from a continuation whose event has
 ended to the event whose turn runs it: that event is the block's driver
 (`op_with_input_gate_context`), takes the gate (`op_gate_acquire`) and polls the

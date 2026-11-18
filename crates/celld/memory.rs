@@ -36,31 +36,112 @@ struct CgroupMemory {
     working_set_bytes: u64,
 }
 
+/// Pick the cgroup whose accounting is constrained by the tightest visible
+/// limit. A service may run below more than one finite `memory.max`; sampling
+/// the leaf against an ancestor's limit would miss its siblings' charge.
+#[cfg(target_os = "linux")]
+#[allow(clippy::disallowed_methods)] // cgroup files are kernel telemetry.
+fn v2_memory_group(
+    root: &std::path::Path,
+    membership: &str,
+) -> Option<(std::path::PathBuf, Option<u64>)> {
+    use std::path::{Component, Path};
+
+    let relative = membership
+        .lines()
+        .find_map(|line| line.strip_prefix("0::/"));
+    let leaf = relative
+        .map(Path::new)
+        .filter(|path| {
+            path.components()
+                .all(|part| matches!(part, Component::Normal(_)))
+        })
+        .map(|path| root.join(path))
+        .and_then(|path| {
+            path.ancestors()
+                .take_while(|path| path.starts_with(root))
+                .find(|path| path.join("memory.current").is_file())
+                .map(Path::to_path_buf)
+        })
+        .or_else(|| {
+            root.join("memory.current")
+                .is_file()
+                .then(|| root.to_path_buf())
+        })?;
+    let limit = leaf
+        .ancestors()
+        .take_while(|path| path.starts_with(root))
+        .filter_map(|path| {
+            let max = std::fs::read_to_string(path.join("memory.max")).ok()?;
+            Some((path, max.trim().parse::<u64>().ok()?))
+        })
+        // On a tie the ancestor also counts its other children.
+        .min_by_key(|(path, max)| (*max, path.components().count()));
+    Some(match limit {
+        Some((path, max)) => (path.to_path_buf(), Some(max)),
+        None => (leaf, None),
+    })
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod cgroup_v2_tests {
+    use super::v2_memory_group;
+    use std::fs;
+    use std::path::Path;
+
+    fn memory_group(path: &Path, max: &str) {
+        fs::create_dir_all(path).unwrap();
+        fs::write(path.join("memory.current"), "100").unwrap();
+        fs::write(path.join("memory.max"), max).unwrap();
+    }
+
+    #[test]
+    fn samples_the_nested_limit_that_applies_to_the_process() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("user.slice/job.scope");
+        let leaf = parent.join("child");
+        memory_group(&parent, "6442450944\n");
+        memory_group(&leaf, "max\n");
+        let membership = "0::/user.slice/job.scope/child\n";
+        assert_eq!(
+            v2_memory_group(root.path(), membership),
+            Some((parent, Some(6 << 30)))
+        );
+
+        fs::write(leaf.join("memory.max"), "4294967296\n").unwrap();
+        assert_eq!(
+            v2_memory_group(root.path(), membership),
+            Some((leaf, Some(4 << 30)))
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::disallowed_methods)] // cgroup files are kernel telemetry.
+fn current_v2_memory_group() -> Option<(std::path::PathBuf, Option<u64>)> {
+    let membership = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    v2_memory_group(std::path::Path::new("/sys/fs/cgroup"), &membership)
+}
+
 #[cfg(target_os = "linux")]
 #[allow(clippy::disallowed_methods)] // cgroup files are kernel telemetry.
 fn cgroup_memory() -> Option<CgroupMemory> {
-    for (current_path, stat_path, inactive_key) in [
-        (
-            "/sys/fs/cgroup/memory.current",
-            "/sys/fs/cgroup/memory.stat",
+    if let Some((group, _)) = current_v2_memory_group() {
+        let current = std::fs::read_to_string(group.join("memory.current")).ok()?;
+        let stat = std::fs::read_to_string(group.join("memory.stat")).unwrap_or_default();
+        return Some(cgroup_memory_from_stat(
+            current.trim().parse().ok()?,
+            &stat,
             "inactive_file",
-        ),
-        (
-            "/sys/fs/cgroup/memory/memory.usage_in_bytes",
-            "/sys/fs/cgroup/memory/memory.stat",
-            "total_inactive_file",
-        ),
-    ] {
-        let Ok(current) = std::fs::read_to_string(current_path) else {
-            continue;
-        };
-        let Some(current_bytes) = current.trim().parse::<u64>().ok() else {
-            continue;
-        };
-        let stat = std::fs::read_to_string(stat_path).unwrap_or_default();
-        return Some(cgroup_memory_from_stat(current_bytes, &stat, inactive_key));
+        ));
     }
-    None
+    let current = std::fs::read_to_string("/sys/fs/cgroup/memory/memory.usage_in_bytes").ok()?;
+    let stat = std::fs::read_to_string("/sys/fs/cgroup/memory/memory.stat").unwrap_or_default();
+    Some(cgroup_memory_from_stat(
+        current.trim().parse().ok()?,
+        &stat,
+        "total_inactive_file",
+    ))
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -103,20 +184,13 @@ fn cgroup_memory_from_stat(current_bytes: u64, stat: &str, inactive_key: &str) -
 #[cfg(target_os = "linux")]
 #[allow(clippy::disallowed_methods)] // cgroup files are kernel telemetry.
 pub(crate) fn cgroup_limit_bytes() -> Option<u64> {
-    for path in [
-        "/sys/fs/cgroup/memory.max",
-        "/sys/fs/cgroup/memory/memory.limit_in_bytes",
-    ] {
-        if let Ok(raw) = std::fs::read_to_string(path) {
-            if let Ok(limit) = raw.trim().parse::<u64>() {
-                // cgroup v1 reports "no limit" as a huge page-rounded value.
-                if limit < (1 << 50) {
-                    return Some(limit);
-                }
-            }
-        }
+    if let Some((_, limit)) = current_v2_memory_group() {
+        return limit;
     }
-    None
+    let raw = std::fs::read_to_string("/sys/fs/cgroup/memory/memory.limit_in_bytes").ok()?;
+    let limit = raw.trim().parse::<u64>().ok()?;
+    // cgroup v1 reports "no limit" as a huge page-rounded value.
+    (limit < (1 << 50)).then_some(limit)
 }
 
 #[cfg(target_os = "linux")]

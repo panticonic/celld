@@ -246,7 +246,7 @@ are `base-gad-participants` and `gad-participant-admission`. The first
 participant fork and conflict-merge probe passes against the real runtime.
 
 P5 has a local implementation on Base `feat/gad-participant-cells` and
-host `feat/gad-participant-admission`. Base `6657ec3` and host `1d1a673ee`
+host `feat/gad-participant-admission`. Base `5703ad4` and host `1d1a673ee`
 use native pin `60f0bf8`.
 The real runtime forked two independent GAD facets, refused a stale
 publication, resolved the conflict in the second work cell and kept both
@@ -283,6 +283,10 @@ command retry, rejection of a reused command with a different input, and a
 separate saved event. The host keeps content and effect acknowledgements with
 the owner that started the command. The focused checks passed 25 Base tests,
 59 host orchestration and publication tests, and both type checks.
+Placement content roots can be rebuilt from the retained history. The native
+test checks that the participant's roots include its private edit and the
+shared history's roots do not. The incremental index and integration into
+host content collection are pending.
 
 The migration now has an explicit fast-forward installation step for an
 empty destination. A real replay was installed twice, forked in 237 ms from a

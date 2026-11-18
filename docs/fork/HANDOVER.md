@@ -486,6 +486,18 @@ workspace process was terminated, its supervisor completed cleanup,
 and the temporary registry and source hook were removed. See
 `p5-managed-filesystem-evidence.log` and its memory and stop receipts.
 
+Base `83f1634` reuses the established allocation and its ordinary
+grant. Binding an already-open branch needs no new remote fetch. Host
+`02375bcf3` uses an exact source lookup for single-file rename and
+prevents new participant admission after shutdown starts. The native
+probe verified one ordinary grant and one allocation per participant
+across retries. The second managed instance completed the same
+filesystem probe in 60 seconds after the doctor trigger and stopped
+normally. Its scope peaked at 5.50 GiB with no memory-limit events or
+OOM kills. The hook and registry were removed. Both typechecks, 145 host
+tests and eight Base tests passed. See
+`p5-managed-filesystem-fixed-evidence.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes, remaining structural choices and

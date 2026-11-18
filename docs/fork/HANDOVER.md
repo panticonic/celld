@@ -387,10 +387,31 @@ zero OOM events and shut down normally. The projection and context
 materializer tests and both type checks pass. See
 `p5-managed-projection-evidence.log`.
 
+The host stages approval through the existing protected-ref gate before
+requesting the exact native push. Base `d471917` and host `def182828`
+retain the approved previous and proposed revisions, recover confirmed
+pushes after a lost reply, and project them in shared-history order.
+The native fixture rejected a mismatched approved event and recovered the
+confirmed revision. The focused host gate passed 77 tests.
+
+Base `96fcbf8` brings a clean copy forward to an exact shared revision
+and previews a divergent copy without moving its branch. A prepared
+whole-row resolution writes the decision and application in the native
+merge transaction. Save verifies that every integration has its exact
+two native parents. On the captured 5,135-file workspace, Bob kept his
+file mode, saved the merge, published it to shared main, and Alice pulled
+that result into her copy. The fixture confirmed the merge and save
+receipts on retry and rejected an omitted resolution without advancing the
+branch. The four Base typecheck profiles and 44 focused tests passed.
+See `p5-native-published-integration.log` and
+`p5-accounted-merge-base-check.log` in the private state directory.
+
 The normal editor and agent routes still need to use these participant
-owners. Protected publication, integration and durable recovery need
-their end-to-end cutover checks. The managed probes enter through a
-temporary host-only hook and use the ordinary dispatcher.
+owners. The native test supplied explicit resolutions and approvals.
+Automatic adoption with exact content provenance, text composition,
+placement collisions, peer-context integration and the normal interactive
+approval path still need their cutover checks. The managed probes enter
+through a temporary host-only hook and use the ordinary dispatcher.
 
 The real replay also supplied a checkout benchmark with 10,000 local rows
 and two distinct committed file states. At the runtime's default NORMAL

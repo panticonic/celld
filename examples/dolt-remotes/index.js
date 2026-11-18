@@ -203,8 +203,9 @@ export class Hub {
   }
 
   async fetch(request) {
-    if (new URL(request.url).pathname === "/loaded-remote-api") {
-      return loadedRemoteStatus(this.ctx, this.env);
+    const url = new URL(request.url);
+    if (url.pathname === "/loaded-remote-api") {
+      return loadedRemoteStatus(this.ctx, this.env, url.searchParams);
     }
     const facet = this.ctx.facets.get("member", () => ({
       class: this.ctx.exports.Member,
@@ -214,19 +215,23 @@ export class Hub {
   }
 }
 
-function loadedRemoteStatus(ctx, env) {
-  return ctx.facets.get("loaded", () => ({
+async function loadedRemoteStatus(ctx, env, options) {
+  const enabled = options.has("remotes") ? options.get("remotes") === "true" : undefined;
+  const loaded = ctx.facets.get(`loaded-${enabled}-${options.has("rpc")}`, () => ({
     class: env.LOADER.load({
       compatibilityDate: "2026-01-01",
       mainModule: "loaded.js",
       modules: { "loaded.js": `export class Loaded {
         constructor(ctx) { this.ctx = ctx; }
-        fetch() { return Response.json({ remote: this.ctx.storage.dolt.remote !== undefined }); }
+        open() { return this.ctx.storage.dolt.remote !== undefined; }
+        fetch() { return Response.json({ remote: this.open() }); }
       }` },
     }).getDurableObjectClass("Loaded"),
     id: "custom-public-id",
-    celld: { storage: "dolt" },
-  })).fetch("https://loaded/");
+    celld: { storage: "dolt", doltRemotes: enabled },
+  }));
+  if (options.has("rpc")) return Response.json({ remote: await loaded.open() });
+  return loaded.fetch("https://loaded/");
 }
 
 // A Dolt class that never declared `doltRemotes`.
@@ -237,8 +242,9 @@ export class Plain {
   }
 
   async fetch(request) {
-    if (new URL(request.url).pathname === "/loaded-remote-api") {
-      return loadedRemoteStatus(this.ctx, this.env);
+    const url = new URL(request.url);
+    if (url.pathname === "/loaded-remote-api") {
+      return loadedRemoteStatus(this.ctx, this.env, url.searchParams);
     }
     return Response.json({ remote: this.ctx.storage.dolt.remote !== undefined });
   }
@@ -282,7 +288,9 @@ export default {
       return env.PLAIN.get(env.PLAIN.idFromName("p")).fetch("https://plain/");
     }
     if (url.pathname === "/plain-loaded-remote-api") {
-      return env.PLAIN.get(env.PLAIN.idFromName("p")).fetch("https://plain/loaded-remote-api");
+      return env.PLAIN.get(env.PLAIN.idFromName("p")).fetch(
+        "https://plain/loaded-remote-api" + url.search,
+      );
     }
     if (url.pathname === "/plain-serve") {
       // A raw request to a class that did not declare doltRemotes.

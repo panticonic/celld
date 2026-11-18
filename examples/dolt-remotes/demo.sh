@@ -167,6 +167,9 @@ HUB_TOKEN=$(get "/grant?g=gad&label=hub&push=hub/*&branches=main" | jq -r .token
 check "the facet has the capability"  "$(get "/hub/has-remote-api")"      '.remote == true and .fetch == "function"'
 check "a loaded facet inherits its root declaration with a custom id" "$(get "/hub/loaded-remote-api")" '.remote == true'
 check "a loaded facet of an undeclared root has no remote API" "$(get "/plain-loaded-remote-api")" '.remote == false'
+check "a loaded facet can decline the inherited capability on fetch" "$(get "/hub/loaded-remote-api?remotes=false")" '.remote == false'
+check "a loaded facet can decline the inherited capability on RPC" "$(get "/hub/loaded-remote-api?remotes=false&rpc=1")" '.remote == false'
+check "a facet cannot enable remotes without the root declaration" "$(get "/plain-loaded-remote-api?remotes=true")" '.remote == false'
 check "the facet adds a remote"       "$(get "/hub/remote-add-raw?name=origin&ref=Graph:$GAD_ID&token=$HUB_TOKEN")" '.name == "origin"'
 check "the facet fetches the graph"   "$(get "/hub/fetch?branches=main")"  '.branches.main | length == 40'
 get "/hub/set?id=7&body=from-the-facet" >/dev/null

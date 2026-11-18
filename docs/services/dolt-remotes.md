@@ -248,7 +248,9 @@ A failure throws with `error.code`:
   branch to it through the parent, with the grant, the refusals and
   `ondoltpush` on the facet). In a facet loaded
   through a Worker Loader the built-in carrier needs a namespace binding for the
-  source's class; pass `transport` otherwise.
+  source's class; pass `transport` otherwise. The root's declaration applies
+  by default. A facet can decline it for its subtree with
+  `celld: { doltRemotes: false }` in its startup options.
 - No force push, no tag transfer, no deleting a remote branch.
 - A pack is one buffer in memory (2 GiB at most), and the source's turn is
   occupied while it builds one.

@@ -9239,7 +9239,8 @@ fn op_facet_rpc(
         }
         Err(error) => return loader_throw(scope, &error.to_string()),
     };
-    let dolt_remotes = facet_dolt_remotes(scope, &parent_scope, &parent.root_scope);
+    let dolt_remotes =
+        !args.get(12).is_false() && facet_dolt_remotes(scope, &parent_scope, &parent.root_scope);
     let host = FacetHost::of(loader);
     let trace = current_trace_context(scope);
     let async_id = asyncrt::enqueue(async move {
@@ -9415,7 +9416,8 @@ fn op_facet_fetch(
         }
         Err(error) => return loader_throw(scope, &error.to_string()),
     };
-    let dolt_remotes = facet_dolt_remotes(scope, &parent_scope, &parent.root_scope);
+    let dolt_remotes =
+        !args.get(15).is_false() && facet_dolt_remotes(scope, &parent_scope, &parent.root_scope);
     let host = FacetHost::of(loader);
     let trace = current_trace_context(scope);
     let stream_service = http_stream_service();

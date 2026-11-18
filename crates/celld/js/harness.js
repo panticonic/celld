@@ -2872,6 +2872,9 @@ class DurableObjectFacets {
         if (local.length !== 0 && storage !== "dolt")
           throw new TypeError(
             'FacetStartupOptions.celld.doltLocal needs celld.storage "dolt".');
+        const remotes = fork?.doltRemotes;
+        if (remotes !== undefined && typeof remotes !== "boolean")
+          throw new TypeError("FacetStartupOptions.celld.doltRemotes must be a boolean.");
         const { id: loader } = await meta.loadPromise;
         const id = options.id === undefined ? this._state.id : options.id;
         // Keep the ID kind and name in one clone. A string round-trip erases
@@ -2879,7 +2882,7 @@ class DurableObjectFacets {
         const idSc = __sc_encode(id instanceof DurableObjectId
           ? [id._className, id.toString(), id.name] : String(id));
         // Keep the load alive after the startup callback and class are gone.
-        return [loader, meta.name, idSc, meta.propsSc, meta, storage, JSON.stringify(local)];
+        return [loader, meta.name, idSc, meta.propsSc, meta, storage, JSON.stringify(local), remotes];
       });
     const invoke = async (operation) => {
       if (record.aborted) throw record.error;
@@ -2898,25 +2901,25 @@ class DurableObjectFacets {
       const session = {
         get: () => Promise.reject(new Error(
           "Awaitable properties on facets are not supported yet.")),
-        call: (path, args) => invoke(async ([loader, className, id, propsSc, , storage, local]) => {
+        call: (path, args) => invoke(async ([loader, className, id, propsSc, , storage, local, remotes]) => {
           if (path.length !== 1)
             throw new Error(
               "Pipelined property paths on facets are not supported yet.");
           return __rpcDes(await __facet_rpc(
             loader, className, manager._state._scope, record.owner, name, id,
             propsSc, path[0], __rpcOut(args, false), storage, local,
-            callLimits));
+            callLimits, remotes));
         }),
       };
       target.fetch = async function(input, init) {
-        return invoke(async ([loader, className, id, propsSc, , storage, local]) => {
+        return invoke(async ([loader, className, id, propsSc, , storage, local, remotes]) => {
           const req = new Request(input, init);
           const headers = JSON.stringify(req.headers.__celldHeaderList);
           const { body, streamId } = await __subrequestBody(req);
           const response = JSON.parse(await __facet_fetch(
             loader, className, manager._state._scope, record.owner, name, id,
             propsSc, req.url, req.method, body, headers, streamId, storage, local,
-            callLimits));
+            callLimits, remotes));
           const responseBody = response.streamId !== undefined
             ? new CelldHttpBodyStream(response.streamId)
             : response.body !== undefined ? response.body

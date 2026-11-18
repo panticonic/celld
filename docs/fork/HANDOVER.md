@@ -238,7 +238,12 @@ full-size measurement is now running on the same build as
 held the pressure latch and four cold activations waited. A scoped
 1 GiB reclaim cleared the latch and unblocked those activations. The
 test scope also uses a 5 GiB soft reclaim threshold from that point.
-The 6 GiB hard cap and zero swap remain in force.
+The 6 GiB hard cap and zero swap stayed in force. The owner then prioritized
+participant working copies. We stopped this disposable benchmark after the
+1,216-turn checkpoint with zero recorded kills and joined its instance.
+The 10,000-turn fork latency remains outstanding. The isolated P5 worktrees
+are `base-gad-participants` and `gad-participant-admission`. The first
+participant fork and conflict-merge probe passes against the real runtime.
 
 The preceding diagnostic instance is stopped/joined. Its whole scope peaked at 3.66 GiB,
 then fell below 2.85 GiB, with no quota hits or OOM kills. Native RSS peaked at

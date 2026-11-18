@@ -212,11 +212,14 @@ The storage regression verifies byte-for-byte snapshot compatibility.
 All four focused Dolt end-to-end scenarios pass. On native build `1ea8681`,
 `st_b75930306d734129ae39111a0555377d` passed 65 native turns with collection
 at 64, zero model calls, a 10.2-second fork, and clean retirement.
-The fresh 10,000-turn model-free measurement is
-`st_171e03fc4df7457eab8afc6b2f0faf5a` in `p4-stream-capture10k`. It runs the
-same build under the 6 GiB cap and a 24-hour test budget. The latency at
-10,000 turns is pending. The private state directory records the benchmark's
-progress and the exact managed instance.
+The long model-free measurement `st_171e03fc4df7457eab8afc6b2f0faf5a` used
+the same build and 6 GiB cap. Asking Linux to reclaim 1 GiB of the test
+group's file cache cleared a sustained admission stall and four queued
+activations. At 12:16 CET a separate native allocation spike killed the
+runtime after 1,216 validated turns. The kernel recorded 6,067,793,920
+bytes of anonymous memory and 245,760 bytes of file cache at the kill.
+The managed test and observers are joined. The fork was never reached.
+The private state directory has the intervention and terminal evidence.
 
 The preceding diagnostic instance is stopped/joined. Its whole scope peaked at 3.66 GiB,
 then fell below 2.85 GiB, with no quota hits or OOM kills. Native RSS peaked at

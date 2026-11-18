@@ -372,11 +372,25 @@ did not have the file. Its scope peaked at 5.50 GiB with zero OOM events
 and shut down normally. The 64 focused host tests and both type checks
 pass. See `p5-managed-edit-evidence.log` in the private state directory.
 
-The normal editor and agent routes still need participant-specific
-materialization and effect recovery. The protected gate and the complete
-save and integration lifecycle need to address the verified owner before
-switching them. The managed probes enter through a temporary host-only
-hook and use the ordinary dispatcher.
+The host projects two owners of the same context into distinct folders.
+Each folder keeps the original public context binding. Projection repair
+uses the participant's current native revision, catches deleted or changed
+working bytes, and advances intact folders by the changed repositories.
+Saves derive the exact application sequence from the working branch and
+recover the same receipt on retry. Pending integration decisions still
+require their own semantic validation.
+
+The managed probe exercised both folders, removed a disposable file and
+recovered it, saved the editing participant's revision, and retired that
+cell while the other stayed readable. The scope peaked at 5.55 GiB with
+zero OOM events and shut down normally. The projection and context
+materializer tests and both type checks pass. See
+`p5-managed-projection-evidence.log`.
+
+The normal editor and agent routes still need to use these participant
+owners. Protected publication, integration and durable recovery need
+their end-to-end cutover checks. The managed probes enter through a
+temporary host-only hook and use the ordinary dispatcher.
 
 The real replay also supplied a checkout benchmark with 10,000 local rows
 and two distinct committed file states. At the runtime's default NORMAL

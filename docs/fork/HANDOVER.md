@@ -947,20 +947,25 @@ Everything in the status table of `docs/fork/design.md` is merged into
   - E12/E13: a call ended by its CPU limit keeps its pending I/O, and the
     transaction it interrupted rolls back.
   - E14: the agents' persistent `transaction()` refusal.
-- **Last full e2e** (release build of `75f1700`): 46 passed, 1 known failure
-  (E2, the R2 etag), 2 skipped (`pi` and `opencode` need live model
-  endpoints), 1 failed.
-  - The failure is `python`: GET / times out with "Wasm code generation
-    disallowed by embedder". It fails the same way on `2d1749d`.
-  - Earlier full runs reported it as skipped, so it is probably a
-    toolchain-dependent scenario now running for real.
+- **Last full e2e** (release build of `b5742d1`): 47 passed, 1 known
+  failure (E2, the R2 etag), 2 skipped (`pi` and `opencode` need live
+  model endpoints), and zero unexpected failures. The run used one worker
+  and took 560 seconds. See `p5-fork-e2e-full.log`. The local pinned binary
+  is `celld-uf-b5742d1`, SHA-256
+  `9c1eed52e3f6e21ab084a3d8864bbd7c0ebc42e2d494bd91d2a808af83e56d8d`.
+  The added historical row test failed at the expected saved read on
+  `60f0bf8` and passed on `f9b25fb` and `b5742d1`.
 
 **Open in the fork, in priority order:**
 
-1. **`python` e2e.** Wasm codegen is refused for the Python example,
-   probably by the fork's codegen confinement (`docs/fork/codegen.md`)
-   applying to a worker that needs Wasm compilation. Decide the policy (Wasm
-   compile is not `eval`), fix it, and make the scenario pass.
+1. **`python` e2e complete.** Runtime `b5742d1` validates Pyodide's
+   typed import-and-re-export adapter before compiling it. The Python
+   bundle uses the helper within the existing global code-generation policy.
+   The sandbox scenario tested the exact adapter and rejected an arbitrary
+   module and a module with an extra section. The Python scenario tested
+   ordinary requests, a vendored package, and KV data through restart
+   and recovery. See `p5-python-adapter-check.log` and
+   [Codegen confinement](codegen.md).
 2. **Release artifacts for linux-arm64, darwin-arm64 and win32-x64.**
    Vibestudio's `targets.json` has nulls for them, and staging those targets
    is refused.
@@ -1190,8 +1195,8 @@ pushes them.
    - **Gate:** two workspace instances on two nodes. Create a group, invite,
      write from both sides, see an owner-row rejection, run a replay flip,
      and push GAD between workspaces authorized by group membership.
-4. **Fork: the `python` e2e and the remaining limits** (§4.1 items 1 and 4).
-   Can be done earlier if it blocks anything.
+4. **Fork: address the remaining limits** (§4.1 item 4).
+   The Python scenario passed on `b5742d1`.
 5. **Release.** This step goes before handing the result to the owner.
    - Build the fork for linux-arm64, darwin-arm64 and win32-x64.
    - Fill in Vibestudio's `targets.json` digests and wire the `.github`
@@ -1233,8 +1238,8 @@ CELLD_BIN=target/release/celld tests/e2e/run continuations 'facet-*'
 cp target/release/celld ~/celld-harness-bin/celld-uf-$(git rev-parse --short HEAD)
 ```
 
-Expected: R2 etag XFAIL (E2); `pi` and `opencode` skipped; `python` fails
-until §4.1 item 1 is fixed. Fork changes go on a `fix/*` or `feature/*`
+Expected: R2 etag XFAIL (E2); `pi` and `opencode` skipped. Fork changes
+go on a `fix/*` or `feature/*`
 branch. Each has an e2e scenario that fails before and passes after, an
 E-entry in `upstream-findings.md` if it is a defect, a §3b section and a
 status row in `design.md`, and the service doc. Then fast-forward into

@@ -92,6 +92,15 @@ seeds.
 | E7 | A request in flight to a facet is not ended when the facet is aborted (`ctx.facets.abort`, or the parent's release): the facet's handler keeps running, the caller's call never settles, and the caller's own response is never sent even when it caught or raced the call. A handler that another event's turn settles is not noticed either while one of its own operations is pending: the driver waits on that operation alone, and for an operation that never ends the event's response is never sent. workerd rejects the pending call with the abort reason. Found by Vibestudio (retiring an object with a request in flight). Both are in upstream code (`op_facet_fetch`, the drive loop's `wake`). | **Yes.** See below. | |
 | E6 | A promise continuation that runs after the event that created it ended cannot use its Durable Object. `blockConcurrencyWhile` (and so `transaction()`) rejects with "the cell event ended before it could acquire an input gate"; `fetch`, a stub call or an RPC call starts, and its promise never settles. workerd allows all of it while the object is alive. Found by Vibestudio's agent runtime, which starts blocks from background continuations. Upstream refuses it on purpose (`RETIRED_INPUT_GATE`, `op_gate_acquire`) and drops the op of an owner that is gone. | **Yes.** See below. | |
 
+**E15. Loaded Dolt facets lost the storage root's remote declaration.** The
+API looked up the facet's public id class in the current isolate's deployment
+config. A loaded isolate does not have that config, and a custom public id
+does not identify the storage owner. Adoption now carries the root's declaration
+in the runtime configuration for the actual facet scope. The Dolt remotes
+example checks both a declared and an undeclared owner with the same loaded
+code and a custom id. The Vibestudio probe relays a push from another cell and
+checks that the loaded target's callback observes the new head and rows.
+
 **E14 detail.** The E6 rule gives a block from a continuation whose event has
 ended to the event whose turn runs it: that event is the block's driver
 (`op_with_input_gate_context`), takes the gate (`op_gate_acquire`) and polls the

@@ -203,6 +203,9 @@ export class Hub {
   }
 
   async fetch(request) {
+    if (new URL(request.url).pathname === "/loaded-remote-api") {
+      return loadedRemoteStatus(this.ctx, this.env);
+    }
     const facet = this.ctx.facets.get("member", () => ({
       class: this.ctx.exports.Member,
       celld: { storage: "dolt" },
@@ -211,13 +214,32 @@ export class Hub {
   }
 }
 
+function loadedRemoteStatus(ctx, env) {
+  return ctx.facets.get("loaded", () => ({
+    class: env.LOADER.load({
+      compatibilityDate: "2026-01-01",
+      mainModule: "loaded.js",
+      modules: { "loaded.js": `export class Loaded {
+        constructor(ctx) { this.ctx = ctx; }
+        fetch() { return Response.json({ remote: this.ctx.storage.dolt.remote !== undefined }); }
+      }` },
+    }).getDurableObjectClass("Loaded"),
+    id: "custom-public-id",
+    celld: { storage: "dolt" },
+  })).fetch("https://loaded/");
+}
+
 // A Dolt class that never declared `doltRemotes`.
 export class Plain {
-  constructor(ctx) {
+  constructor(ctx, env) {
     this.ctx = ctx;
+    this.env = env;
   }
 
-  async fetch() {
+  async fetch(request) {
+    if (new URL(request.url).pathname === "/loaded-remote-api") {
+      return loadedRemoteStatus(this.ctx, this.env);
+    }
     return Response.json({ remote: this.ctx.storage.dolt.remote !== undefined });
   }
 }
@@ -258,6 +280,9 @@ export default {
     }
     if (url.pathname === "/plain") {
       return env.PLAIN.get(env.PLAIN.idFromName("p")).fetch("https://plain/");
+    }
+    if (url.pathname === "/plain-loaded-remote-api") {
+      return env.PLAIN.get(env.PLAIN.idFromName("p")).fetch("https://plain/loaded-remote-api");
     }
     if (url.pathname === "/plain-serve") {
       // A raw request to a class that did not declare doltRemotes.

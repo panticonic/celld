@@ -1031,6 +1031,7 @@ pub(super) struct EmbeddedStartup {
     pub engine: celld_ltx::Engine,
     /// The table-name patterns the facet's startup options declared local.
     pub dolt_local: Vec<String>,
+    pub dolt_remotes: bool,
 }
 
 pub(super) fn adopt_embedded_cell(
@@ -1080,6 +1081,9 @@ pub(super) fn adopt_embedded_cell(
     let depth_key = v8::String::new(tc, "depth").unwrap();
     let depth_value = v8::Integer::new(tc, depth as i32);
     config.set(tc, depth_key.into(), depth_value.into());
+    let remotes_key = v8::String::new(tc, "doltRemotes").unwrap();
+    let remotes = v8::Boolean::new(tc, startup.dolt_remotes);
+    config.set(tc, remotes_key.into(), remotes.into());
     let cell_key = v8::String::new(tc, cell).unwrap();
     configs.set(tc, cell_key.into(), config.into());
     Ok(alarm)

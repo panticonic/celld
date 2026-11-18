@@ -30,8 +30,9 @@ Without it `ctx.storage.dolt.remote`, `fetch`, `pull` and `push` do not exist
 for the class's cells, and a request to *serve* a fetch or accept a push is
 answered `403` (`ERR_DOLT_REMOTE_FORBIDDEN`), whatever grants the object holds:
 a class that never asked for remotes cannot be fetched from. A **Dolt facet**
-has the declaration of the class of its id (its root's class, normally), which
-may be a SQLite class. A deployment that declares it requires the
+inherits the declaration of its storage root, which may be a SQLite class.
+This also applies when its code comes from a Worker Loader or it uses a
+custom public id. A deployment that declares it requires the
 `dolt-remotes-v1` feature.
 
 ## Authority: grants

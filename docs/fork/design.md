@@ -640,9 +640,10 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       as `residency`, gated by `dolt-remotes-v1`). Without it
       `ctx.storage.dolt.remote` does not exist and a request to serve or
       accept answers 403, so a class that never asked for remotes can never be
-      fetched from, whatever grants it holds. A Dolt facet has the declaration
-      of the class of its id (its root's class, which may be a SQLite class, as
-      in Vibestudio's supervisor). Rejected: a per-call flag (a capability is a
+      fetched from, whatever grants it holds. A Dolt facet inherits the
+      declaration of the root that owns its storage. This also applies to
+      classes in a loaded isolate and facets with a custom public id (E15).
+      Rejected: a per-call flag (a capability is a
       property of the deployment, like codegen and residency).
     - **Authorization: an explicit grant held by the source.** "Same class" is
       too coarse (every fork is the same class, so any fork could read its

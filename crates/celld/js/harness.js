@@ -1510,8 +1510,10 @@ class DoltStorage {
     });
     // Dolt remotes between cells (docs/services/dolt-remotes.md) exist only
     // for a class that declared `celld.durable_objects.<Class>.doltRemotes`;
-    // a facet has the declaration of the class of its id.
-    if (__cell.doltRemotes[storage._state?.id?._className] === true) {
+    // a facet inherits the declaration from its actual root, even when its
+    // code runs in a loaded isolate or its public id was overridden.
+    const facet = __cell.facetConfigs[this._scope];
+    if ((facet?.doltRemotes ?? __cell.doltRemotes[storage._state?.id?._className]) === true) {
       this.remote = Object.freeze({
         add(name, remote) {
           if (remote === null || typeof remote !== "object")

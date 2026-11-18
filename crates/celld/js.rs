@@ -6821,6 +6821,7 @@ impl Worker {
         file: (std::path::PathBuf, bool),
         engine: celld_ltx::Engine,
         dolt_local: Vec<String>,
+        dolt_remotes: bool,
     ) -> Result<u64> {
         let compat = self.inner.as_ref().expect("live worker isolate").compat;
         let (mut locker, _cells) = self.lock();
@@ -6855,6 +6856,7 @@ impl Worker {
                 restored,
                 engine,
                 dolt_local,
+                dolt_remotes,
             },
             compat,
         )?;
@@ -8745,6 +8747,37 @@ struct FacetStart {
     /// The table-name patterns the startup options declared local
     /// (`celld.doltLocal`), validated.
     dolt_local: Vec<String>,
+    dolt_remotes: bool,
+}
+
+/// A facet inherits the declaration of the root that owns its storage. Read
+/// the parent isolate's runtime configuration, independent of the facet's
+/// user-supplied `id` and of other roots using the same loaded class.
+fn facet_dolt_remotes(scope: &mut v8::PinScope, parent_scope: &str, root_scope: &str) -> bool {
+    fn field<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        key: &str,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        let object = value.to_object(scope)?;
+        let key = v8::String::new(scope, key)?;
+        object.get(scope, key.into())
+    }
+    let Ok(state) = cell_state(scope) else {
+        return false;
+    };
+    let enabled = if parent_scope == root_scope {
+        let Some((class, _)) = root_scope.split_once(':') else {
+            return false;
+        };
+        field(scope, state.into(), "doltRemotes").and_then(|classes| field(scope, classes, class))
+    } else {
+        field(scope, state.into(), "facetConfigs")
+            .and_then(|facets| field(scope, facets, parent_scope))
+            .filter(|config| config.is_object())
+            .and_then(|config| field(scope, config, "doltRemotes"))
+    };
+    enabled.is_some_and(|flag| flag.is_true())
 }
 
 /// The local table patterns a facet's startup options declare, as the JSON
@@ -9147,6 +9180,7 @@ async fn prepare_facet(host: FacetHost, start: FacetStart) -> Result<LoadedFacet
                     file,
                     start.engine,
                     start.dolt_local,
+                    start.dolt_remotes,
                 )
                 .map_err(|error| format!("{error:#}"))
         })
@@ -9205,6 +9239,7 @@ fn op_facet_rpc(
         }
         Err(error) => return loader_throw(scope, &error.to_string()),
     };
+    let dolt_remotes = facet_dolt_remotes(scope, &parent_scope, &parent.root_scope);
     let host = FacetHost::of(loader);
     let trace = current_trace_context(scope);
     let async_id = asyncrt::enqueue(async move {
@@ -9220,6 +9255,7 @@ fn op_facet_rpc(
                 parent,
                 engine,
                 dolt_local,
+                dolt_remotes,
             },
         )
         .await?;
@@ -9379,6 +9415,7 @@ fn op_facet_fetch(
         }
         Err(error) => return loader_throw(scope, &error.to_string()),
     };
+    let dolt_remotes = facet_dolt_remotes(scope, &parent_scope, &parent.root_scope);
     let host = FacetHost::of(loader);
     let trace = current_trace_context(scope);
     let stream_service = http_stream_service();
@@ -9395,6 +9432,7 @@ fn op_facet_fetch(
                 parent,
                 engine,
                 dolt_local,
+                dolt_remotes,
             },
         )
         .await?;

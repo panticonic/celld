@@ -406,12 +406,23 @@ branch. The four Base typecheck profiles and 44 focused tests passed.
 See `p5-native-published-integration.log` and
 `p5-accounted-merge-base-check.log` in the private state directory.
 
+Base `df939c3` and host `a7fd6104a` derive status and exact file reads
+from the admitted participant's revision. The native fixture checked
+status before and after publication and integration, original and current
+file modes, selector order and repository boundaries. Independent
+placements merged automatically without decision rows and kept their
+source authoring lineage. The host checks the file coordinates and bytes
+against the requested revision and digest. Host and Base typechecks and
+67 host and 44 Base tests passed. See
+`p5-native-participant-file-read.log` and
+`p5-participant-file-read-check.log`.
+
 The normal editor and agent routes still need to use these participant
 owners. The native test supplied explicit resolutions and approvals.
-Automatic adoption with exact content provenance, text composition,
-placement collisions, peer-context integration and the normal interactive
-approval path still need their cutover checks. The managed probes enter
-through a temporary host-only hook and use the ordinary dispatcher.
+Text composition, placement collisions, peer-context integration and
+the normal interactive approval path still need their cutover checks.
+The managed probes enter through a temporary host-only hook and use the
+ordinary dispatcher.
 
 The real replay also supplied a checkout benchmark with 10,000 local rows
 and two distinct committed file states. At the runtime's default NORMAL

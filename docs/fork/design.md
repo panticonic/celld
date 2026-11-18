@@ -1042,6 +1042,14 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
     regression covers a table whose key accounts for every column and a
     key whose order differs from the table declaration.
 
+20. **Typed function adapters for confined Python (2026-11-19).** The
+    pinned Pyodide loader uses Emscripten's Wasm wrapper for typed JavaScript
+    table entries. Its module contains one function type, one import,
+    and a re-export of the import. A bounded native validator checks that
+    exact module layout and uses the existing compiled-module cache.
+    Only the Python bundle's lexical shim tries this helper before the
+    ordinary Wasm constructor. The global V8 policy is unchanged.
+
 ## 4. Determinism: fixes over the earlier plans
 
 Things the workerd reconstruction plan and the current Chronolog patch get

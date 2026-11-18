@@ -37,6 +37,10 @@ const codegen = {
   title: "codegen confinement: refused by default, allowed for a declaring class, grantable through a loader that holds it",
   steps: [
     get("/stateless", { status: 200, json: denied }, { name: "a stateless handler is confined" }),
+    get("/python-adapter", {
+      status: 200,
+      json: { result: 42, arbitraryRefused: true, extraSectionRefused: true },
+    }, { name: "the Python helper accepts only a typed function adapter" }),
     get("/confined/probe", { status: 200, json: denied }, { name: "an undeclared class is confined" }),
     get("/trusted/probe", { status: 200, json: allowed }, { name: "the declared class may generate code" }),
     get("/confined/loader", {

@@ -1,9 +1,24 @@
 import { DurableObject } from "cloudflare:workers";
+import { wasmFunctionAdapter } from "celld:python";
 import addModule from "./add.wasm";
 
 // Each probe reports what the runtime did and never throws, so one request
 // shows every way of generating code from a string.
 const EMPTY_WASM = new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]);
+
+function pythonAdapterProbe() {
+  const adapter = new Uint8Array([
+    ...EMPTY_WASM, 1, 6, 1, 0x60, 1, 0x7f, 1, 0x7f,
+    2, 7, 1, 1, 0x65, 1, 0x66, 0, 0, 7, 5, 1, 1, 0x66, 0, 0,
+  ]);
+  const compiled = wasmFunctionAdapter(adapter);
+  const instance = new WebAssembly.Instance(compiled, { e: { f: (value) => value + 1 } });
+  return {
+    result: instance.exports.f(41),
+    arbitraryRefused: wasmFunctionAdapter(EMPTY_WASM) === undefined,
+    extraSectionRefused: wasmFunctionAdapter(new Uint8Array([...adapter, 0, 1, 0])) === undefined,
+  };
+}
 
 async function probe() {
   const out = {};
@@ -84,6 +99,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const [, who] = url.pathname.split("/");
+    if (who === "python-adapter") return Response.json(pythonAdapterProbe());
     if (who === "stateless") return Response.json(await probe());
     const binding = who === "trusted" ? env.TRUSTED : env.CONFINED;
     return binding.getByName("only").fetch(request);

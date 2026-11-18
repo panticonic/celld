@@ -182,7 +182,7 @@ impl ModuleRegistry {
 const INTERNALS_SPECIFIER: &str = "celld:internals";
 
 /// The host module of the Python Worker bundle that `celld deploy` builds.
-/// Its one export condemns the calling isolate; see `op_isolate_condemn`.
+/// It can condemn the calling isolate and construct Pyodide's typed function adapter.
 const PYTHON_HOST_SPECIFIER: &str = "celld:python";
 
 /// One synthetic module per isolate whose default export is the internals
@@ -747,6 +747,81 @@ fn compile_wasm<'s>(
     compiled.map(|module| v8::Local::new(scope, &module))
 }
 
+fn load_compiled_wasm<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: &[u8],
+    cache: &Mutex<CompiledWasmCache>,
+) -> Result<v8::Local<'s, v8::WasmModuleObject>, String> {
+    use sha2::Digest;
+    let hash: [u8; 32] = sha2::Sha256::digest(bytes).into();
+    // Rehydrate a compiled module without holding the cache lock during compilation.
+    let cached = cache
+        .lock()
+        .unwrap()
+        .get(&hash)
+        .and_then(|module| v8::WasmModuleObject::from_compiled_module(scope, module));
+    match cached {
+        Some(module) => Ok(module),
+        None => compile_wasm(scope, bytes, hash, cache),
+    }
+}
+
+// Emscripten re-exports one imported JavaScript function as a typed Wasm
+// function. It has no Wasm instructions, start function, or other sections.
+const PYTHON_ADAPTER_HEADER: &[u8] = &[0, 97, 115, 109, 1, 0, 0, 0, 1];
+const PYTHON_ADAPTER_IMPORT_EXPORT: &[u8] = &[2, 7, 1, 1, b'e', 1, b'f', 0, 0, 7, 5, 1, 1, b'f', 0, 0];
+const MAX_PYTHON_ADAPTER_BYTES: usize = PYTHON_ADAPTER_HEADER.len() + 1 + 127 + PYTHON_ADAPTER_IMPORT_EXPORT.len();
+
+fn is_python_wasm_adapter(bytes: &[u8]) -> bool {
+    let Some((&length, signature)) = bytes
+        .strip_prefix(PYTHON_ADAPTER_HEADER)
+        .and_then(|bytes| bytes.strip_suffix(PYTHON_ADAPTER_IMPORT_EXPORT))
+        .and_then(|bytes| bytes.split_first())
+    else {
+        return false;
+    };
+    if length >= 128 || usize::from(length) != signature.len() {
+        return false;
+    }
+    let Some((&arity, types)) = signature
+        .strip_prefix(&[1, 0x60])
+        .and_then(|signature| signature.split_first())
+    else {
+        return false;
+    };
+    let Some((params, result)) = types.split_at_checked(usize::from(arity)) else {
+        return false;
+    };
+    let valid_type = |ty: &u8| matches!(ty, 0x7c..=0x7f | 0x6f);
+    params.iter().all(valid_type)
+        && match result {
+            [0] => true,
+            [1, ty] => valid_type(ty),
+            _ => false,
+        }
+}
+
+pub(super) fn op_python_wasm_adapter(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let Ok(view) = args.get(0).try_cast::<v8::Uint8Array>() else {
+        return;
+    };
+    let mut buffer = [0; MAX_PYTHON_ADAPTER_BYTES];
+    let Some(bytes) = buffer.get_mut(..view.byte_length()) else {
+        return;
+    };
+    if view.copy_contents(bytes) != bytes.len() || !is_python_wasm_adapter(bytes) {
+        return;
+    }
+    static ADAPTERS: OnceLock<Mutex<CompiledWasmCache>> = OnceLock::new();
+    if let Ok(module) = load_compiled_wasm(scope, bytes, ADAPTERS.get_or_init(Default::default)) {
+        rv.set(module.into());
+    }
+}
+
 /// Register each sibling wasm module under its name and `./name` as a stub
 /// whose default export is the compiled `WebAssembly.Module` — the shape
 /// workerd gives a `CompiledWasm` module import, which is what
@@ -769,21 +844,7 @@ pub(super) fn register_wasm_modules(scope: &mut v8::PinScope, modules: &[(String
             internals.set(scope, table_key.into(), table.into());
             table
         });
-        use sha2::Digest;
-        let hash: [u8; 32] = sha2::Sha256::digest(bytes).into();
-        // `CompiledWasmModule` is not Clone, so the rehydrate reads the cache
-        // entry in place; `from_compiled_module` shares the compiled code
-        // rather than recompiling, so the lock is held only briefly.
-        let cached = {
-            let mut cache = cache.lock().unwrap();
-            cache
-                .get(&hash)
-                .and_then(|compiled| v8::WasmModuleObject::from_compiled_module(scope, compiled))
-        };
-        let module = match cached {
-            Some(module) => Ok(module),
-            None => compile_wasm(scope, bytes, hash, cache),
-        };
+        let module = load_compiled_wasm(scope, bytes, cache);
         let quoted = serde_json::to_string(name).unwrap();
         let source = match module {
             Ok(module) => {

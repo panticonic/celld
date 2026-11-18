@@ -97,16 +97,12 @@ declaration asks for anyway.
 
 ## Compatibility
 
-A Worker written for Cloudflare cannot rely on `eval`, because workerd refuses
-it, so upstream deployments are unaffected. Python Workers embed Pyodide
-0.28.3, whose `pyodide.asm.js` contains `eval(` call sites (emscripten's
-`emscripten_run_script` among them). Cloudflare runs the same interpreter with
-evaluation disabled, so the paths a Worker normally takes avoid them, but a
-Python Worker was **not** run under confinement for this change: the build needs
-`pywrangler` and network access. If one needs evaluation, declare
-`celld.durable_objects.<Class>.codegen` for its class. A Python `fetch`
-handler outside a class cannot be declared, because the contract declares only
-classes.
+Python Workers embed Pyodide 0.28.3. The deployment provides the compiled
+interpreter and garbage-collection sentinel. Emscripten adds JavaScript
+functions to the interpreter's typed Wasm table through a small adapter
+module. The host validates its exact type, import, and export sections
+before compiling it. The Python bundle uses that helper lexically, and
+the isolate's global JavaScript and WebAssembly policy stays confined.
 
 ## Verification
 
@@ -118,5 +114,7 @@ with the `celld` block removed shows every probe succeeding, so the check does
 fail without this change. `hello`, `counter`, `facets`, `rpc` and
 `dynamic-worker-tails` give identical responses before and after.
 
-Not tested: Python Workers (above), and a facet of a codegen class that comes
-from the same bundle.
+The `python` scenario runs the confined interpreter, imports a vendored
+Python package, and reads its KV data after restart and recovery. The
+`codegen` scenario exercises the typed adapter and checks rejection of an
+arbitrary module and a module with an extra section.

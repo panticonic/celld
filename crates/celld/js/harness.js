@@ -10696,6 +10696,7 @@ __celld.__cfWorkflows = { NonRetryableError };
 // `celld:python`, imported only by the Python Worker bundle.
 __celld.__pythonHost = {
   condemnIsolate: (reason) => __isolate_condemn(String(reason)),
+  wasmFunctionAdapter: (bytes) => __python_wasm_adapter(bytes),
 };
 
 const __wfValidInstanceId = (id) =>

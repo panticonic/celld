@@ -13,6 +13,7 @@ import interpreter from "./pyodide.asm.wasm";
 import sentinel from "./sentinel.wasm";
 import stdlib from "./python_stdlib.zip";
 import { SENTINEL_BYTES } from "./config.js";
+import { wasmFunctionAdapter } from "celld:python";
 
 export const RUNTIME_URL = "https://python-runtime.invalid/";
 
@@ -50,6 +51,14 @@ export const WebAssembly = {};
 for (const name of Object.getOwnPropertyNames(globalThis.WebAssembly)) {
   if (!JSPI_MEMBERS.has(name)) WebAssembly[name] = globalThis.WebAssembly[name];
 }
+
+// The interpreter adds typed JavaScript functions to its Wasm table through
+// an import-and-re-export adapter. The host accepts this exact module shape.
+WebAssembly.Module = new Proxy(globalThis.WebAssembly.Module, {
+  construct(target, args, newTarget) {
+    return wasmFunctionAdapter(args[0]) ?? Reflect.construct(target, args, newTarget);
+  },
+});
 
 function sameBytes(input, expected) {
   const bytes = ArrayBuffer.isView(input)

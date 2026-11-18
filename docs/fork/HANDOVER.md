@@ -354,11 +354,19 @@ substitutions are unchanged. The 19 focused Base tests and all four Base
 typecheck profiles pass. See `p5-native-edit-plan.log` in the private state
 directory.
 
-The normal editor and agent routes still need to use the participant planner
-and persist its provenance and content effects. Approval and materialization
-need to address the verified owner before cutover. The managed probe checked
-real replay and lifecycle independently of the native fixture's edit and
-publication checks.
+The participant now requests exact text content before planning, rejects
+bytes with a different digest, and prepares a complete placement and
+provenance plan using the shared semantic assembler. Snapshot and applied
+content origins come from the participant's own Dolt ancestry. The native
+probe used the class to compile and persist both edits, verified the
+preservation edge and recovered both origins, and staged a file creation
+without advancing the working branch. See `p5-history-complete-edit-plan.log`.
+
+The normal editor and agent routes still need to execute the participant
+planner, persist its content in the host, and drain its materialization
+effects. Approval needs to address the verified owner before cutover. The
+managed probe checked real replay and lifecycle independently of the native
+fixture's edit and publication checks.
 
 The real replay also supplied a checkout benchmark with 10,000 local rows
 and two distinct committed file states. At the runtime's default NORMAL

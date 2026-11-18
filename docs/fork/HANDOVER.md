@@ -246,7 +246,7 @@ are `base-gad-participants` and `gad-participant-admission`. The first
 participant fork and conflict-merge probe passes against the real runtime.
 
 P5 has a local implementation on Base `feat/gad-participant-cells` and
-host `feat/gad-participant-admission`. Base `24c2b01` and host `1bcf0589b`
+host `feat/gad-participant-admission`. Base `6657ec3` and host `1d1a673ee`
 use native pin `60f0bf8`.
 The real runtime forked two independent GAD facets, refused a stale
 publication, resolved the conflict in the second work cell and kept both
@@ -274,6 +274,23 @@ Bind the semantic planner, materialization effects and existing host
 approval to participant history, and finish lifecycle wiring through
 physical destruction. The real replay fixtures and evidence are in the
 private state directory.
+
+The participant storage now resolves public event and application IDs against
+the requested context's ancestry, including both parents of a merge. The
+existing provenance serializer writes the prepared edit and its placement
+changes in one Dolt transaction. The native probe verifies rollback, exact
+command retry, rejection of a reused command with a different input, and a
+separate saved event. The host keeps content and effect acknowledgements with
+the owner that started the command. The focused checks passed 25 Base tests,
+59 host orchestration and publication tests, and both type checks.
+
+The migration now has an explicit fast-forward installation step for an
+empty destination. A real replay was installed twice, forked in 237 ms from a
+4,278,036-byte export, and projected all 5,135 original file placements in
+135 repositories. The test also rejects installing over a later destination
+commit. Production still needs the hosted canonical class, authenticated
+participant allocation and context projection, and live planner reads backed
+by the Dolt commit graph before the existing service can switch owners.
 
 The real replay also supplied a checkout benchmark with 10,000 local rows
 and two distinct committed file states. At the runtime's default NORMAL

@@ -168,11 +168,13 @@ Native TypeScript checks separately peaked at 5.84 GiB; keep all heavy phases
 serial under 6 GiB and zero swap. Continue monitoring and completing the
 measurement; the strict steering result and later redesign phases remain open.
 
-The long benchmark is run `st_508a958252c04cd2a2ed577f117b6df0`. It survived
-the coding session restart and was still running at 2,304 validated turns,
-with no OOM kill. The last two 64-turn batches averaged 5.2 seconds per turn.
-If that rate holds, the 12-hour bound will expire before the fork. Capture
-the terminal result and keep it distinct from the passed 65-turn fork.
+The long benchmark `st_508a958252c04cd2a2ed577f117b6df0` confirmed 6,784
+native turns before the kernel killed `celld` in its 6 GiB group at 07:21 CET
+on November 18, about 10 hours 45 minutes into the run. The fork was never
+measured. The managed instance removed its temporary workspace, so the
+inspect and trajectory commands could not retrieve the run. The kernel
+record, progress receipts and memory samples are under
+`~/.local/state/celld-p4-compaction/`. The 65-turn fork remains green.
 
 The preceding diagnostic instance is stopped/joined. Its whole scope peaked at 3.66 GiB,
 then fell below 2.85 GiB, with no quota hits or OOM kills. Native RSS peaked at

@@ -449,10 +449,19 @@ content and an incorrect storage receipt, and checked both content
 edges and exact retry. Both typechecks, 71 host tests and 44 Base tests
 passed. See `p5-native-history-text-merge.log`.
 
+Base `e8882cc` and host `1c1bbb184` merge a reviewed committed
+revision from a published participant context through the same
+content handoff. The native fixture refused to fetch the unpublished
+branch, then merged and saved it without changing shared main. The same
+run retained a mode change while composing text and kept the explicitly
+selected local file when both copies created a file at the same path.
+The unresolved collision left the branch intact. Host and Base checks
+passed with 63 and 44 tests. See `p5-native-peer-integration.log`.
+
 The normal editor and agent routes still need to use these participant
-owners. The native test supplied explicit resolutions and approvals.
-Mixed placement and text changes, structural collisions, peer-context
-integration and interactive approval still need their cutover checks.
+owners. Incremental peer prefixes, remaining structural choices and
+interactive approval still need their cutover checks. The native
+fixture uses synthetic approval receipts.
 The managed probes enter through a temporary host-only hook and use the
 ordinary dispatcher.
 

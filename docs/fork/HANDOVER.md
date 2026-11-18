@@ -641,6 +641,13 @@ from the other participant. Both typechecks, 76 host and package tests,
 and 38 Base tests passed. See `p5-native-provenance-state-2.log` and
 `p5-provenance-states-check.log`.
 
+Base `c397bb7` and host `e489f21f2` inspect authored and applied
+changes at the admitted native tip. The fixture verified the underlying
+effects, state parent links in both directions, and both content sources
+of an automatic text merge. Host and Base typechecks, 76 host and package
+tests, and 38 Base tests passed. See `p5-native-change-edges.log` and
+`p5-change-graph-check-exact.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

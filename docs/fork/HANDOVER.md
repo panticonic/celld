@@ -604,6 +604,24 @@ its context set. Both typechecks, 68 host tests and eight Base tests
 passed. See `p5-native-replay-receipt.log` and
 `p5-public-replay-receipt-check.log`.
 
+Base `ceec94b` and host `8145e64e6` archive exactly the storage
+owners anchored to a retired context before reclaiming them. A failed
+archive keeps the projection intact and stops new admissions to that
+context. Retrying removal resumes after entity retirement. The native
+fixture interrupted after archival, recovered the same targets, and
+left other participants readable. In `p5-managed-retirement-1118` a
+paired CLI saved an unpublished file. Ordinary session detach retained
+the context because its hosted kernel was still live. A signed call to
+`runtime.destroyContext` joined that kernel, verified the exact private
+content digest in the archive and reclaimed the retired cell through
+the host's native storage manager. A second context remained readable
+and main stayed unchanged. Both typechecks, 225 host tests and eight
+Base tests passed. The disposable instance stopped normally at 5.50 GiB
+with zero hard-limit and OOM events. Temporary source and registry were
+removed. See `p5-native-context-retire-3.log`,
+`p5-managed-retirement-archive-proof.log`, and
+`p5-managed-retirement-reader-after.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

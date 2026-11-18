@@ -515,11 +515,28 @@ paths after a move and an empty diff for duplicate revisions. The
 checks passed with 102 host tests, eight Base tests and both typechecks.
 See `p5-public-consent-native.log` and `p5-public-consent-check.log`.
 
+A paired CLI verified protected publication through the regular public
+VCS service in disposable instance `p5-managed-public-1118`. A temporary
+host hook replayed the workspace and attached its native history. Alice's
+task used the ordinary VCS routes to edit, read and save one repository.
+Bob saw the old main while approval was pending and after the first
+request timed out and its approval was cancelled. On retry the paired
+device granted one approval for the exact one-file diff. The publication
+returned the saved event, the same command retried with the same
+receipt, and a separate session read the newly published bytes from
+shared history. The first cold approval preparation reached the
+180-second test deadline. Warm preparation finished in under a second.
+The test required separate one-time context approvals for native
+storage allocation. That extra prompt still needs to be removed from
+ordinary first use. The test scope peaked at 5.50 GiB, recorded no
+hard-limit or OOM events, and shut down normally. The temporary hook and
+registry were removed. See `p5-publication-alice-retry.log`,
+`p5-publication-bob-after.log`, and `p5-managed-public-stop.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
-prefixes, remaining structural choices and
-interactive approval still need their cutover checks. The native
-fixture uses synthetic approval receipts.
+prefixes and remaining structural choices still need their cutover
+checks. Direct native fixtures use synthetic approval receipts.
 The managed probes enter through a temporary host-only hook and use the
 ordinary dispatcher.
 
@@ -848,7 +865,7 @@ those of `docs/dolt-redesign.md` §10.
 | P2b General dynamic code    | **Done.**<br>• `hostCode` (`packages/durable/src/codeHost.ts`); the admission service `dynamicCodeService` (`admit`, `release`, `reset`, `dispose`); `EvalKernel` (Base `workers/eval-kernel`); `SessionDO` (Base `workers/session`).<br>• The CLI, panels, the system-test runner, the agent, the website spec and the headless test all pull.<br>• `evalService`, `EvalDO`, `UNSAFE_EVAL`, `resultReceiver`, redelivery, `evalEngine` and `settle` are deleted. The remaining `rg` hits are D5 migration code and deliberate guards. |
 | P3 Durable services         | **Done.** `WorkspaceStateDO` is a Dolt cell, with a replaying import from the retired `WorkspaceDO`; the maintenance journal and `cloneDO` are deleted.                                                                                                                                                                                                                                                                                                                                                                |
 | P4 Agent system             | **Mostly done**, see below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| P5 GAD decentralized        | Local participant storage, replay, file routing, native integration, protected publication and retirement passed focused tests. A disposable managed instance verified separate editable folders and normal shutdown. Default startup cutover, the remaining public history methods, interactive publication, and acceptance benchmarks are open. |
+| P5 GAD decentralized        | Local participant storage, replay, file routing, native integration, protected publication and retirement passed focused tests. Disposable managed instances verified separate editable folders, paired publication and normal shutdown. Default startup cutover, the remaining public history methods, and acceptance benchmarks are open. |
 | P6 Chronolog capability     | **Not started.**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 **P4 in detail** (slices are in `docs/dolt-redesign.md` §6.8–§6.11):

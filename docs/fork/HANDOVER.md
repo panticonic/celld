@@ -547,6 +547,16 @@ typechecks, the native interruption fixture, and the focused host
 suites passed. See `p5-managed-first-use-fixed-cli.log`,
 `p5-public-retry-check.log`, and `p5-inherited-runtime-fork-check.log`.
 
+Base `5e378e2` and host `54a3d2fba` resolve a reviewed shared event and
+the caller's exact target state to native revisions. A merge into an
+ancestor records a working application and two parents without adding a
+decision for a clean adoption. The merge returns the exact application,
+authored and incorporated change counts, and any recorded decisions.
+The native fixture rejected an unpublished saved event as shared main
+and verified that retry after a later save returns the same application.
+Host and Base typechecks, 99 host tests and eight Base tests passed. See
+`p5-native-merge-receipt.log` and `p5-native-merge-receipt-check.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

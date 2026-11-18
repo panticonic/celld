@@ -673,6 +673,21 @@ change. Both typechecks, 76 host and package tests, and 38 Base tests
 passed. See `p5-native-placement-provenance-2.log` and
 `p5-placement-provenance-check.log`.
 
+Host `fa969593a`, `4a6551f76`, and `c32b703b7` resolve mirror
+trees and context-file execution through the authenticated participant's
+working history. A device's distinct owning sessions have separate copies.
+Contexts reached through the same owning session can share its storage
+and retain independent branches. Signed agent tasks retain their sealed
+task identity. The first managed attempt found an allocation collision
+between two sessions on one device. The rerun used ordinary signed
+filesystem writes, mirror reads, and CLI execution. One session read and
+ran its private script. The second saw its original tree and was refused
+the first session's tree hash and script path. The host typecheck and
+focused suites of 83, 108, and 122 tests passed. The managed instance
+stopped normally at 5.50 GiB with zero hard-limit and OOM events. See
+`p5-managed-mirror-eval2-evidence.log`, `p5-managed-mirror-eval2-mirror.log`,
+and `p5-participant-device-session-fixed.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

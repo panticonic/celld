@@ -417,6 +417,21 @@ against the requested revision and digest. Host and Base typechecks and
 `p5-native-participant-file-read.log` and
 `p5-participant-file-read-check.log`.
 
+Base `3c39515` plans whole-row conflicts from the selected revisions and
+typed merge request. The native probe selected each side, refused a
+missing choice, recovered an exact retry, and rejected changed input.
+It also proved that a second participant cannot read an unpublished
+application but can read the published event while its branch is behind.
+The content collector enumerates live and retiring cells and reads
+canonical roots after their private roots. Host `30d4198eb` rechecks
+those roots under the existing collection lock and recovers confirmed
+publications when the participant source is attached. Native GC queries
+saw a new blob only in its author's cell until publication. The host
+collection test retained earlier private content, newly written content,
+and content transferred to canonical history during retirement. Host and
+Base typechecks, 75 host tests and 8 Base participant tests passed.
+See `p5-native-history-gc-roots.log` and `p5-history-gc-check.log`.
+
 The normal editor and agent routes still need to use these participant
 owners. The native test supplied explicit resolutions and approvals.
 Text composition, placement collisions, peer-context integration and

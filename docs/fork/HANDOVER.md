@@ -458,6 +458,14 @@ selected local file when both copies created a file at the same path.
 The unresolved collision left the branch intact. Host and Base checks
 passed with 63 and 44 tests. See `p5-native-peer-integration.log`.
 
+Base `9f580ec` and host `8d596b207` provide exact participant
+repository lookup and bounded file and directory pages. Directory and
+file lineage comes from the selected Dolt revision. The native fixture
+listed a saved private integration, checked both files from its merged
+parents and refused a cursor reused with a different prefix. Host and
+Base typechecks and 8 host and 39 Base tests passed. See
+`p5-native-participant-catalog.log`.
+
 The normal editor and agent routes still need to use these participant
 owners. Incremental peer prefixes, remaining structural choices and
 interactive approval still need their cutover checks. The native

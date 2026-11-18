@@ -557,6 +557,17 @@ and verified that retry after a later save returns the same application.
 Host and Base typechecks, 99 host tests and eight Base tests passed. See
 `p5-native-merge-receipt.log` and `p5-native-merge-receipt-check.log`.
 
+Base `e6ee8a7`, `6503a1e` and host `1904860c2` compare a
+participant's current working state with the exact current shared event.
+The native preview reports placements, per-side authoring evidence,
+conflicts, and text combinations whose bytes were verified. It
+rolls back the preview and binds the page cursor to both inputs.
+The comparison uses the same intent-evidence rules as the existing
+history. Both typechecks, 100 host tests and 11 Base tests passed.
+The native fixture verified a two-page conflict review and an observed
+text composition. See `p5-native-reviewed-compare-2.log` and
+`p5-public-compare-check-fixed.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

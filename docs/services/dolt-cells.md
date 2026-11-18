@@ -331,6 +331,9 @@ tests in `crates/celld/storage.rs` (`dolt_read_surface`) and
 `crates/dolt-exec/tests/local_query.rs` probe each of these. Table names
 beginning `dolt_` or `doltlite_` cannot be created.
 
+Historical rows use the selected commit's column layout, including
+implicitly clustered primary keys. The current checkout stays in place.
+
 ## Semantics
 
 **Output gate.** Each method that can change the store (commit, branch create

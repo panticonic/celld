@@ -245,6 +245,35 @@ const steps = [
       eq(t, tables, ["a"], "tables");
     },
   ),
+  ...survives(
+    "historical rows with implicit clustered keys",
+    async (t) => {
+      const create = await call(t, "/exec", {
+        method: "POST",
+        json: program([
+          "CREATE TABLE review_sources (change_id TEXT NOT NULL, decision_id TEXT NOT NULL, PRIMARY KEY (decision_id, change_id))",
+          "INSERT INTO review_sources VALUES ('saved-change', 'decision')",
+        ]),
+      });
+      t.assert(create.outcome.outcome === "accepted", JSON.stringify(create));
+      t.vars.review = (await call(t, "/commit?message=review")).hash;
+      const edit = await call(t, "/exec", {
+        method: "POST",
+        json: program(["UPDATE review_sources SET change_id = 'working-change'"]),
+      });
+      t.assert(edit.outcome.outcome === "accepted", JSON.stringify(edit));
+    },
+    async (t) => {
+      t.assert(/^[0-9a-f]{40}$/.test(t.vars.review), "saved revision hash");
+      const read = (sql) => call(t, "/query?sql=" + encodeURIComponent(sql));
+      const historical = await read(
+        `SELECT change_id, decision_id FROM dolt_at_review_sources('${t.vars.review}') WHERE decision_id = 'decision'`,
+      );
+      const live = await read("SELECT change_id FROM review_sources");
+      eq(t, historical.rows, [["saved-change", "decision"]], "saved review source");
+      eq(t, live.rows, [["working-change"]], "unchanged live checkout");
+    },
+  ),
 ];
 
 export default {

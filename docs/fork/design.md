@@ -1033,6 +1033,15 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       facet) was not run here; the late-op state is the one that matches its
       persistence.
 
+19. **Historical row layout uses the versioned engine (2026-11-18).** DoltLite
+    implicitly clusters tables with a non-integer primary key. The fork
+    defaults other connections to stock SQLite. A scratch connection used
+    to parse historical table definitions inherited that default and read
+    the key and payload in the wrong layout. Patch `0005` opens that
+    connection as an in-memory Dolt database. The historical read
+    regression covers a table whose key accounts for every column and a
+    key whose order differs from the table declaration.
+
 ## 4. Determinism: fixes over the earlier plans
 
 Things the workerd reconstruction plan and the current Chronolog patch get

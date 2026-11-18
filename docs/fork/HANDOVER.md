@@ -568,6 +568,16 @@ The native fixture verified a two-page conflict review and an observed
 text composition. See `p5-native-reviewed-compare-2.log` and
 `p5-public-compare-check-fixed.log`.
 
+Base `d67956f` and host `cf8ceaf1c` route the admitted public merge
+command through the reviewed native operation. The receipt shows
+adoption and explicit decisions from the original application. A clean
+merge omits its decision ID. Website file consent selects paths from the
+same exact native revisions without reading content during preparation.
+The native fixture verified these paths, clean receipts, composed-text
+receipts and exact retry. Both typechecks, 117 host tests and 11 Base
+tests passed. See `p5-native-public-merge-2.log` and
+`p5-public-merge-check.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

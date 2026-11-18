@@ -631,6 +631,16 @@ typechecks, 44 host tests and 38 Base tests passed. See
 `p5-native-provenance-inspect-2.log` and
 `p5-provenance-inspect-check.log`.
 
+Base `e25baa9` and host `4a3eb850d` also inspect saved events and
+working applications. Native projections report the actual revision
+and preserve the public fact-root representation for legacy responses.
+Exact bound native parent queries keep both parents visible after a
+different cell fetches shared main. The native fixture verified saved
+parents, application order, applied file effects and the merged event
+from the other participant. Both typechecks, 76 host and package tests,
+and 38 Base tests passed. See `p5-native-provenance-state-2.log` and
+`p5-provenance-states-check.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

@@ -688,6 +688,13 @@ stopped normally at 5.50 GiB with zero hard-limit and OOM events. See
 `p5-managed-mirror-eval2-evidence.log`, `p5-managed-mirror-eval2-mirror.log`,
 and `p5-participant-device-session-fixed.log`.
 
+Base `6c08eef` and host `2da787faa` page adjacent history links through
+the participant's admitted revision. The native fixture checked that
+concatenated pages reproduce the inspection order and that a cursor
+fails when reused on a different root or visible revision. Both
+typechecks, 76 host and package tests, and 38 Base tests passed. See
+`p5-native-neighbors.log` and `p5-neighbor-pages-check.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

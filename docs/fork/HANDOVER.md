@@ -184,6 +184,18 @@ inspect and trajectory commands could not retrieve the run. The kernel
 record, progress receipts and memory samples are under
 `~/.local/state/celld-p4-compaction/`. The 65-turn fork remains green.
 
+Two local fork fixes followed. `380b152` makes a loaded Dolt facet inherit
+the remote declaration from its storage root. The Vibestudio relay probe
+failed before the fix, then passed with the target observing the pushed
+head and rows. The full fork suite matched its baseline of 46 passes, one
+known R2 failure, two skips, and the existing Python failure. `21688dc`
+makes Linux pressure handling read the nested group that owns the memory
+limit. The old runtime returned null readings inside the 6 GiB scope.
+The repaired runtime reports the group charge and enters and clears pressure
+mode as a small controlled allocation is made and released. The long fork
+benchmark remains open. The next workspace check uses the new binary in a
+fresh prepared release.
+
 The preceding diagnostic instance is stopped/joined. Its whole scope peaked at 3.66 GiB,
 then fell below 2.85 GiB, with no quota hits or OOM kills. Native RSS peaked at
 1.59 GiB and settled around 1.1–1.2 GiB. This is substantial overhead, not a
@@ -299,7 +311,8 @@ Decisions (dates are when the owner made them; none of these are open):
 
 ### 3.1 The fork, `/home/werg/celld`
 
-- **Branch:** `unified-fork`, at `75f1700`, pushed to `panticonic`.
+- **Branch:** `unified-fork`, with local runtime fixes through `21688dc`.
+  `75f1700` is the pushed runtime revision.
 - **Rust:** 1.94.1 at `~/.cargo/bin`; the system rustc 1.93 is too old.
 - **Docs:**
   - `docs/fork/design.md`: status table, single-track backlog, and §3b,
@@ -316,7 +329,7 @@ Decisions (dates are when the owner made them; none of these are open):
   - Upstream ships no tests: its `cfg(celld_internal_tests)` bodies are
     stripped.
 - **Binaries:** `~/celld-harness-bin/celld-uf-<sha>`, one per pinned fork
-  commit. The latest is `celld-uf-75f1700`.
+  commit. The latest is `celld-uf-21688dc`.
 - **Stale worktrees:**
   - `.claude/worktrees/agent-a5af5c507bdc8c800` is locked by a dead agent and
     can be removed with `git worktree remove -f -f`.

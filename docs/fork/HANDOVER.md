@@ -344,11 +344,21 @@ scope peaked at 5.50 GiB with zero OOM events and shut down normally. The
 36 durable and dispatch tests and three channel fork tests pass. See
 `p5-managed-replay-fixed-evidence.log` in the private state directory.
 
-The live planner's reads still need the Dolt graph. Approval and context
-materialization need to address the verified owner before switching the
-editor and agents. The managed probe checked replay and lifecycle. The
-independent-edit, publication and saved-revision archive evidence is from
-the native fixture in `p5-hosted-retire-final.log`.
+The existing edit planner now reads placement through an exact revision
+interface. The Dolt participant resolves the public state reference to the
+expected branch commit before reading its coordinates without a checkout.
+The real-engine fixture used the planner to edit both copies of the 5,135-file
+workspace and refused an unrelated state. It published one saved revision
+and archived the other. Its host approval, allocation and deletion
+substitutions are unchanged. The 19 focused Base tests and all four Base
+typecheck profiles pass. See `p5-native-edit-plan.log` in the private state
+directory.
+
+The normal editor and agent routes still need to use the participant planner
+and persist its provenance and content effects. Approval and materialization
+need to address the verified owner before cutover. The managed probe checked
+real replay and lifecycle independently of the native fixture's edit and
+publication checks.
 
 The real replay also supplied a checkout benchmark with 10,000 local rows
 and two distinct committed file states. At the runtime's default NORMAL

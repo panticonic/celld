@@ -498,6 +498,23 @@ OOM kills. The hook and registry were removed. Both typechecks, 145 host
 tests and eight Base tests passed. See
 `p5-managed-filesystem-fixed-evidence.log`.
 
+Host `9b9f14fee` routes ordinary file and repository reads, edits, moves,
+copies, saves, discard and protected publication through the admitted
+participant while that history is attached. The service checks exact
+references against the participant's visible history. Base `98d5cf2`
+resolves an exact repository identity without retrieving file bytes.
+Both typechecks, 187 host tests and eight Base participant tests passed.
+The native fixture verified the repository lookup and inaccessible
+unpublished references. See `p5-public-vcs-check.log` and
+`p5-public-catalog-native.log`.
+
+Base `64dfc1b` and host `8e23bfbc5` prepare filesystem consent for
+publication and discard from the two exact native placements. The
+native probe verified both sides of a file rename, both repository
+paths after a move and an empty diff for duplicate revisions. The
+checks passed with 102 host tests, eight Base tests and both typechecks.
+See `p5-public-consent-native.log` and `p5-public-consent-check.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes, remaining structural choices and
@@ -831,7 +848,7 @@ those of `docs/dolt-redesign.md` §10.
 | P2b General dynamic code    | **Done.**<br>• `hostCode` (`packages/durable/src/codeHost.ts`); the admission service `dynamicCodeService` (`admit`, `release`, `reset`, `dispose`); `EvalKernel` (Base `workers/eval-kernel`); `SessionDO` (Base `workers/session`).<br>• The CLI, panels, the system-test runner, the agent, the website spec and the headless test all pull.<br>• `evalService`, `EvalDO`, `UNSAFE_EVAL`, `resultReceiver`, redelivery, `evalEngine` and `settle` are deleted. The remaining `rg` hits are D5 migration code and deliberate guards. |
 | P3 Durable services         | **Done.** `WorkspaceStateDO` is a Dolt cell, with a replaying import from the retired `WorkspaceDO`; the maintenance journal and `cloneDO` are deleted.                                                                                                                                                                                                                                                                                                                                                                |
 | P4 Agent system             | **Mostly done**, see below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| P5 GAD decentralized        | Participant storage, exact-commit approvals, published context integration, retirement archival, and offline replay are implemented locally. A fresh disposable workspace with 5,135 files replayed and forked successfully. Live workspace routing, the host approval connection, and physical participant retirement remain open. |
+| P5 GAD decentralized        | Local participant storage, replay, file routing, native integration, protected publication and retirement passed focused tests. A disposable managed instance verified separate editable folders and normal shutdown. Default startup cutover, the remaining public history methods, interactive publication, and acceptance benchmarks are open. |
 | P6 Chronolog capability     | **Not started.**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 **P4 in detail** (slices are in `docs/dolt-redesign.md` §6.8–§6.11):

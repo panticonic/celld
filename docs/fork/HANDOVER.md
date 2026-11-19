@@ -337,6 +337,20 @@ search tests also cover older intent rows and exact cross-channel
 trajectory visibility. See `p5-managed-runtime-source43-evidence.log`,
 `p5-native-search-check.log` and `p5-native-search-check2.log`.
 
+Base `7ee4720` and host `43bb9894f` attach read-memory to the exact
+participant revision and returned content hash. Authored episodes and
+saved events come from native history. Recorded command invocation
+coordinates resolve through the existing trajectory mirror. In managed
+run `runtime-source44` on the pinned `82a5781` runtime, the signed author
+read their private authoring intent and file history and received `stale`
+for a different hash. The reader received `unmanaged` before publication
+and until their own explicit merge. After merging, the reader recovered
+the exact original work and saved event. The instance stopped normally
+with a 4.20 GiB peak and zero memory limit or OOM events. The 83 focused
+host tests, 39 Base tests, host and four Base type checks, and targeted
+host lint passed. See `p5-managed-runtime-source44-evidence.log` and
+`p5-native-file-memory-check.log`.
+
 **Native checkout measurement.** The replayed workspace had 5,135 versioned
 files and 10,000 local table rows. Each warm run had 200 quiet checkouts and
 200 after a local write, alternating between distinct revisions. Collecting

@@ -144,31 +144,33 @@ const p2pEnv = (udp) => ({
   CELLD_P2P_BIND: `127.0.0.1:${udp}`,
 });
 
+async function setupPeerNodes(t, example) {
+  const a = await freeUdpPort();
+  const b = await freeUdpPort();
+  t.vars.udp = { a, b };
+  Object.assign(t.celld.extraEnv, p2pEnv(a));
+  // The second node: the same project in a directory of its own.
+  const dir = `${t.workdir}-b`;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.cpSync(path.join(EXAMPLES_DIR, example), dir, { recursive: true });
+  const node = new Celld({
+    bin: t.celld.bin,
+    dir,
+    esbuild: t.celld.esbuild,
+    env: p2pEnv(b),
+    name: `${example}-b`,
+  });
+  t.vars.b = node;
+  t.onCleanup(async () => {
+    await node.kill(); // returns once the process has exited and logged its last line
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+}
+
 const p2p = {
   example: "p2p",
   title: "p2p: dial, closed on a clean end and a reset, an alarm's stream used by later requests, an inbound stream kept",
-  async setup(t) {
-    const a = await freeUdpPort();
-    const b = await freeUdpPort();
-    t.vars.udp = { a, b };
-    Object.assign(t.celld.extraEnv, p2pEnv(a));
-    // The second node: the same project in a directory of its own.
-    const dir = `${t.workdir}-b`;
-    fs.mkdirSync(dir, { recursive: true });
-    fs.cpSync(path.join(EXAMPLES_DIR, "p2p"), dir, { recursive: true });
-    const node = new Celld({
-      bin: t.celld.bin,
-      dir,
-      esbuild: t.celld.esbuild,
-      env: p2pEnv(b),
-      name: "p2p-b",
-    });
-    t.vars.b = node;
-    t.onCleanup(async () => {
-      await node.kill(); // returns once the process has exited and logged its last line
-      fs.rmSync(dir, { recursive: true, force: true });
-    });
-  },
+  setup: (t) => setupPeerNodes(t, "p2p"),
   steps: [
     run("both nodes are up with their own ids", async (t) => {
       await t.vars.b.start();
@@ -321,4 +323,52 @@ const egress = scripted(
   }),
 );
 
-export default [codegen, deadlinesDefault, deadlinesOff, residency, p2p, dolt, doltFacets, doltRemotes, egress];
+const doltRemoteP2P = {
+  example: "dolt-remote-p2p",
+  title: "Dolt remotes over authenticated P2P between independent deployments",
+  async setup(t) {
+    await setupPeerNodes(t, "dolt-remote-p2p");
+    const configPath = path.join(t.vars.b.dir, "wrangler.jsonc");
+    const peer = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    fs.writeFileSync(configPath, JSON.stringify({ ...peer, name: "dolt-remote-p2p-holder" }));
+  },
+  steps: [
+    run("fetch and push exchange exact commits and enforce the receiving peer and grant", async (t) => {
+      await t.vars.b.start();
+      const a = (await t.fetch("/id")).json.nodeId;
+      const b = (await t.fetch(`${t.vars.b.origin}/id`)).json.nodeId;
+      t.assert(/^[0-9a-f]{64}$/.test(a) && /^[0-9a-f]{64}$/.test(b) && a !== b, "independent nodes");
+      const post = async (origin, route, args, status = 200) => {
+        const reply = await t.fetch(`${origin}${route}`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(args),
+        });
+        t.assert(reply.status === status, `${route}: expected ${status}, got ${reply.status} ${reply.text.slice(0, 200)}`);
+        return reply.json;
+      };
+      const holder = t.vars.b.origin;
+      const endpoint = { peer: a, address: `127.0.0.1:${t.vars.udp.a}` };
+      const base = await post("", "/commit", { id: 1, body: "canonical" });
+      const wrongPeer = await post("", "/grant", { peer: a, label: "wrong peer" });
+      await post(holder, "/remote", { token: wrongPeer.token });
+      const refused = await post(holder, "/fetch", endpoint, 400);
+      t.assert(refused.code === "ERR_DOLT_REMOTE_FORBIDDEN", JSON.stringify(refused));
+
+      const grant = await post("", "/grant", { peer: b, label: "participant" });
+      await post(holder, "/remote", { token: grant.token });
+      const fetched = await post(holder, "/fetch", endpoint);
+      t.assert(fetched.branches.main === base.head, "fetched the exact canonical commit");
+      const local = await post(holder, "/commit", { id: 2, body: "participant" });
+      const before = (await t.fetch("/state")).json;
+      t.assert(JSON.stringify(before.notes) === '["canonical"]', "the participant edit stayed local");
+      await post(holder, "/push", endpoint);
+      const after = (await t.fetch("/state")).json;
+      t.assert(after.head === local.head && JSON.stringify(after.notes) === '["canonical","participant"]',
+        "the canonical deployment received the exact participant commit");
+      await post("", "/revoke", { id: grant.id });
+      const revoked = await post(holder, "/fetch", endpoint, 400);
+      t.assert(revoked.code === "ERR_DOLT_REMOTE_FORBIDDEN", JSON.stringify(revoked));
+    }),
+  ],
+};
+
+export default [codegen, deadlinesDefault, deadlinesOff, residency, p2p, dolt, doltFacets, doltRemotes, doltRemoteP2P, egress];

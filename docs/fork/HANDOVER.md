@@ -1032,9 +1032,12 @@ Everything in the status table of `docs/fork/design.md` is merged into
    - The full fork revision and per-target digests still need to be
      recorded in `targets.json` from the successful build run.
    - See `HANDOFF-celld-runtime.md`, "What remains".
-3. **The P2P carrier for Dolt remotes across workspaces.** The wire is
-   specified and carrier-neutral (`transport`, `remote.serve`), but no
-   cross-workspace run on two real nodes exists. P6 needs it.
+3. **The P2P carrier for Dolt remotes across deployments is proved.**
+   The two-node `dolt-remote-p2p` scenario passed on `b5742d1`.
+   It validates native fetch and push, exact commits, a wrong-peer
+   refusal and revocation. The P2P stream regression passed alongside
+   it. P6 still needs this carrier wired to Vibestudio's workspace
+   instances and Chronolog membership.
 4. **Known limits, documented and unfixed:**
    - A facet RPC in flight is not cancelled on abort; it rejects in
      JavaScript.

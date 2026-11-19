@@ -226,10 +226,12 @@ Over the [P2P binding](p2p.md), the serving object's `onp2pstream` reads one
 request from the stream, calls `remote.serve`, and writes the response; the
 holder's `transport` opens a stream, writes the request and reads the response.
 A grant with `peer` refuses a request whose carrier did not pass that key to
-`serve`, so a grant can be tied to a peer's endpoint id. `examples/dolt-remotes`
-runs the same shape with a loopback carrier (`transport=loopback`). **Not
-built:** the cross-workspace run of this over two real nodes; the protocol and
-the hooks are, the glue is the application's.
+`serve`, so a grant can be tied to a peer's endpoint id.
+[`examples/dolt-remote-p2p`](../../examples/dolt-remote-p2p) runs fetch and
+push over direct authenticated streams between independent deployments.
+The example checks peer binding, signed-in local work before publication,
+the exact resulting commit, and revocation. `examples/dolt-remotes` also
+exercises a loopback carrier (`transport=loopback`).
 
 ## Errors
 

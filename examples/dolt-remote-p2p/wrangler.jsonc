@@ -1,0 +1,16 @@
+{
+  "name": "dolt-remote-p2p",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": {
+    "bindings": [
+      { "name": "GRAPH", "class_name": "Graph" },
+      { "name": "CARRIER", "class_name": "Carrier" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_dolt_classes": ["Graph"], "new_sqlite_classes": ["Carrier"] }],
+  "celld": { "durable_objects": { "Graph": { "doltRemotes": true } } },
+  "p2p": [
+    { "binding": "P2P", "alpn": "celld/example-dolt-remote/1", "accept": { "class": "Carrier", "name": "remote" } }
+  ]
+}

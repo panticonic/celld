@@ -970,6 +970,18 @@ peaked at 3.50 GiB, recorded zero OOM kills, and stopped normally.
 See `p5-native-revert/verify3.log`, `p5-native-revert-check2.log`, and
 `p5-managed-runtime-source32-evidence.log`.
 
+Base `d19dbc0` and host `b673142d5` register, list, and retire ordinary
+runtime contexts in the installed history. The native probe verified
+literal prefix matching and retirement across restart. The managed
+workspace kept the original legacy freeze held while it registered and
+retired a context. Two signed sessions then opened independently and ran
+the private text and project undo workflow. The 230 host tests, 226
+Base tests and both typechecks passed. The managed workspace peaked at
+3.64 GiB, recorded zero OOM kills, and stopped normally. See
+`p5-native-context-lifecycle/verify.log`,
+`p5-native-context-lifecycle-check.log`, and
+`p5-managed-runtime-source33-evidence.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover
@@ -1508,6 +1520,14 @@ those of `docs/dolt-redesign.md` §10.
   tests, full typecheck, and lint passed. The command provider ran on
   Linux. Other provider checks use fixtures. See
   `chronolog-secret-provision-check2.log`.
+
+- Chronolog `8b69e1f` captures the exact native revision and
+  transaction-log digest in signed snapshot evidence, using the same
+  evidence format as the legacy adapter. The UTC and Pacific/Apia
+  native fixtures produced the same signed manifest and used its
+  digest to seed a fresh object. The 20 focused tests, typecheck, and
+  lint passed. Native archive transport and restore are still open. See
+  `chronolog-native-snapshot-evidence.log`.
 
 - Chronolog `aa64e21` runs the shared conformance replay fixture in
   independent celld nodes under UTC and Pacific/Apia. Both reached

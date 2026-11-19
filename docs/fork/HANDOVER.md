@@ -933,6 +933,16 @@ run peaked at 3.77 GiB with zero OOM kills and shut down normally.
 See `p5-owned-branch-merge-check2.log` and
 `p5-managed-runtime-source29-evidence.log`.
 
+Base `d7d9fd0` and host `1e2e16c90` copy from an admitted private
+branch and retain the exact source file and revision in provenance.
+The signed writer copied bytes from its saved child, verified that
+lineage and retried the same command. Shared main stayed at the
+previous revision and the second participant could not copy the
+private file. The 113 host tests, 226 Base tests and both typechecks
+passed. The managed run peaked at 3.64 GiB with zero OOM kills and
+shut down normally. See `p5-owned-copy-check.log` and
+`p5-managed-runtime-source30-evidence.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

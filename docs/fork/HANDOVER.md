@@ -245,6 +245,28 @@ The 10,000-turn fork latency remains outstanding. The isolated P5 worktrees
 are `base-gad-participants` and `gad-participant-admission`. The first
 participant fork and conflict-merge probe passes against the real runtime.
 
+**Private content and publication, November 19.** Base `e8a090c` resolves
+file content through the caller's admitted Dolt branch or the exact protected
+published event. Host `1a72f98b6` applies this check to raw blob reads and to
+manifests that include private file content. The authenticated uploader can
+read its own unimported bytes.
+
+In managed run `runtime-source38`, the signed author read a private file,
+an unimported upload and their tree. Another signed session could not access
+the four exact byte digests or the typed tree. After an exact one-file
+publication approval, the second session read the published file, retained
+its previous working revision and still could not read the unimported upload.
+The run used the held replay migration and the packaged `c8dfc2e` runtime.
+It stopped normally with a 4.47 GiB peak and zero recorded memory-limit
+or OOM events. Host checks passed 180 tests, targeted lint and type checks.
+Base checks passed 226 tests and all four type configurations. One separate
+repeat of the Base compiler check was killed by systemd-oomd during user
+slice reclaim at 5.8 GiB. The evidence is in
+`p5-managed-runtime-source38-evidence.log` and
+`p5-native-raw-blob-final-host.log` under the private state directory.
+Existing workspaces still need their first-time cutover, including scope
+reconstruction for previously stored private content.
+
 P5 has a local implementation on Base `feat/gad-participant-cells` and
 host `feat/gad-participant-admission`. Base `69ffa6b` and host `ccf995f0b`
 use native pin `60f0bf8`.
@@ -1633,6 +1655,13 @@ pushes them.
    capability still need their current adapters. See
    `chronolog-current-celld-package-check.log` and
    `chronolog-current-celld-iroh-check4.log`.
+   Commit `4872da9` connects the current participation transport to admitted
+   Iroh endpoints, including incoming handoffs and late completion after
+   cancellation. The 39 focused tests, type check and targeted lint passed.
+   Two nodes ran the independently installed package
+   `chronolog-peer-session-4872da9f.tgz` against the pinned runtime. Both
+   wrote, then the restarted peer retained its identity, retried exactly and
+   received the next write. See `chronolog-celld-admitted-transport-native.log`.
    Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
    below.
    - A Chronolog node per workspace node and the `chronolog` host service.
@@ -1661,6 +1690,13 @@ pushes them.
      at the previous preview target. The other template branches
      previewed cleanly. Refresh the previews against the owner's target commits
      before integrating and test the combined changes after resolving conflicts.
+     The November 19 previews against the current targets found four host
+     conflicts at `e400c4036` (desktop and headless console history, the shared
+     console file and the original `WorkspaceDO`), two Base conflicts at
+     `c0f4d04` (agent package and pubsub channel), and four System-testing
+     conflicts at `5d68e84` (the skill package, two runners and the contract).
+     Pi `7016ecdc9` and `c6d518177` merge cleanly. Current Chronolog
+     `4872da9` is a fast-forward from `d014879`.
    - Delete the retired `WorkspaceDO` class and its import driver in the
      release after the one that ships P3 (see the handoff).
 6. **Chronolog cleanup** (§4.4 items 1–6). Can be done before P6, which

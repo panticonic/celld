@@ -229,7 +229,7 @@ A grant with `peer` refuses a request whose carrier did not pass that key to
 `serve`, so a grant can be tied to a peer's endpoint id.
 [`examples/dolt-remote-p2p`](../../examples/dolt-remote-p2p) runs fetch and
 push over direct authenticated streams between independent deployments.
-The example checks peer binding, signed-in local work before publication,
+The example checks peer binding, working-copy isolation before publication,
 the exact resulting commit, and revocation. `examples/dolt-remotes` also
 exercises a loopback carrier (`transport=loopback`).
 

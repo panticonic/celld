@@ -22,6 +22,7 @@ $dir = Join-Path $root "examples\$Example"
 $port = 9876
 $base = "http://127.0.0.1:$port"
 $logs = Join-Path $env:RUNNER_TEMP "celld-$Example"
+$nodes = @()
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 
 function Start-Dev([bool]$clean) {
@@ -35,15 +36,21 @@ function Start-Dev([bool]$clean) {
     return $process
 }
 
-function Wait-Ready([int]$seconds) {
+function Wait-Ready([System.Diagnostics.Process]$process, [int]$seconds) {
     $deadline = (Get-Date).AddSeconds($seconds)
     while ((Get-Date) -lt $deadline) {
+        if ($process.HasExited) { throw "celld dev exited with code $($process.ExitCode)" }
         try {
             $response = Invoke-WebRequest -Uri "$base/" -UseBasicParsing -TimeoutSec 5
             if ($response.StatusCode -eq 200) { return $response }
         } catch { Start-Sleep -Milliseconds 500 }
     }
     throw "celld dev did not answer on $base within $seconds s"
+}
+
+function Get-DevNodes([System.Diagnostics.Process]$process) {
+    Get-CimInstance Win32_Process -Filter "ParentProcessId = $($process.Id) AND Name = 'celld.exe'" |
+        ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }
 }
 
 function Show-Logs {
@@ -60,7 +67,8 @@ function Get-Count {
 
 try {
     $supervisor = Start-Dev $true
-    $ready = Wait-Ready 180
+    $ready = Wait-Ready $supervisor 180
+    $nodes = @(Get-DevNodes $supervisor)
     if ($Counter) {
         $first = Get-Count
         $second = Get-Count
@@ -73,15 +81,17 @@ try {
     }
 
     if ($Restart) {
+        if ($nodes.Count -eq 0) { throw 'No live node was found under the owned supervisor' }
         Stop-Process -Id $supervisor.Id -Force
         Start-Sleep -Seconds 5
-        $left = @(Get-Process -Name celld -ErrorAction SilentlyContinue)
+        $left = @($nodes | Where-Object { -not $_.HasExited })
         if ($left.Count -gt 0) {
             $left | Stop-Process -Force
             throw "the node outlived its supervisor ($($left.Count) celld process(es)); the job object did not apply"
         }
         $supervisor = Start-Dev $false
-        Wait-Ready 180 | Out-Null
+        Wait-Ready $supervisor 180 | Out-Null
+        $nodes = @(Get-DevNodes $supervisor)
         $third = Get-Count
         if ($third -ne 3) { throw "counter gave $third after the restart, expected 3" }
         Write-Host "counter after hard kill: $third"
@@ -90,7 +100,10 @@ try {
     Show-Logs
     throw
 } finally {
-    if ($supervisor -and -not $supervisor.HasExited) { Stop-Process -Id $supervisor.Id -Force }
+    if ($supervisor -and -not $supervisor.HasExited) {
+        $nodes += @(Get-DevNodes $supervisor)
+        Stop-Process -Id $supervisor.Id -Force
+    }
     Start-Sleep -Seconds 1
-    Get-Process -Name celld -ErrorAction SilentlyContinue | Stop-Process -Force
+    $nodes | Sort-Object Id -Unique | Where-Object { -not $_.HasExited } | Stop-Process -Force
 }

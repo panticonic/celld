@@ -65,6 +65,19 @@ jobs:
       - name: Windows port unit tests
         run: cargo test -p celld --lib --locked -- fsname
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install the Windows esbuild executable
+        run: |
+          $tools = Join-Path $env:RUNNER_TEMP 'celld-smoke-tools'
+          npm install --prefix "$tools" --no-save --ignore-scripts '@esbuild/win32-x64@0.28.1'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $esbuild = Join-Path $tools 'node_modules\@esbuild\win32-x64\esbuild.exe'
+          if (-not (Test-Path -LiteralPath $esbuild -PathType Leaf)) { throw 'esbuild executable is absent' }
+          "CELLD_ESBUILD=$esbuild" >> $env:GITHUB_ENV
+
       - name: Smoke, examples/hello
         run: ./.github/windows-smoke.ps1 -Example hello -Expect 'Hello from cells'
 

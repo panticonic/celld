@@ -722,6 +722,17 @@ persisted adoption itself. Both typechecks, 76 host and package
 tests, and 38 Base tests passed. See `p5-native-file-timeline-final.log`
 and `p5-file-timeline-check.log`.
 
+Host `494a388b3` and `f726d8623` carry a verified caller's
+working revision into runtime image preparation. Byte-identical
+source can reuse one build key while each signed revision keeps a
+separate stored execution digest. The first private Durable Object
+image does not install the class's default image, and its RPC
+authority reads use the sealed execution digest. The host
+typecheck and suites of 64 build and 264 runtime tests passed. See
+`p5-exact-build-check.log` and `p5-runtime-exact-source-final.log`.
+Reserved activation, explicit unbound references, and declaration
+or development builds still need their cutover review.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

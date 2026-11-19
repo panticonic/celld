@@ -802,6 +802,76 @@ that delta. Both typechecks, 46 host and 29 Base tests passed. See
 `p5-external-history-check.log` and
 `p5-native-external-history-fixture/verify.log`.
 
+Host `e0794b442` applies the same participant-history permission check to
+ordinary builds and runtime launches that name raw content. In signed
+managed instance `p5-managed-runtime-source12-1118`, the writer built and
+launched from its private source hash and recovered the original exact
+execution. The second session saw the unedited version and was refused
+build, launch, and execution access with the exact private identifiers.
+See `p5-raw-build-final.log` and
+`p5-managed-runtime-source12-evidence.log`. The earlier source11 run was
+killed by `systemd-oomd` after loading the workspace and cold-building three
+templates in one scope. The source12 run completed after preparing the
+templates separately. Its managed scope peaked at 4.73 GiB and recorded
+no memory limit or OOM events. Its registry and instance were stopped.
+
+Base `29532f1` captures a private fork at its first chosen revision. It
+transfers the revision directly with a grant for the destination storage
+owner and removes the temporary branch and grant after acknowledgment.
+Host `267db5ae5` uses this procedure for an authenticated semantic-only
+fork. The native fixture on the pinned Linux binary verified separate
+copies, receipt retries after the parent advanced and after the grant was
+revoked, an independent child edit, and publication of the child's saved
+revision. An unrelated copy stayed at shared main. The fixture supplied
+its own carrier and approval receipt. The 227 focused host tests and
+eight Base tests passed. See `p5-context-fork-small-checks.log` and
+`p5-native-scoped-context-fork/verify.log`.
+
+Host `9b054bc5f` and `b50383244` recognize the verified relationship
+between an active eval executor and its owner when forking or editing an
+owned child context. The signed CLI run `p5-managed-runtime-source15-1118`
+forked the original private edit, changed both branches independently,
+retried the fork without replacing the child's work, and kept the working
+revisions private from a second session. The 212 focused host tests
+passed. The managed scope peaked at 3.31 GiB with no memory-limit or OOM
+events and shut down normally. See `p5-signed-fork-authority.log` and
+`p5-managed-runtime-source15-evidence.log`.
+
+Base `b1fb374` and `4810363` and host `d62dc5241` durably close
+an owned child branch while its parent stays active. The native fixture
+retained the saved child revision, dropped an unsaved edit, and retried
+successfully after a lost archive reply. The signed CLI saved and closed
+the child and verified the parent still had its later working revision.
+The original signed run exposed the engine's 128-character grant label
+limit for real participant identities. The repeat passed with a bounded
+label, peaked at 3.51 GiB, recorded zero OOM events, and shut down normally.
+The 261 host tests, eight Base tests, and both typechecks passed. See
+`p5-native-context-branch-retirement/verify.log`,
+`p5-fork-retirement-typechecks.log`, and
+`p5-managed-runtime-source17-evidence.log`.
+
+Base `5a9d065` and host `b27bc8ba7` route exact file and history
+reads to the branch that contains the requested reference inside the
+admitted caller's context graph. A signed writer read its child's
+private file, and the second signed session received `InvalidReference`
+when given that same application and file coordinate. The probe's
+wrapper expected different error text. The signed CLI result records
+the refusal and neither side reported an OOM kill. See
+`p5-managed-runtime-source18-{writer,reader}.log`. The native fixture,
+103 focused host tests, and both typechecks passed.
+
+Base `438b03e` and host `7da011364` keep build-source receipts in the
+participant cell and recheck branch reachability when using them. The
+host reconstructs the requested bytes and checks their digest. The
+native fixture recovered the exact private receipt after restarting the
+node. A separate signed writer advanced its workspace, then compiled and
+launched the earlier exact source. The second signed participant was
+refused access with the exact hash. The 89 focused host tests and both
+typechecks passed. The signed test peaked at 3.73 GiB, recorded zero OOM
+events, and shut down normally. See
+`p5-native-build-source-receipt/verify.log` and
+`p5-managed-runtime-source19-evidence.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover
@@ -1096,6 +1166,14 @@ passed the crash, restore, and delivery counts. The full sweep recorded
 47 passes, the existing R2 ETag XFAIL, and two model-dependent skips.
 See `p5-verified-fork-e2e.log` and `p5-verified-fork-queue-repeat.log`.
 
+The full serial rerun on the pinned `c8dfc2e` Linux binary passed 48
+scenarios, including queue restore and container allocation. There
+were zero unexpected failures, the existing R2 ETag XFAIL, and two
+model-dependent skips. It took 605 seconds and peaked at 397 MiB with
+no memory-limit or OOM events. See `p5-final-fork-e2e.log` and
+`p5-final-fork-e2e-memory.log`. The Windows and artifact workflows
+also passed at `e25fcad`.
+
 1. **`python` e2e complete.** Runtime `b5742d1` validates Pyodide's
    typed import-and-re-export adapter before compiling it. The Python
    bundle uses the helper within the existing global code-generation policy.
@@ -1286,6 +1364,14 @@ those of `docs/dolt-redesign.md` §10.
   passed against the packaged Linux binary from `0410398`. See
   `chronolog-pinned-release-check.log`.
 
+- Chronolog `12554c8` starts the celld materializer's replay at the
+  exact first-parent commit preceding a late transaction. The native
+  conformance test asserts that it skips the unchanged prefix. The two
+  time zones produced the same replay digest, and both replicas agreed
+  after late insertion and restart on the pinned `c8dfc2e` Linux binary.
+  Typecheck, lint and the focused materializer tests passed. See
+  `chronolog-exact-replay-check.log`.
+
 - Chronolog `aa64e21` runs the shared conformance replay fixture in
   independent celld nodes under UTC and Pacific/Apia. Both reached
   revision 2 at commit `148871e88e2489f8992004bc75a328a6c9240929` with
@@ -1317,9 +1403,6 @@ those of `docs/dolt-redesign.md` §10.
      - port the remaining chronologd features: snapshots and fork-seed,
        static membership, secret-store backends.
   4. node-core tests and a chaos harness against the celld host.
-  5. Replay from the commit at the exact divergence point instead of the
-     nearest `chronolog_cp_*` branch.
-  6. Drop or keep the debug endpoint `/admin/authorized`.
 
 ---
 

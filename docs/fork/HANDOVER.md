@@ -943,6 +943,21 @@ passed. The managed run peaked at 3.64 GiB with zero OOM kills and
 shut down normally. See `p5-owned-copy-check.log` and
 `p5-managed-runtime-source30-evidence.log`.
 
+Base `3c4712f` saves a complete snapshot in an independent working copy
+through one branch advance. The native probe verified replacement by
+stable file identity, exact external provenance, isolation from the other
+copy and shared main, and the same receipt after a process restart.
+Host `b23bec141` requires bytes independently supplied by the verified
+producer for a native import. Knowing or retaining the digest does not
+prove an upload. One signed session uploaded, imported in a separate run,
+read the exact bytes, and retried the same command. A second signed
+session could not import by that digest. The 177 host tests, 226 Base
+tests and both typechecks passed. The managed instance peaked at 3.74 GiB,
+recorded zero OOM kills, and stopped normally. See
+`p5-native-import-snapshot/verify3.log`, `p5-host-snapshot-upload-check3.log`,
+and `p5-managed-runtime-source31-evidence.log`. The general blobstore's
+digest-only reads still need participant visibility enforcement.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

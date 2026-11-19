@@ -1787,13 +1787,22 @@ pushes them.
    verified the same signer and storage identity after restart, the
    class-only binding, and the absence of plaintext signing bytes in the
    runtime store. See `chronolog-celld-current-signer-native2.log`.
+   The same installed package passed an invitation exercise on two native
+   Iroh nodes. The fixture verified the second device had no reader grant
+   before the owner signed a new control generation. The invitation carried
+   no epoch key. The invited device received it and the verified existing
+   prefix over Iroh, wrote on the shared history, and retained the exact
+   enrollment, generation and retry across restart. See
+   `chronolog-celld-current-invite-native3.log`. This exercised current
+   Chronolog enrollment with a host-managed signer in a fixture. The
+   Vibestudio invitation endpoint and its approval flow remain open.
    Fork `2ec8d17` adds the principal row and transaction identities used by
    current Chronolog SQL. The executor pins both to one program and the engine
    digest identifies the changed execution profile. All 75 focused Rust
    tests passed. A locally built runtime verified exact integers above the
    JavaScript safe-integer bound, identity cleanup after rejection, validation and restart
    on a real Dolt cell. See `celld-current-chronolog-identity-native-exact.log`.
-   The current local Vibestudio pins name the four verified `a6dce5d` artifacts.
+   Vibestudio `338d886d3` locally pins all four verified `82a5781` artifacts.
    The clean current Chronolog SQL package `870fca2e-sql` passed 71 focused
    tests for owner rows, protected schema, deterministic replay and final
    prefixes. A separate Node consumer installed the archive and passed its
@@ -1818,7 +1827,7 @@ pushes them.
    documented R2 expected failure and two provider-dependent skips.
    That run peaked at 569 MiB with no OOM or limit events.
    The Linux, macOS and Windows artifact matrix is run 44518812004.
-   Vibestudio's current local pins remain at `a6dce5d`.
+   The four downloaded binaries matched their CI receipts and pinned hashes.
    This fixture prepares the schema and grant as trusted setup. The
    current materializer still needs the native transaction adapter for
    signed schema and platform operations.

@@ -291,6 +291,12 @@ mod build_bundled {
         println!("cargo:rerun-if-env-changed=LIBSQLITE3_FLAGS");
 
         cfg.compile(lib_name);
+        if win_target() {
+            // DoltLite's bundled TLS uses these Windows APIs even in consumers
+            // that do not otherwise link Windows crypto or certificate storage.
+            println!("cargo:rustc-link-lib=bcrypt");
+            println!("cargo:rustc-link-lib=crypt32");
+        }
 
         println!("cargo:lib_dir={out_dir}");
     }

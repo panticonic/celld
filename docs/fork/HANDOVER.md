@@ -777,6 +777,31 @@ build checks. That scope peaked at 5.50 GiB, recorded zero OOM kills, and
 shut down normally. See `p5-history-freeze-check.log`,
 `p5-managed-runtime-source8-evidence.log` and the managed shutdown log.
 
+Base `04c91f5` persists the participant identity entitled to restore a
+migrated private context. Host `e133958b9` requires the recorded owner
+to match the signed caller and reads it again after host restart. Contexts
+without a verified owner stay in retained replay storage. A regular
+participant with the same context name starts from shared main. The
+managed run observed the saved owner on reread and refused reassignment.
+
+Host `45243396c` checks access to an execution's exact source before
+reporting its retention record or content roots. Multiple executions of
+the same compiled bytes retain separate inspection results. With two signed
+sessions, the writer inspected its own execution and the reader received the
+same response for its digest as for an unknown digest. The host and template
+typechecks, 182 host tests and 38 Base tests passed. See
+`p5-replay-owner-check.log`, `p5-replay-owner-base.log` and
+`p5-managed-runtime-source10-evidence.log`. This run stopped normally with
+zero recorded OOM kills.
+
+Base `d2434bc` and host `106255809` preserve the authoring command, work
+unit, and changes behind a replayed external delta. The native Linux
+probe staged a generated-template update and returned the same delta
+and change ID at the published event. The prior event had no access to
+that delta. Both typechecks, 46 host and 29 Base tests passed. See
+`p5-external-history-check.log` and
+`p5-native-external-history-fixture/verify.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover
@@ -1063,6 +1088,14 @@ the runtime reported memory shedding. The container scenario passed
 on the same binary in a separate 6 GiB scope with swap disabled.
 See `p5-pinned-fork-e2e.log` and `p5-pinned-fork-container.log`.
 
+The next full sweep used the pinned Linux x64 binary from `c8dfc2e`
+in the 6 GiB scope. Container load balancing passed. The queue restore
+case timed out in the full run. Both durability steps now verify the
+enqueue response explicitly. An isolated run on the same binary
+passed the crash, restore, and delivery counts. The full sweep recorded
+47 passes, the existing R2 ETag XFAIL, and two model-dependent skips.
+See `p5-verified-fork-e2e.log` and `p5-verified-fork-queue-repeat.log`.
+
 1. **`python` e2e complete.** Runtime `b5742d1` validates Pyodide's
    typed import-and-re-export adapter before compiling it. The Python
    bundle uses the helper within the existing global code-generation policy.
@@ -1079,12 +1112,29 @@ See `p5-pinned-fork-e2e.log` and `p5-pinned-fork-container.log`.
      macOS desktop packaging and for the headless server package.
      Staging verifies the pinned fork commit, target, format and digest.
      All 11 artifact and package helper tests passed.
-   - [Artifact run 44456676942](https://github.com/panticonic/celld/actions/runs/44456676942)
-     built all four platforms at `0410398`. Host `597a6d235` records
-     the verified full revision and four actual binary digests in
-     `targets.json`. All four payloads were staged in the isolated
-     host worktree and the Linux x64 payload reported version 0.6.3.
-     The Windows smoke and packaged application gates remain separate.
+   - [Artifact run 44460685656](https://github.com/panticonic/celld/actions/runs/44460685656)
+     built all four platforms at `c8dfc2e`. Host `3a49d5972` pins their
+     verified checksums. The four payloads were staged and the Linux x64
+     payload reported version 0.6.3.
+   - Fork `172f9e9` uses native filesystem paths for locally captured
+     LTX files. The Windows suite passed the verbatim path test,
+     hello and counter startup, and counter recovery after a forced
+     supervisor stop. See [Windows run 44460685503](https://github.com/panticonic/celld/actions/runs/44460685503).
+   - Host `aef332742` moved the retired macOS 14 CI jobs to macOS 15.
+     The installer still declares macOS 14 as its minimum version.
+     The workflow suite passed all 29 checks. See the
+     [GitHub runner retirement announcement](https://github.com/actions/runner-images/issues/13518).
+   - Host `e54a8f1be` restores the packaged preparation recipe receipt
+     when a worktree rebuild reuses the same verified host generation.
+     The production build and 24 packaging and generation tests passed.
+     The staged headless install resolved the unpublished Pi packages
+     through an isolated local registry and installed all 38 vendored
+     runtime packages. The published System template still imports the
+     removed `@vibestudio/service-schemas/evalEngine` API. The incompatible
+     preparation was stopped and joined after the same error recurred.
+     The owner must publish the matched template revisions and update
+     the release pins before an installed headless candidate can pass.
+     See `p5-headless-with-pi.log`.
    - See `HANDOFF-celld-runtime.md`, "What remains".
 3. **The P2P carrier for Dolt remotes across deployments is proved.**
    The two-node `dolt-remote-p2p` scenario passed on `b5742d1`.
@@ -1228,6 +1278,13 @@ those of `docs/dolt-redesign.md` §10.
   files: 81 passed, 2 skipped.
 
 ### 4.4 Chronolog on the fork (`feature/celld-host`)
+
+- Chronolog `f452310` removed its temporary peer-authorization
+  debugging route and documented the actual object-owned stream
+  lifecycle. Full lint and typecheck, native conformance in UTC and
+  Pacific/Apia, and the two-node test including replay and restart
+  passed against the packaged Linux binary from `0410398`. See
+  `chronolog-pinned-release-check.log`.
 
 - Chronolog `aa64e21` runs the shared conformance replay fixture in
   independent celld nodes under UTC and Pacific/Apia. Both reached

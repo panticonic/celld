@@ -2206,6 +2206,16 @@ pushes them.
    receipt. See `chronolog-current-main-d1cc92b-check.log`,
    `chronolog-d1cc92b-replay-native.log`,
    `chronolog-d1cc92b-workspace-native.log`, and `native-gad-d1cc92b.log`.
+   Host `f64f4d2b2` stages the Chronolog package in application release
+   builds. Once the owner publishes the Chronolog release run, set
+   `CHRONOLOG_RELEASE_RUN`, `CHRONOLOG_RELEASE_SOURCE`, and
+   `CHRONOLOG_RELEASE_SHA256` to its run, source, and reviewed archive digest.
+   The host checks the successful release workflow, exact archive and
+   package provenance before compiling. The 29 workflow checks passed.
+   A local fixture exercised the production staging script with the sealed
+   archive and a fixture GitHub response. See
+   `chronolog-release-staging-host.log` and
+   `chronolog-release-staging-ci-probe.log`.
    The next installed check needs two workspaces on the matching combined
    release and the normal creation review on the seeded destination.
    The local merged host `29eead0fa` and Base `404f345` passed
@@ -2226,7 +2236,10 @@ pushes them.
    their source, platform, and digest, and ran the Linux x64 executable.
    Host `f5cbd9d82` pins all four. All nine focused host artifact tests
    passed. See `celld-v6-complete-verification.json` and
-   `celld-v6-complete-pin-host.log`. The matching companion releases
+   `celld-v6-complete-pin-host.log`. The pinned Linux binary also passed the
+   signed publication and fresh-history import. See
+   `native-gad-d1cc92b-ci-linux.log` and
+   `native-gad-seed-protected-ci-linux.log`. The matching companion releases
    are still local candidates.
    Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
    below.
@@ -2247,7 +2260,7 @@ pushes them.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
      Current local merge candidates are Host `integration/gad-participant-main`
-     (`03d25cf57`) and Base `integration/gad-participant-base-main`
+     (`57f501437`) and Base `integration/gad-participant-base-main`
      (`05ecc1b`). Both include the signed-receipt retries and initial
      shared history workflow above. The Host
      merge retains one console-history filter and

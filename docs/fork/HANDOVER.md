@@ -1735,7 +1735,12 @@ those of `docs/dolt-redesign.md` §10.
 - **Gate:** green against the known baselines. The real-fork suites are 15
   files: 81 passed, 2 skipped.
 
-### 4.4 Chronolog on the fork (`feature/celld-host`)
+### 4.4 Earlier Chronolog port (`feature/celld-host`)
+
+The current port targets Chronolog main `d014879` and is recorded in §6. The
+evidence below belongs to the older host architecture. Current main has
+already removed the daemon and SSB transport. The current
+`materializer-doltlite` package provides the active native adapter.
 
 - Chronolog `f452310` removed its temporary peer-authorization
   debugging route and documented the actual object-owned stream
@@ -2164,13 +2169,17 @@ pushes them.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
      Current local merge candidates are Host `integration/gad-participant-main`
-     (`3be428760`) and Base `integration/gad-participant-base-main`
-     (`f4e74da`). The Host merge retains one console-history filter and
+     (`29eead0fa`) and Base `integration/gad-participant-base-main`
+     (`46217b5`). The Host merge retains one console-history filter and
      pagination implementation and the read-only legacy workspace importer.
      The active Dolt workspace state already contains upstream's slot
      history selection fix. The Base merge preserves the sealed Pi pins
-     and upstream messaging and channel origin support. These candidates
-     still need combined verification before release.
+     and upstream messaging and channel origin support. The combined
+     checks passed on Base `404f345`. Base `46217b5` adds the upstream
+     bindings required by the integrated System-testing candidate
+     `b82cffe650`. All 31 focused System-testing tests passed with
+     the sealed Pi packages served from an isolated registry. See
+     `p5-current-system-testing-check2.log`.
      Use host `feat/gad-participant-admission` and Base
      `feat/gad-participant-cells`, which already include the earlier P0/P2
      changes. A preview against the locally fetched main refs found host

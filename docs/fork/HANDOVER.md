@@ -1623,6 +1623,16 @@ pushes them.
    Port through the current device, storage, execution and peer transport
    interfaces in `/home/werg/chronolog-worktrees/celld-peer-session` on
    `feature/celld-peer-session`.
+   The current port has a celld SQLite record store and peer-session entry.
+   Package `41f878a` retained a signed event, device identity and exact
+   retry across process restart on the pinned runtime. Commit `31600b7`
+   uses current peer-session framing over object-owned Iroh streams. Two
+   native peers wrote to the same authenticated history, then one restarted,
+   retried its exact operation, and followed a new write. The 67 focused
+   tests and typecheck passed. The native SQL owner policy and Vibestudio
+   capability still need their current adapters. See
+   `chronolog-current-celld-package-check.log` and
+   `chronolog-current-celld-iroh-check4.log`.
    Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
    below.
    - A Chronolog node per workspace node and the `chronolog` host service.

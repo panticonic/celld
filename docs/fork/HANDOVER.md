@@ -2142,6 +2142,13 @@ pushes them.
    the fixture retired. This run peaked at 3.99 GiB with zero OOM events
    or hard-limit hits and made no model calls. See
    `chronolog-managed66-1119-evidence.log`.
+   Host `caf30295e` and Base `d88407b` recover an interrupted host
+   projection on retry and preserve the exact signed receipt after
+   shared history advances again. The native two-node test returned
+   the original receipt without moving the newer head. See
+   `native-gad-chronolog-receipt.log`. Targeted lint and all 15 host
+   ingress and protected history tests passed in
+   `chronolog-history-receipt-host.log`.
    The local merged host `29eead0fa` and Base `404f345` passed
    the host type checks, the authority catalog check, 24 host tests,
    four portable type configurations, and 223 focused template tests.
@@ -2180,8 +2187,9 @@ pushes them.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
      Current local merge candidates are Host `integration/gad-participant-main`
-     (`29eead0fa`) and Base `integration/gad-participant-base-main`
-     (`46217b5`). The Host merge retains one console-history filter and
+     (`3bcd66828`) and Base `integration/gad-participant-base-main`
+     (`07d18d3`). Both include the signed-receipt retries above. The Host
+     merge retains one console-history filter and
      pagination implementation and the read-only legacy workspace importer.
      The active Dolt workspace state already contains upstream's slot
      history selection fix. The Base merge preserves the sealed Pi pins

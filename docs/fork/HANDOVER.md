@@ -351,6 +351,17 @@ host tests, 39 Base tests, host and four Base type checks, and targeted
 host lint passed. See `p5-managed-runtime-source44-evidence.log` and
 `p5-native-file-memory-check.log`.
 
+Base `b992db2` and host `092c6c0c6` now walk causes, cohorts and
+rejections through admitted native revisions. Managed run
+`runtime-source46` verified stable cause pagination, the exact cohort
+save, rejection of a private work-unit probe, and the attempted intent
+and applied change behind an undo. It used the same prepared release as
+`runtime-source45`, whose review was still preparing when the fixture's
+approval deadline expired. The rerun adjusted the fixture deadline and polling interval.
+It stopped normally at 4.33 GiB with zero memory-limit or OOM events.
+See `p5-managed-runtime-source46-evidence.log` and the focused host and
+Base results in `p5-native-history-walk-check.log`.
+
 **Native checkout measurement.** The replayed workspace had 5,135 versioned
 files and 10,000 local table rows. Each warm run had 200 quiet checkouts and
 200 after a local write, alternating between distinct revisions. Collecting

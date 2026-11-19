@@ -888,7 +888,8 @@ pub(crate) fn run_with(
             Ok(summary)
         }
         "execute" => execute(connection, args),
-        "query" => query(connection, args),
+        "query" => query(connection, args, false),
+        "queryScoped" => query(connection, args, true),
         "engineDigest" => Ok(Value::String(crate::dolt_exec::engine_digest_hex())),
         other => bail!("unknown dolt operation {other:?}"),
     }
@@ -1282,6 +1283,39 @@ mod tests {
         crate::storage::schema(&connection).unwrap();
         ensure_runtime(&connection, &[]).unwrap();
         (path, connection)
+    }
+
+    #[test]
+    fn query_scopes_untrusted_sql_to_the_worker_projections() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, connection) = cell(dir.path());
+        connection.execute_batch(
+            "CREATE TABLE facts(value TEXT); INSERT INTO facts VALUES ('approved');"
+        ).unwrap();
+        let saved = run(&connection, "commit", &json!({"message": "published facts"})).unwrap();
+        connection.execute("INSERT INTO facts VALUES ('private')", []).unwrap();
+
+        let read = |sql: &str| run(&connection, "queryScoped", &json!({
+            "sql": sql,
+            "projections": {
+                "prov_facts": format!("SELECT value FROM dolt_at_facts('{}')", saved.as_str().unwrap())
+            }
+        })).unwrap();
+        assert_eq!(read("SELECT value FROM prov_facts"), json!({
+            "columns": ["value"], "rows": [[{ "t": "text", "v": "approved" }]]
+        }));
+        for sql in [
+            "SELECT value FROM facts",
+            "SELECT * FROM dolt_at_facts('HEAD')",
+            "SELECT facts.value FROM prov_facts, facts",
+            "SELECT value FROM main.facts",
+        ] {
+            assert_eq!(read(sql), json!({ "error": "SQL_PROFILE_VIOLATION" }));
+        }
+        assert_eq!(
+            connection.query_row("SELECT count(*) FROM facts", [], |row| row.get::<_, i64>(0)).unwrap(),
+            2,
+        );
     }
 
     #[test]
@@ -2630,14 +2664,22 @@ fn run_log_statement(
 /// read-only statement under the local-read authorizer, with exact values
 /// (`{ t, v }` tagged like `execute`'s bindings). A refusal answers
 /// `{ "error": "<code>" }` rather than throwing, so the caller sees the code.
-fn query(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
-    use crate::dolt_exec::{local_query, Limits, SqlValue};
+fn query(connection: &Connection, args: &Value, scoped: bool) -> anyhow::Result<Value> {
+    use crate::dolt_exec::{local_query, scoped_query, Limits, SqlValue};
     use base64::Engine as _;
 
-    let statement = statement(args)?;
-    let limits = limits(&args["limits"], Limits::default())?;
+    let mut statement = statement(args)?;
+    let mut limits = limits(&args["limits"], Limits::default())?;
     let max_rows = args["maxRows"].as_u64().unwrap_or(10_000) as usize;
-    match local_query(connection, &statement, &limits, max_rows) {
+    let result = if scoped {
+        let (sql, sources) = scoped_query_sql(&statement.sql, &args["projections"])?;
+        statement.sql = sql;
+        limits.max_value_bytes = limits.max_value_bytes.min(512 * 1024);
+        scoped_query(connection, &statement, &limits, max_rows.min(201), sources)
+    } else {
+        local_query(connection, &statement, &limits, max_rows)
+    };
+    match result {
         Ok(result) => {
             let rows = result
                 .rows
@@ -2666,6 +2708,33 @@ fn query(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
         Err(code) if code.starts_with("operational:") => Err(anyhow!("{code}")),
         Err(code) => Ok(json!({ "error": code })),
     }
+}
+
+/// The worker supplies trusted SELECTs and a separate untrusted query. The
+/// generated aliases identify the trusted SELECTs to SQLite's authorizer.
+/// The public projection names may appear freely in the untrusted query.
+fn scoped_query_sql(
+    sql: &str, projections: &Value,
+) -> anyhow::Result<(String, std::collections::HashSet<String>)> {
+    let projections = projections.as_object().ok_or_else(|| anyhow!("projections must be a record of SELECTs"))?;
+    anyhow::ensure!(!projections.is_empty() && projections.len() <= 64, "expected 1 to 64 projections");
+    let mut nonce = [0_u8; 16];
+    getrandom::fill(&mut nonce).map_err(|error| anyhow!("query scope nonce: {error}"))?;
+    let nonce = u128::from_be_bytes(nonce);
+    let mut scopes = std::collections::HashSet::new();
+    let mut definitions = Vec::with_capacity(projections.len() * 2);
+    for (index, (name, value)) in projections.iter().enumerate() {
+        anyhow::ensure!(
+            !name.is_empty() && name.len() <= 64 && name.as_bytes()[0].is_ascii_lowercase()
+                && name.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'),
+            "invalid projection name {name:?}"
+        );
+        let source = format!("celld_scope_{nonce:032x}_{index}");
+        let projection = value.as_str().ok_or_else(|| anyhow!("projection {name:?} needs a SELECT"))?;
+        definitions.push(format!("{source} AS (\n{projection}\n), {name} AS (SELECT * FROM {source})"));
+        scopes.insert(source);
+    }
+    Ok((format!("WITH {} SELECT * FROM (\n{sql}\n)", definitions.join(",\n")), scopes))
 }
 
 fn integer(value: &Value, what: &str) -> anyhow::Result<i64> {

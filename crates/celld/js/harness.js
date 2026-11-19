@@ -1782,15 +1782,24 @@ class DoltStorage {
   // A refused statement throws an Error whose `code` is the Chronolog
   // local-read code (SQL_PROFILE_VIOLATION, SQL_PREPARE_FAILED, ...).
   query(sql, bindings = [], options = {}) {
-    const step = __doltStatement({ sql, bindings }, "dolt.query");
-    const result = this._op("query", {
+    return this._readSql("query", sql, bindings, options, null);
+  }
+  // Treat SQL from a separate caller as untrusted. The worker's projections
+  // describe the only relations it may read.
+  queryScoped(sql, projections, options = {}) {
+    return this._readSql("queryScoped", sql, [], options, projections);
+  }
+  _readSql(op, sql, bindings, options, projections) {
+    const step = __doltStatement({ sql, bindings }, "dolt." + op);
+    const result = this._op(op, {
       sql: step.sql,
       bindings: step.bindings,
       limits: options.limits || {},
+      projections,
       maxRows: options.maxRows == null ? 10000 : Number(options.maxRows),
     });
     if (result.error) {
-      const error = new Error("dolt.query: " + result.error);
+      const error = new Error("dolt." + op + ": " + result.error);
       error.code = result.error;
       throw error;
     }

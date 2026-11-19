@@ -58,6 +58,14 @@ Every method is synchronous, like `ctx.storage.sql`, and throws on failure.
 | `query(sql, bindings?, { limits?, maxRows? })` | one read-only statement under the local-read profile and a step budget, `{ columns, rows }` with exact storage classes: INTEGER is a `bigint`, REAL a number, BLOB a `Uint8Array`. A refusal throws an error whose `code` is `SQL_PROFILE_VIOLATION`, `SQL_STEP_LIMIT`, `SQL_RESULT_LIMIT`, ... |
 | `engineDigest()` | the digest of the engine build and execution profile; it changes whenever execution semantics could |
 
+For a caller-authored SELECT, call `queryScoped(sql, projections, options?)`.
+The projections are a record of relation names and SELECTs prepared by the worker. The SQL argument can read those relations.
+The authorizer permits underlying table reads only from internally named
+projection expressions. Use immutable revision bindings in the projections to
+select the authorized state. Scoped reads cap the result at 201 rows, 8 MiB
+of values, and 512 KiB per SQLite value. The existing step and SQL size budgets
+also apply.
+
 Set `RUST_LOG=info,celld::dolt_checkout=debug` to record the native duration
 and outcome of each checkout. The duration covers the storage operation and
 its statement cache cleanup. Request timing measures the full response.

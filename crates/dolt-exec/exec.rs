@@ -654,6 +654,62 @@ pub fn local_query(
     limits: &Limits,
     max_rows: usize,
 ) -> Result<LocalRows, String> {
+    query_with_authorizer(conn, statement, limits, max_rows,
+        Authorizer::new(AuthMode::LocalRead, AuthOptions::default()), None)
+}
+
+/// Read solely through prepared, caller-owned CTEs. CTE names must be
+/// allocated by the trusted compiler, never reused or derived from user SQL.
+pub fn scoped_query(
+    conn: &Connection,
+    statement: &Statement,
+    limits: &Limits,
+    max_rows: usize,
+    read_sources: std::collections::HashSet<String>,
+) -> Result<LocalRows, String> {
+    limits.validate().map_err(|error| error.to_string())?;
+    let db = unsafe { conn.handle() };
+    let _profile = ScopedReadLimits::new(db, limits);
+    query_with_authorizer(conn, statement, limits, max_rows,
+        Authorizer::scoped_read(read_sources), Some(8 * 1024 * 1024))
+}
+
+struct ScopedReadLimits {
+    db: *mut sys::sqlite3,
+    saved: [(c_int, c_int); 4],
+}
+
+impl ScopedReadLimits {
+    fn new(db: *mut sys::sqlite3, limits: &Limits) -> Self {
+        let wanted = [
+            (ffi::LIMIT_LENGTH, limits.max_value_bytes as c_int),
+            (ffi::LIMIT_SQL_LENGTH, limits.max_sql_bytes as c_int),
+            (ffi::LIMIT_COLUMN, 256),
+            (ffi::LIMIT_ATTACHED, 0),
+        ];
+        let saved = wanted.map(|(category, amount)| {
+            (category, unsafe { sys::sqlite3_limit(db, category, amount) })
+        });
+        Self { db, saved }
+    }
+}
+
+impl Drop for ScopedReadLimits {
+    fn drop(&mut self) {
+        for (category, amount) in self.saved {
+            unsafe { sys::sqlite3_limit(self.db, category, amount) };
+        }
+    }
+}
+
+fn query_with_authorizer(
+    conn: &Connection,
+    statement: &Statement,
+    limits: &Limits,
+    max_rows: usize,
+    authorizer: Authorizer,
+    max_result_bytes: Option<usize>,
+) -> Result<LocalRows, String> {
     limits.validate().map_err(|e| e.to_string())?;
     let db = unsafe { conn.handle() };
     unsafe { register_state(db) }.map_err(|e| format!("operational: {e}"))?;
@@ -664,7 +720,7 @@ pub fn local_query(
     if sql.len() > limits.max_sql_bytes {
         return Err("SQL_STATEMENT_TOO_LARGE".into());
     }
-    let auth = RefCell::new(Authorizer::new(AuthMode::LocalRead, AuthOptions::default()));
+    let auth = RefCell::new(authorizer);
     let budget = Budget {
         callbacks: Cell::new(0),
         max_callbacks: limits.max_vm_steps.div_ceil(u64::from(limits.progress_granularity)).max(1),
@@ -720,6 +776,7 @@ pub fn local_query(
         })
         .collect::<Vec<_>>();
     let mut rows = Vec::new();
+    let mut result_bytes = 0_usize;
     loop {
         match unsafe { sys::sqlite3_step(stmt.0) } {
             sys::SQLITE_ROW => {
@@ -728,7 +785,18 @@ pub fn local_query(
                 }
                 let mut row = Vec::with_capacity(count as usize);
                 for i in 0..count {
-                    row.push(unsafe { column_value(stmt.0, i) });
+                    let value = unsafe { column_value(stmt.0, i) };
+                    if let Some(max_bytes) = max_result_bytes {
+                        result_bytes = result_bytes.saturating_add(match &value {
+                            SqlValue::Blob(bytes) => bytes.len(),
+                            SqlValue::Text(text) => text.len(),
+                            _ => 0,
+                        }).saturating_add(std::mem::size_of::<SqlValue>());
+                        if result_bytes > max_bytes {
+                            return Err("SQL_RESULT_LIMIT".into());
+                        }
+                    }
+                    row.push(value);
                 }
                 rows.push(row);
             }

@@ -167,6 +167,7 @@ pub struct Authorizer {
     options: AuthOptions,
     dropped_tables: HashSet<String>,
     lifecycle_triggers: HashSet<String>,
+    read_scopes: Option<HashSet<String>>,
     /// Set while the statement is being stepped (not prepared): authorizer
     /// calls then come from SQL a virtual-table module runs internally.
     pub in_step: bool,
@@ -180,8 +181,14 @@ impl Authorizer {
     pub fn new(mode: AuthMode, options: AuthOptions) -> Self {
         Self {
             mode, options, dropped_tables: HashSet::new(), lifecycle_triggers: HashSet::new(),
-            in_step: false, denied: false,
+            read_scopes: None, in_step: false, denied: false,
         }
+    }
+
+    pub(crate) fn scoped_read(sources: HashSet<String>) -> Self {
+        let mut authorizer = Self::new(AuthMode::LocalRead, AuthOptions::default());
+        authorizer.read_scopes = Some(sources);
+        authorizer
     }
 
     pub(crate) fn set_lifecycle_triggers(&mut self, names: HashSet<String>) {
@@ -219,6 +226,34 @@ impl Authorizer {
         let caller = trigger_or_view.map(ascii_lower).unwrap_or_default();
         let mode = self.mode;
 
+        if let Some(scopes) = &self.read_scopes {
+            let trusted = scopes.contains(&caller);
+            match action_code {
+                a::SELECT => return true,
+                a::RECURSIVE => return trusted,
+                a::READ => {
+                    // CTE references do not authorize a database read. Every
+                    // underlying table lookup must originate in a trusted
+                    // projection authored by the calling worker.
+                    if !trusted || database != "main" {
+                        return false;
+                    }
+                }
+                a::FUNCTION => {
+                    let function = if secondary.is_empty() { &object } else { &secondary };
+                    if (!trusted && (is_dolt_name(function) || function.starts_with("pragma_")))
+                        || matches!(function.as_str(), "readfile" | "writefile" | "sqlite_offset" | "load_extension")
+                    {
+                        return false;
+                    }
+                }
+                // An eponymous module can describe itself through this
+                // action while compiling a SELECT. The connection still
+                // refuses non-readonly prepared statements.
+                a::PRAGMA if trusted && object == "table_info" && !secondary.is_empty() => {}
+                _ => return false,
+            }
+        }
         if mode == AuthMode::InternalBootstrap {
             return action_code != a::ATTACH && action_code != a::DETACH;
         }

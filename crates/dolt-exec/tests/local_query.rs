@@ -167,3 +167,48 @@ fn budgets_and_row_limits_hold() {
     // The connection is usable afterwards: the budget and authorizer are gone.
     conn.execute_batch("CREATE TABLE after_limits (x)").unwrap();
 }
+
+#[test]
+fn scoped_reads_admit_only_the_published_projection() {
+    use celld_dolt_exec::scoped_query;
+    use std::collections::HashSet;
+
+    let (_dir, conn) = fresh_dolt();
+    conn.execute_batch(
+        "CREATE TABLE facts (id INTEGER PRIMARY KEY, value TEXT);
+         INSERT INTO facts VALUES (1, 'visible');
+         CREATE TABLE private (value TEXT);
+         INSERT INTO private VALUES ('unpublished');",
+    ).unwrap();
+    conn.query_row("SELECT dolt_commit('-A', '-m', 'saved')", [], |r| r.get::<_, String>(0)).unwrap();
+    conn.execute_batch("UPDATE facts SET value = 'working';").unwrap();
+
+    let read = |sql: &str| {
+        let trusted = "WITH fixed_fixture_projection AS (
+            SELECT value FROM dolt_at_facts('HEAD')
+        ), prov_facts AS (SELECT * FROM fixed_fixture_projection)";
+        scoped_query(
+            &conn, &q(&format!("{trusted} SELECT * FROM (\n{sql}\n)")),
+            &Limits::default(), 10, HashSet::from(["fixed_fixture_projection".into()]),
+        )
+    };
+    assert_eq!(
+        read("SELECT upper(value) AS value FROM prov_facts").unwrap().rows,
+        vec![vec![SqlValue::Text("VISIBLE".into())]],
+    );
+    for sql in [
+        "SELECT private.value FROM prov_facts, private",
+        "SELECT value FROM facts",
+        "SELECT value FROM dolt_at_facts('HEAD')",
+        "SELECT dolt_hashof('HEAD')",
+        "SELECT name FROM pragma_table_info('private')",
+    ] {
+        let result = read(sql);
+        assert_eq!(result.unwrap_err(), "SQL_PROFILE_VIOLATION", "{sql}");
+    }
+    // Failed scoped reads do not alter the connection's next execution.
+    assert_eq!(
+        local_query(&conn, &q("SELECT value FROM facts"), &Limits::default(), 10).unwrap().rows,
+        vec![vec![SqlValue::Text("working".into())]],
+    );
+}

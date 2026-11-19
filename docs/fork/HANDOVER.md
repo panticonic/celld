@@ -1417,6 +1417,13 @@ those of `docs/dolt-redesign.md` §10.
   and Prometheus metrics for the converged revision. See
   `chronolog-native-rpc-check2.log`.
 
+- Chronolog `702cc02` accepts the legacy static membership document
+  from the node class secret and pins it to the native execution
+  manifest. Both governed and static two-node runs passed on
+  `c8dfc2e`, including writes on both nodes, late replay, and restart.
+  The static node refused dynamic genesis. Typecheck, lint, and 86
+  focused tests passed. See `chronolog-static-group-check3.log`.
+
 - Chronolog `aa64e21` runs the shared conformance replay fixture in
   independent celld nodes under UTC and Pacific/Apia. Both reached
   revision 2 at commit `148871e88e2489f8992004bc75a328a6c9240929` with

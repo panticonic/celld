@@ -733,6 +733,16 @@ typecheck and suites of 64 build and 264 runtime tests passed. See
 Reserved activation, explicit unbound references, and declaration
 or development builds still need their cutover review.
 
+The signed launch on a disposable workspace found a recursive
+allocation. The storage fork that creates a participant cell tried to
+read source from the same cell. Host `4a5e7a50d` keeps that physical
+fork off the participant source path. A retry confirmed that a signed
+edit and ordinary worker creation used the same private application,
+that the retained execution matched its immutable build artifact, and
+that another signed session saw the original worker source. The
+test workspace stopped normally with no OOM kills. See
+`p5-managed-runtime-source4-evidence.log` and its shutdown log.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover
@@ -1012,12 +1022,15 @@ Everything in the status table of `docs/fork/design.md` is merged into
    and recovery. See `p5-python-adapter-check.log` and
    [Codegen confinement](codegen.md).
 2. **Release artifacts for linux-arm64, darwin-arm64 and win32-x64.**
-   Vibestudio's `targets.json` has nulls for them, and staging those targets
-   is refused.
-   - Fork side: build per target in CI; the Windows workflow exists, see
-     `docs/fork/windows.md`.
-   - Vibestudio side: `.github` workflows must place the binary in
-     `native/celld/artifacts/<platform>-<arch>/` and fill in the digests.
+   The fork artifact workflow builds all four supported targets and
+   includes an exact commit and digest in each artifact. Use the
+   Windows workflow for platform smoke results.
+   - Host `27001d86f` stages CI-provided payloads for Linux, Windows and
+     macOS desktop packaging and for the headless server package.
+     Staging verifies the pinned fork commit, target, format and digest.
+     All 11 artifact and package helper tests passed.
+   - The full fork revision and per-target digests still need to be
+     recorded in `targets.json` from the successful build run.
    - See `HANDOFF-celld-runtime.md`, "What remains".
 3. **The P2P carrier for Dolt remotes across workspaces.** The wire is
    specified and carrier-neutral (`transport`, `remote.serve`), but no

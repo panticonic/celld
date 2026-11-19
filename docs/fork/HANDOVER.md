@@ -241,7 +241,16 @@ test scope also uses a 5 GiB soft reclaim threshold from that point.
 The 6 GiB hard cap and zero swap stayed in force. The owner then prioritized
 participant working copies. We stopped this disposable benchmark after the
 1,216-turn checkpoint with zero recorded kills and joined its instance.
-The 10,000-turn fork latency remains outstanding. The isolated P5 worktrees
+The matching-source run `st_e1fef31aa554491797d8bbb1940893bd` started on
+November 19 in `p4-current-fork-benchmark2`. It is the same serial,
+model-free 10,000-turn case with a 24-hour test budget. Its managed scope
+has a 10 GiB hard ceiling and zero swap, with the desktop outside it.
+The source launcher matched the release prepared from Host `e52812f61`,
+Base `0fcaf2b`, and celld `b78e4d0`. The owned runner joins and retires
+the benchmark and registry after a terminal result. The memory sampler
+and outcome use the prefix `p4-current-fork-benchmark2-` in the private
+state directory. The fork latency result is pending.
+The isolated P5 worktrees
 are `base-gad-participants` and `gad-participant-admission`. The first
 participant fork and conflict-merge probe passes against the real runtime.
 
@@ -1851,9 +1860,8 @@ pushes them.
       counts. Keep the separate retained-collaborator follow-up result distinct.
    3. **S6b complete:** both held branches are merged locally; the real
       self-call and targeted lifecycle/fork regression checks pass.
-   4. Run a model-free soak of an agent cell past 64 turns, so compaction
-      runs in the product. Verify `WorkspaceStateDO`'s inherited common
-      compaction schedule on the real class.
+   4. The 65-turn model-free product soak and the real
+      `WorkspaceStateDO` compaction check pass.
    5. The agent-cell restart probe passes through activation-loss replay.
       Measure fork latency at 10,000 turns.
    - **Gate:** §10, row P4, of the redesign.
@@ -2149,7 +2157,10 @@ pushes them.
    `b82cffe650`. Pi's sealed package source is `c6d518177`.
    The matching owner releases and the macOS ARM celld 9116b07 artifact
    remain outstanding. GitHub's run 44550708879 finished Linux x64,
-   Linux ARM64, and Windows x64. The macOS job was cancelled before setup.
+   Linux ARM64, and Windows x64. The host's packaging verifier staged
+   those three exact binaries and checked their source, platform, and
+   digest. See `celld-v6-ci-9116b07-verification.json`. The macOS job was
+   cancelled before setup.
    Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
    below.
    - A Chronolog node per workspace node and the `chronolog` host service.

@@ -743,6 +743,22 @@ that another signed session saw the original worker source. The
 test workspace stopped normally with no OOM kills. See
 `p5-managed-runtime-source4-evidence.log` and its shutdown log.
 
+Base `8b6f3be` and host `9ba79442b` require a reachable workspace
+revision before ordinary artifact-key reads disclose build metadata,
+inventory or bytes. In a fresh signed run, the writer retrieved its
+build and the second session was given the exact key. The second
+session saw neither the build metadata nor its artifact inventory.
+Both typechecks, 152 host and package tests, and 38 Base tests passed.
+See `p5-build-visibility-check.log` and
+`p5-managed-runtime-source5-evidence.log`.
+
+Base `0a78534` and host `142fb2a24` read template installations
+from the exact saved canonical event. The native fixture found the
+original installation after publication of a two-parent integration.
+The focused suites and both typechecks passed. See
+`p5-native-template-installation.log` and
+`p5-template-installation-check.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover
@@ -1029,8 +1045,12 @@ Everything in the status table of `docs/fork/design.md` is merged into
      macOS desktop packaging and for the headless server package.
      Staging verifies the pinned fork commit, target, format and digest.
      All 11 artifact and package helper tests passed.
-   - The full fork revision and per-target digests still need to be
-     recorded in `targets.json` from the successful build run.
+   - [Artifact run 44456676942](https://github.com/panticonic/celld/actions/runs/44456676942)
+     built all four platforms at `0410398`. Host `597a6d235` records
+     the verified full revision and four actual binary digests in
+     `targets.json`. All four payloads were staged in the isolated
+     host worktree and the Linux x64 payload reported version 0.6.3.
+     The Windows smoke and packaged application gates remain separate.
    - See `HANDOFF-celld-runtime.md`, "What remains".
 3. **The P2P carrier for Dolt remotes across deployments is proved.**
    The two-node `dolt-remote-p2p` scenario passed on `b5742d1`.

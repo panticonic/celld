@@ -311,6 +311,32 @@ Existing unclassified manifests made before this change still require
 scope recovery where their private paths cannot be inferred from file
 bytes.
 
+Base `3fed20a` records the resolved intent with new native work units.
+Historical rows without these fields still derive intent from their
+original evidence. In managed run `runtime-source42`, on host
+`6db18495e` and the pinned `a6dce5d` runtime, a signed participant
+read the exact intent and traced file blame to that work unit. The same
+run passed private rename isolation, approved publication and preservation
+of a second participant's working revision. It stopped normally with a
+4.32 GiB peak and zero memory-limit or OOM events. All 227 focused Base
+tests and all four type configurations passed. See
+`p5-managed-runtime-source42-evidence.log` and
+`p5-native-intent-projection-types.log`.
+
+Base `50400c4` and host `46b685b92` run workspace search over the
+admitted working revisions and the exact protected main event. The
+trajectory mirror searches messages reached through command invocation
+coordinates from those same revisions. In managed run `runtime-source43`,
+the signed author found uncommitted work. A second participant could not
+include that work in their search even when naming the author's context.
+After the exact publication approval, their search found the work and
+their independent working revision stayed in place. The run stopped
+normally with a 4.55 GiB peak and zero OOM events. The 107 focused host
+tests, 229 Base tests, both type checks, and targeted lint passed. The
+search tests also cover older intent rows and exact cross-channel
+trajectory visibility. See `p5-managed-runtime-source43-evidence.log`,
+`p5-native-search-check.log` and `p5-native-search-check2.log`.
+
 **Native checkout measurement.** The replayed workspace had 5,135 versioned
 files and 10,000 local table rows. Each warm run had 200 quiet checkouts and
 200 after a local write, alternating between distinct revisions. Collecting
@@ -1788,6 +1814,11 @@ pushes them.
    the results survived restart. See
    `chronolog-current-generated-owner-native.log` and
    `celld-current-owner-lifecycle-green.log`.
+   Fork `82a5781` passed all 48 model-free runtime scenarios, the
+   documented R2 expected failure and two provider-dependent skips.
+   That run peaked at 569 MiB with no OOM or limit events.
+   The Linux, macOS and Windows artifact matrix is run 44518812004.
+   Vibestudio's current local pins remain at `a6dce5d`.
    This fixture prepares the schema and grant as trusted setup. The
    current materializer still needs the native transaction adapter for
    signed schema and platform operations.

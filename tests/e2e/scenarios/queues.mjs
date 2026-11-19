@@ -54,6 +54,9 @@ const probe = {
   fixture: "queues-probe",
   title: "batching, delaySeconds, content types, retry/throw redelivery, DLQ, durability",
   slow: true,
+  // Restoring after a wake-entry minute boundary requires a periodic scan.
+  // Exercise the same discovery path within this scenario's 30 s windows.
+  env: { CELLD_WAKER_TICK_MS: "2000" },
   steps: [
     run("sendBatch of 25 arrives as batches of at most max_batch_size=10, each message once", async (t) => {
       t.expect(await t.fetch("/send?n=25&kind=batch", { method: "POST" }), { status: 200, json: { sent: 25, kind: "batch", sentAt: M.epochMs() } });
@@ -122,7 +125,9 @@ const probe = {
     }),
     restore(),
     run("the message survives loss of local state and is delivered", async (t) => {
-      await t.poll(async () => t.assert(ofKind(msgs(await records(t)), "dur-restore").length === 1, "not delivered"), WAIT("6 s delay + 2 s batch window, from startup", 30000));
+      await t.poll(async () => t.assert(ofKind(msgs(await records(t)), "dur-restore").length === 1, "not delivered"), WAIT("6 s delay + 2 s wake scan + 2 s batch window, from startup", 30000));
+      const [message] = ofKind(msgs(await records(t)), "dur-restore");
+      t.assert(message.at - message.shape.value.sentAt >= 5800, "a restored message arrived before its delay");
     }),
     run("nothing was delivered twice (ack is final)", async (t) => {
       const all = msgs(await records(t));

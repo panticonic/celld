@@ -294,6 +294,23 @@ verifies recovery of installed history. First-time cutover remains open.
 See `p5-managed-runtime-source40-evidence.log` and
 `p5-replayed-session-owners-check2.log`.
 
+Base `0271c6d` and host `be3759b67` bind newly produced workspace
+tree metadata to its exact semantic placement. Publishing the same
+metadata through the protected event makes it readable without rewriting
+the underlying objects. Managed run `runtime-source41` renamed a file
+whose bytes were already published. Its author could read the raw and
+typed tree. A second signed participant could read the published file
+bytes and was refused the private tree. After the exact rename approval,
+the second participant could read the renamed path and retained its
+independent working revision. The run peaked at 4.55 GiB, recorded zero
+memory-limit or OOM events, and stopped normally. The 158 focused host
+tests, type check and targeted lint passed. See
+`p5-managed-runtime-source41-evidence.log` and
+`p5-exact-tree-placement-host.log`.
+Existing unclassified manifests made before this change still require
+scope recovery where their private paths cannot be inferred from file
+bytes.
+
 **Native checkout measurement.** The replayed workspace had 5,135 versioned
 files and 10,000 local table rows. Each warm run had 200 quiet checkouts and
 200 after a local write, alternating between distinct revisions. Collecting
@@ -306,6 +323,15 @@ A separate syscall trace confirmed successful disk syncs during both cases.
 The trace and the uninstrumented request samples are in
 `p5-native-checkout-profile/` in the private state directory.
 
+The native disjoint-merge fixture used the same 5,135 files, 135
+repositories and 10,000 local rows. Two branches each changed 16 distinct
+file placements. Each of 200 warm requests per condition verified that
+all 32 changes survived and retained the same source branch and local
+row count. Request p95 was 66.03 ms when quiet and 67.79 ms after a local
+write. Those timings include the request and the native merge commit.
+The fixture excludes host review and approval time. See
+`p5-native-merge-profile/latency.log`.
+
 The optimized `a6dce5d` Linux release passed the full model-free sweep:
 48 passed, the known R2 ETag contract failed as expected, and the two
 model-dependent scenarios were skipped. The container scenario passed in
@@ -313,7 +339,17 @@ the 8 GiB verification scope. It needs capacity for five declared 1 GiB
 reservations plus the runtime. The earlier 3 GiB run refused a container
 under admission pressure. See `celld-optimized-release-full.log` and its
 JSON report. The same revision passed Windows recovery in GitHub Actions
-run 44511291186. The staged Vibestudio runtime remains pinned to `c8dfc2e`.
+run 44511291186 and built all four target artifacts in run 44511291136.
+Host `6db18495e` stages and pins those four downloaded binaries after
+verifying each artifact's commit and SHA-256. The exact pinned Linux
+binary passed 48 scenarios with the expected R2 failure and two model
+skips. The queue restore test now uses a two-second scan interval in its
+30-second assertion window. With the production default of 60 seconds,
+a restored queue whose alarm starts in the next minute may wait past
+that assertion. The test also verifies the restored message's delay.
+The successful exact-artifact run peaked at 511 MiB with zero OOM
+or limit events. See `celld-a6-ci-wake-full.log` and
+`host-pin-a6-artifact-staging.log`.
 
 P5 has a local implementation on Base `feat/gad-participant-cells` and
 host `feat/gad-participant-admission`. Base `69ffa6b` and host `ccf995f0b`
@@ -1431,9 +1467,9 @@ also passed at `e25fcad`.
    - S5: a cell is released after a failed restore without proof of
      durability.
    - All four are in `upstream-findings.md`.
-6. **Not pinned or measured:**
-   - Merge benchmark at GAD size, for the P5 gate. The native checkout
-     benchmark is recorded above.
+6. **Remaining performance evidence:**
+   - Host review and integration timings at GAD size. The native checkout
+     and disjoint-merge measurements are recorded above.
    - Fork latency at 10,000 agent turns.
 
 ### 4.2 Vibestudio runtime cutover (`feat/celld-runtime`, contained in `feat/dolt-p0`)
@@ -1717,13 +1753,21 @@ pushes them.
    on two `c8dfc2e` nodes retained the exact selected generation after a
    process restart and retry. The 20 focused tests, type check and targeted
    lint passed. See `chronolog-celld-control-native.log`.
+   Commit `bd2def2` imports a host-managed Ed25519 signer from a celld
+   class secret and persists only its public identity and storage binding.
+   Commit `36495bc` documents enrollment. All 43 focused tests, type check
+   and targeted lint passed. An independent installation of
+   `chronolog-peer-session-bd2def2d.tgz` on the `a6dce5d` CI runtime
+   verified the same signer and storage identity after restart, the
+   class-only binding, and the absence of plaintext signing bytes in the
+   runtime store. See `chronolog-celld-current-signer-native2.log`.
    Fork `2ec8d17` adds the principal row and transaction identities used by
    current Chronolog SQL. The executor pins both to one program and the engine
    digest identifies the changed execution profile. All 75 focused Rust
    tests passed. A locally built runtime verified exact integers above the
    JavaScript safe-integer bound, identity cleanup after rejection, validation and restart
    on a real Dolt cell. See `celld-current-chronolog-identity-native-exact.log`.
-   The published runtime pins still name `c8dfc2e`.
+   The current local Vibestudio pins name the four verified `a6dce5d` artifacts.
    The clean current Chronolog SQL package `870fca2e-sql` passed 71 focused
    tests for owner rows, protected schema, deterministic replay and final
    prefixes. A separate Node consumer installed the archive and passed its

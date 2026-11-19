@@ -264,8 +264,22 @@ repeat of the Base compiler check was killed by systemd-oomd during user
 slice reclaim at 5.8 GiB. The evidence is in
 `p5-managed-runtime-source38-evidence.log` and
 `p5-native-raw-blob-final-host.log` under the private state directory.
-Existing workspaces still need their first-time cutover, including scope
-reconstruction for previously stored private content.
+
+Base `097a1bd` and host `1107c6dbc` reconstruct private file scopes before
+attaching a frozen replay. They include earlier revisions of private files
+and exclude bytes already in the migrated public history. A retry resumes
+registration safely, and a durable receipt prevents repeated scans after
+startup. In managed run `runtime-source39`, a signed participant wrote a file
+in the legacy workspace, reopened the exact context and working revision
+after replay, and read its original bytes. A second signed participant could
+read neither the file nor its raw digest. The run peaked at 3.33 GiB, recorded
+zero memory-limit or OOM events, and stopped normally. The 137 focused host
+and 226 Base tests and both type checks passed. A separate Base type check was
+killed at a smaller memory cap. The rerun passed all four configurations
+with no other heavy build running. See
+`p5-managed-runtime-source39-evidence.log`,
+`p5-native-replay-private-content3.log` and
+`p5-replay-private-base-types2.log`.
 
 P5 has a local implementation on Base `feat/gad-participant-cells` and
 host `feat/gad-participant-admission`. Base `69ffa6b` and host `ccf995f0b`
@@ -1662,6 +1676,12 @@ pushes them.
    `chronolog-peer-session-4872da9f.tgz` against the pinned runtime. Both
    wrote, then the restarted peer retained its identity, retried exactly and
    received the next write. See `chronolog-celld-admitted-transport-native.log`.
+   Commit `870fca2` persists the current signed control registry in a celld
+   object. It refuses overlapping owners of the same application and joins
+   pending control operations on close. The package independently installed
+   on two `c8dfc2e` nodes retained the exact selected generation after a
+   process restart and retry. The 20 focused tests, type check and targeted
+   lint passed. See `chronolog-celld-control-native.log`.
    Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
    below.
    - A Chronolog node per workspace node and the `chronolog` host service.
@@ -1696,7 +1716,9 @@ pushes them.
      `c0f4d04` (agent package and pubsub channel), and four System-testing
      conflicts at `5d68e84` (the skill package, two runners and the contract).
      Pi `7016ecdc9` and `c6d518177` merge cleanly. Current Chronolog
-     `4872da9` is a fast-forward from `d014879`.
+     `870fca2` is a fast-forward from `d014879`. The fresh previews of
+     Examples `6712d56`, Google Workspace `1ef1b53`, News `83d29bd`,
+     Personal `b4cedbd` and System `9323aaf` also merge cleanly.
    - Delete the retired `WorkspaceDO` class and its import driver in the
      release after the one that ships P3 (see the handoff).
 6. **Chronolog cleanup** (§4.4 items 1–6). Can be done before P6, which

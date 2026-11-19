@@ -982,8 +982,20 @@ Base tests and both typechecks passed. The managed workspace peaked at
 `p5-native-context-lifecycle-check.log`, and
 `p5-managed-runtime-source33-evidence.log`.
 
-Workspace startup still needs a complete cutover to the participant
-source and the remaining public semantic operations. Incremental peer
+Base `4f4f658` and host `ae877b6a8` and `03c27c494` resume installed
+participant history at ordinary startup. The host verifies a system-owned
+canonical context, the original held migration and the protected head.
+In the persistent test workspace, startup reattached to the same
+installation with the test trigger absent. The signed writer re-opened
+the exact saved event and bytes. The separate reader saw the same shared
+revision and was refused the writer's event. The 73 focused host tests,
+226 Base tests and both typechecks passed. Startup and restart peaked at
+3.38 and 4.77 GiB, recorded zero OOM kills, and stopped normally. See
+`p5-native-history-boot-owner-check.log` and
+`p5-managed-runtime-source35-evidence.log`.
+
+First-time installation still needs to move to ordinary startup.
+The remaining public semantic operations are open. Incremental peer
 prefixes and remaining structural choices still need their cutover
 checks. Direct native fixtures use synthetic approval receipts.
 The managed probes enter through a temporary host-only hook and use the

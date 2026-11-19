@@ -478,6 +478,11 @@ A separate syscall trace confirmed successful disk syncs during both cases.
 The trace and the uninstrumented request samples are in
 `p5-native-checkout-profile/` in the private state directory.
 
+An independent replay of the same template-sized workspace exported
+4,067,212 bytes and forked in 219 ms. It verified one committed event and
+three working contexts across 135 repositories. See
+`p5-actual-replay-verify3.log` for the recorded size and copy time.
+
 The native disjoint-merge fixture used the same 5,135 files, 135
 repositories and 10,000 local rows. Two branches each changed 16 distinct
 file placements. Each of 200 warm requests per condition verified that
@@ -2148,7 +2153,18 @@ pushes them.
    the original receipt without moving the newer head. See
    `native-gad-chronolog-receipt.log`. Targeted lint and all 15 host
    ingress and protected history tests passed in
-   `chronolog-history-receipt-host.log`.
+   `chronolog-history-receipt-host.log`. Host `b028589f0` adds a regression
+   that interrupts the host projection after the native save and retries
+   through the ingress. All ten protected publication tests passed.
+   Current Chronolog `b97c42b` also requires both workspaces to enable
+   sharing with the same group before exchanging published history. A
+   locally approved workspace administrator may enable it with a group
+   administrator or publisher grant. The new test refuses signing and
+   sending for an unselected group. The two native nodes refused the
+   signature before sharing was enabled, then accepted the same transition
+   after the publisher enabled it. See `native-gad-shared-egress.log`.
+   The sealed `b97c42b6` celld package SHA-256 is
+   `f45bb42051464d44df7335c024b1fadb58f9d3013afa51b63cbcfc2638fa6261`.
    The local merged host `29eead0fa` and Base `404f345` passed
    the host type checks, the authority catalog check, 24 host tests,
    four portable type configurations, and 223 focused template tests.
@@ -2187,7 +2203,7 @@ pushes them.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
      Current local merge candidates are Host `integration/gad-participant-main`
-     (`3bcd66828`) and Base `integration/gad-participant-base-main`
+     (`8a38cf846`) and Base `integration/gad-participant-base-main`
      (`07d18d3`). Both include the signed-receipt retries above. The Host
      merge retains one console-history filter and
      pagination implementation and the read-only legacy workspace importer.

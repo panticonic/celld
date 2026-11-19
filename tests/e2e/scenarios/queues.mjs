@@ -106,7 +106,9 @@ const probe = {
     }),
     // Durability: a delayed message must survive the node going away before it is due.
     run("send a message due in 6 s, then SIGKILL immediately", async (t) => {
-      await t.fetch("/send?n=1&kind=dur-crash&delay=6", { method: "POST" });
+      t.expect(await t.fetch("/send?n=1&kind=dur-crash&delay=6", { method: "POST" }), {
+        status: 200, json: { sent: 1, kind: "dur-crash", sentAt: M.epochMs() },
+      });
       t.assert(ofKind(msgs(await records(t)), "dur-crash").length === 0, "delivered before it was due");
     }),
     crash("SIGKILL and restart"),
@@ -114,7 +116,9 @@ const probe = {
       await t.poll(async () => t.assert(ofKind(msgs(await records(t)), "dur-crash").length === 1, "not delivered"), WAIT("6 s delay + 2 s batch window, from startup", 30000));
     }),
     run("send another message due in 6 s", async (t) => {
-      await t.fetch("/send?n=1&kind=dur-restore&delay=6", { method: "POST" });
+      t.expect(await t.fetch("/send?n=1&kind=dur-restore&delay=6", { method: "POST" }), {
+        status: 200, json: { sent: 1, kind: "dur-restore", sentAt: M.epochMs() },
+      });
     }),
     restore(),
     run("the message survives loss of local state and is delivered", async (t) => {

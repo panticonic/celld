@@ -281,6 +281,18 @@ with no other heavy build running. See
 `p5-native-replay-private-content3.log` and
 `p5-replay-private-base-types2.log`.
 
+**Native checkout measurement.** The replayed workspace had 5,135 versioned
+files and 10,000 local table rows. Each warm run had 200 quiet checkouts and
+200 after a local write, alternating between distinct revisions. Collecting
+the carried table names directly from the captured source catalog avoids
+building and storing two temporary catalogs. The two optimized runs measured
+13.03 ms native p95 when quiet and 19.73–19.95 ms after a local write. Before
+the change those ranges were 14.60–14.79 ms and 21.41–21.48 ms. The optimized
+completed-request p95 was 42.61–43.29 ms and 50.14–50.77 ms respectively.
+A separate syscall trace confirmed successful disk syncs during both cases.
+The trace and the uninstrumented request samples are in
+`p5-native-checkout-profile/` in the private state directory.
+
 P5 has a local implementation on Base `feat/gad-participant-cells` and
 host `feat/gad-participant-admission`. Base `69ffa6b` and host `ccf995f0b`
 use native pin `60f0bf8`.
@@ -1398,7 +1410,8 @@ also passed at `e25fcad`.
      durability.
    - All four are in `upstream-findings.md`.
 6. **Not pinned or measured:**
-   - Checkout and merge benchmarks at GAD size, for the P5 gate.
+   - Merge benchmark at GAD size, for the P5 gate. The native checkout
+     benchmark is recorded above.
    - Fork latency at 10,000 agent turns.
 
 ### 4.2 Vibestudio runtime cutover (`feat/celld-runtime`, contained in `feat/dolt-p0`)
@@ -1689,6 +1702,13 @@ pushes them.
    JavaScript safe-integer bound, identity cleanup after rejection, validation and restart
    on a real Dolt cell. See `celld-current-chronolog-identity-native-exact.log`.
    The published runtime pins still name `c8dfc2e`.
+   The clean current Chronolog SQL package `870fca2e-sql` passed 71 focused
+   tests for owner rows, protected schema, deterministic replay and final
+   prefixes. A separate Node consumer installed the archive and passed its
+   SQL verification. This used Chronolog's patched DoltLite 0.11.29 addon.
+   The celld engine uses DoltLite 0.51.11 with its own execution digest.
+   The workspace materializer still needs to bind one verified profile
+   end to end. See `chronolog-current-sql-baseline.log`.
    Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
    below.
    - A Chronolog node per workspace node and the `chronolog` host service.

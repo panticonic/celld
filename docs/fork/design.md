@@ -515,8 +515,8 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
       declaration. F5 needed an engine change: DoltLite's checkout leaves
       untracked ignored tables on the branch they were created on. Patch
       0003 adds `dolt_checkout --carry-ignored`: before leaving, the session's
-      ignored tables are split from its working catalog with the machinery
-      merge and pull already use (`mergeSplitWorkingCatalog`), and after the
+      ignored table names are collected from the captured source catalog using
+      the same owner and ignore predicates as merge and pull. After the
       target's working set loads they are grafted onto it by name
       (`mergeCopyLocalTables`, replacing the target's stale copy), in the same
       ref mutation. No row is read or written. Rejected:

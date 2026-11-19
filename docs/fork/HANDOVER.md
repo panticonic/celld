@@ -1501,6 +1501,14 @@ those of `docs/dolt-redesign.md` §10.
   archive operations and the group CLI still need adapters. See
   `chronolog-native-fork-seed4.log`.
 
+- Chronolog `eb3f1a3` uses the shared custody providers to provision the
+  native class secret by reference. The `c8dfc2e` CLI sealed an exact
+  synthetic provider value against a loopback S3 fixture. Failed reads
+  stopped provisioning and remote errors were redacted. The 51 focused
+  tests, full typecheck, and lint passed. The command provider ran on
+  Linux. Other provider checks use fixtures. See
+  `chronolog-secret-provision-check2.log`.
+
 - Chronolog `aa64e21` runs the shared conformance replay fixture in
   independent celld nodes under UTC and Pacific/Apia. Both reached
   revision 2 at commit `148871e88e2489f8992004bc75a328a6c9240929` with
@@ -1527,9 +1535,9 @@ those of `docs/dolt-redesign.md` §10.
      - delete `apps/chronologd`, `materializer-doltlite`,
        `@dolthub/doltlite` and its pnpm patch, and the SSB network layer of
        `transport-ssb`;
-     - port snapshots, fork-seed, and secret-store backends. The feed
-       package, native static membership and the native fork-seed planner
-       landed in the commits above.
+     - port signed snapshot archives and wire fork seeds to the native
+       group CLI. The feed package, native static membership, fork-seed
+       planner, and reference-based secret provisioning landed above.
   4. node-core tests and a chaos harness against the celld host.
 
 ---

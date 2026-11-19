@@ -752,12 +752,30 @@ Both typechecks, 152 host and package tests, and 38 Base tests passed.
 See `p5-build-visibility-check.log` and
 `p5-managed-runtime-source5-evidence.log`.
 
+Host `ef8c03238` resolves ordinary `ctx:` builds under the signed caller's
+context and binds both the immutable content and the exact semantic revision.
+The signed run on the pinned CI Linux binary confirmed that the compiled worker
+contained the private edit and that a second signed session could neither build
+from that context nor look up its build. See
+`p5-managed-runtime-source7-evidence.log`.
+
 Base `0a78534` and host `142fb2a24` read template installations
 from the exact saved canonical event. The native fixture found the
 original installation after publication of a two-parent integration.
 The focused suites and both typechecks passed. See
 `p5-native-template-installation.log` and
 `p5-template-installation-check.log`.
+
+Base `a2397ce` and host `b825bd180` can pause legacy edits at an exact
+published event before migration. A retry with the same operation ID resumes
+at the same frontier. Migration verifies the replay receipt, including the
+private context revisions, and keeps the pause until explicitly released. The
+two typechecks, 78 host tests and 38 Base tests passed. The disposable managed
+run refused a legacy context creation during the pause, released it for the
+diagnostic host's remaining legacy lifecycle, and passed the two signed private
+build checks. That scope peaked at 5.50 GiB, recorded zero OOM kills, and
+shut down normally. See `p5-history-freeze-check.log`,
+`p5-managed-runtime-source8-evidence.log` and the managed shutdown log.
 
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
@@ -969,7 +987,15 @@ are in `~/vibestudio-templates/*`; the worktrees are in
     removed (`c6d518177`) once the fork fixed E14.
 - **How Base consumes it:** a locally packed prerelease (currently
   `1.2.0-vibestudio.4-dolt.5`), built with `package-vibestudio.mjs`.
-  - The host pins it with `file:` overrides.
+  - The five staged archives under
+    `~/vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5`
+    match `release.json` for SHA-256, npm SHA-512 integrity, package contents
+    and dependency declarations. All 2,108 captured source files match.
+  - The host pins `pi-telemetry`, `pi-chord`, `pi-codemode`, `pi-ai` and
+    `pi-durable` with `file:` overrides in `package.json`. After publication,
+    remove those five entries, regenerate `pnpm-lock.yaml` from the registry
+    and verify a frozen install. The declared direct dependencies already
+    use the staged version.
   - Userland builds need `VIBESTUDIO_DEV_NPM_REGISTRY=http://127.0.0.1:4873/`
     pointing at a loopback registry served by `serve-vibestudio-registry.mjs`.
   - Details are in `HANDOFF-dolt-redesign.md`.
@@ -1028,6 +1054,14 @@ Everything in the status table of `docs/fork/design.md` is merged into
   `60f0bf8` and passed on `f9b25fb` and `b5742d1`.
 
 **Open in the fork, in priority order:**
+
+The pinned CI Linux binary from `0410398` repeated the 51-scenario suite,
+including the new two-deployment Dolt transfer. In the first scope 47
+passed, R2 recorded its existing ETag XFAIL, Pi and OpenCode skipped
+their model calls, and the container load balancer hit capacity while
+the runtime reported memory shedding. The container scenario passed
+on the same binary in a separate 6 GiB scope with swap disabled.
+See `p5-pinned-fork-e2e.log` and `p5-pinned-fork-container.log`.
 
 1. **`python` e2e complete.** Runtime `b5742d1` validates Pyodide's
    typed import-and-re-export adapter before compiling it. The Python
@@ -1107,7 +1141,7 @@ those of `docs/dolt-redesign.md` §10.
 | P3 Durable services         | **Done.** `WorkspaceStateDO` is a Dolt cell, with a replaying import from the retired `WorkspaceDO`; the maintenance journal and `cloneDO` are deleted.                                                                                                                                                                                                                                                                                                                                                                |
 | P4 Agent system             | **Mostly done**, see below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | P5 GAD decentralized        | Local participant storage, replay, file routing, native integration, protected publication and retirement passed focused tests. Disposable managed instances verified separate editable folders, paired publication and normal shutdown. Default startup cutover, the remaining public history methods, and acceptance benchmarks are open. |
-| P6 Chronolog capability     | **Not started.**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| P6 Chronolog capability     | The fork's direct transfer and Chronolog's two-node replay are verified. The Vibestudio service and membership check for publication are open. |
 
 **P4 in detail** (slices are in `docs/dolt-redesign.md` §6.8–§6.11):
 
@@ -1292,6 +1326,15 @@ pushes them.
      to remove.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
+     Use host `feat/gad-participant-admission` and Base
+     `feat/gad-participant-cells`, which already include the earlier P0/P2
+     changes. A preview against the locally fetched main refs found host
+     conflicts in desktop and headless console history, Base conflicts in
+     the agent package manifest and pubsub channel, and system-testing
+     conflicts in the skill package and test runner. Chronolog conflicts in
+     its conformance report. Pi can fast-forward. The other template branches
+     previewed cleanly. Refresh the previews against the owner's target commits
+     before integrating and test the combined changes after resolving conflicts.
    - Delete the retired `WorkspaceDO` class and its import driver in the
      release after the one that ships P3 (see the handoff).
 6. **Chronolog cleanup** (§4.4 items 1–6). Can be done before P6, which

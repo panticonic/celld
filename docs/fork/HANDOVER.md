@@ -1604,6 +1604,13 @@ pushes them.
        measured 14–16 ms).
    - Do it in vertical slices, like P4, and never leave two models in force.
 3. **P6, the Chronolog capability.** Design: `docs/dolt-redesign.md` §8.
+   The owner selected the current Chronolog main as the release target.
+   Its `d014879` revision uses the owned peer-session architecture.
+   It replaced the daemon, RPC, node-core and SSB packages that the earlier
+   native port used. Keep the older worktree as verification evidence.
+   Port through the current device, storage, execution and peer transport
+   interfaces in `/home/werg/chronolog-worktrees/celld-peer-session` on
+   `feature/celld-peer-session`.
    Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
    below.
    - A Chronolog node per workspace node and the `chronolog` host service.
@@ -1627,8 +1634,9 @@ pushes them.
      changes. A preview against the locally fetched main refs found host
      conflicts in desktop and headless console history, Base conflicts in
      the agent package manifest and pubsub channel, and system-testing
-     conflicts in the skill package and test runner. Chronolog conflicts in
-     its conformance report. Pi can fast-forward. The other template branches
+     conflicts in the skill package and test runner. The owner's current
+     Chronolog target needs the peer-session port above. Pi can fast-forward
+     at the previous preview target. The other template branches
      previewed cleanly. Refresh the previews against the owner's target commits
      before integrating and test the combined changes after resolving conflicts.
    - Delete the retired `WorkspaceDO` class and its import driver in the

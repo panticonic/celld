@@ -922,6 +922,17 @@ normally. See `p5-execution-publication-proof.log`,
 `p5-owned-interactive-session-check.log`, and
 `p5-managed-runtime-source28-evidence.log`.
 
+Base `f57bdc2` and host `539b59330` select saved revisions from
+the caller's owned branches for compare and merge. The signed writer
+compared its private child, merged it into the parent, saved the exact
+child event as a parent, and retried the same command. Shared main
+stayed at its previous revision. A second signed participant was
+refused compare and merge even with the child's exact event. The 114
+host tests, 226 Base tests and both typechecks passed. The managed
+run peaked at 3.77 GiB with zero OOM kills and shut down normally.
+See `p5-owned-branch-merge-check2.log` and
+`p5-managed-runtime-source29-evidence.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

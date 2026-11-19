@@ -2192,6 +2192,20 @@ pushes them.
    `native-gad-seed-protected.log` also composed the production protected
    host ref publication with the native copy, observed the creation gate,
    and reopened the recorded origin after removing the staged bundle.
+   Chronolog main advanced to `d1cc92b`. The local port merged it at
+   `63194c9`, keeping the native materializer's rollback recovery and using
+   the upstream owner's verified authority API. Type checking, targeted
+   lint, and all 125 focused tests passed. The new sealed archive SHA-256 is
+   `7f0135185732929fa572ed97dbeb0cd450589d7434e6c1bea72ba32e0a75c21c`.
+   The host loader verified its provenance fingerprint
+   `62811e8fb35b7befb86262426ea5718089e52caaa1059a5221b55e0bfdaa03a6`.
+   With that archive, two nodes replayed signed SQL, preserved distinct row
+   owners, refused a cross-owner update, and recovered the selected
+   generation and read views after restart. The workspace directory also
+   reconnected two groups, and the signed GAD publication retained its exact
+   receipt. See `chronolog-current-main-d1cc92b-check.log`,
+   `chronolog-d1cc92b-replay-native.log`,
+   `chronolog-d1cc92b-workspace-native.log`, and `native-gad-d1cc92b.log`.
    The next installed check needs two workspaces on the matching combined
    release and the normal creation review on the seeded destination.
    The local merged host `29eead0fa` and Base `404f345` passed

@@ -79,6 +79,20 @@ const continuations = {
 // An exclusive section that never ends (the 30 s limit is off) holds its object,
 // and must not hold the node: a request queued behind it is released and the
 // node stops and starts again.
+const closing = {
+  example: "continuations",
+  id: "continuations-closing-checkpoint",
+  title: "a reply's closing checkpoint drives a retired event's transaction",
+  steps: [
+    get("/arm?op=transaction", { status: 200, json: { armed: "transaction" } }),
+    get("/closing-checkpoint?op=transaction", { status: 200, json: { released: "transaction" } }),
+    get("/result?op=transaction", { status: 200, json: { ok: "inside" } }, {
+      poll: settled,
+      name: "a transaction starts from the reply's closing checkpoint",
+    }),
+  ],
+};
+
 const stuck = {
   example: "continuations",
   id: "continuations-stuck",
@@ -97,4 +111,4 @@ const stuck = {
   ],
 };
 
-export default [continuations, stuck];
+export default [continuations, closing, stuck];

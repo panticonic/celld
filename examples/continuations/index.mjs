@@ -137,6 +137,18 @@ export class Agent extends DurableObject {
       case "/go":
         this.releases.get(op)?.();
         return Response.json({ released: op });
+      case "/closing-checkpoint": {
+        const response = Response.json({ released: op });
+        // The runtime reads this property while settling the handler's reply.
+        // Releasing here queues the continuation for the closing checkpoint.
+        Object.defineProperty(response, "type", {
+          get: () => {
+            this.releases.get(op)?.();
+            return "default";
+          },
+        });
+        return response;
+      }
       case "/result": {
         const recorded = this.ctx.storage.kv.get(`result:${op}`);
         return Response.json(this.results[op] ?? (recorded ? JSON.parse(recorded) : "unknown"));

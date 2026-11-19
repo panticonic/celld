@@ -121,16 +121,18 @@ const M: &str = "TZLINE:";
 #[test]
 fn localtime_is_utc_under_a_context_whatever_tz_says() {
     if !in_tz_child() {
-        let utc = run_child_under_tz("localtime_is_utc_under_a_context_whatever_tz_says", "UTC", M);
-        let la = run_child_under_tz("localtime_is_utc_under_a_context_whatever_tz_says", "America/Los_Angeles", M);
-        let kolkata = run_child_under_tz("localtime_is_utc_under_a_context_whatever_tz_says", "Asia/Kolkata", M);
+        // Fixed UTC offsets work on both POSIX libcs and the Microsoft CRT.
+        let test = "localtime_is_utc_under_a_context_whatever_tz_says";
+        let utc = run_child_under_tz(test, "UTC0", M);
+        let west = run_child_under_tz(test, "PST7", M);
+        let east = run_child_under_tz(test, "IST-5:30", M);
         // Pinned results do not depend on TZ ...
-        assert_eq!(utc[0], la[0]);
-        assert_eq!(utc[0], kolkata[0]);
+        assert_eq!(utc[0], west[0]);
+        assert_eq!(utc[0], east[0]);
         // ... while the unpinned ones do, which proves TZ took effect.
         assert_eq!(utc[1], "2024-07-01 12:00:00");
-        assert_eq!(la[1], "2024-07-01 05:00:00");
-        assert_eq!(kolkata[1], "2024-07-01 17:30:00");
+        assert_eq!(west[1], "2024-07-01 05:00:00");
+        assert_eq!(east[1], "2024-07-01 17:30:00");
         return;
     }
     let c = mem();

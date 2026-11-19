@@ -26,6 +26,7 @@ use crate::ffi;
 use rusqlite::ffi as sys;
 use rusqlite::Connection;
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -306,7 +307,7 @@ fn run(conn: &Connection, program: &Program, ctx: &ExecContext, own: bool) -> Re
     if own {
         exec_sql(db, "BEGIN IMMEDIATE")?;
     }
-    match run_inner(db, program, ctx, own, state) {
+    match run_inner(conn, program, ctx, own, state) {
         Ok(outcome) => Ok(outcome),
         Err(error) => {
             if own && unsafe { sys::sqlite3_get_autocommit(db) } == 0 {
@@ -319,12 +320,13 @@ fn run(conn: &Connection, program: &Program, ctx: &ExecContext, own: bool) -> Re
 }
 
 fn run_inner(
-    db: *mut sys::sqlite3,
+    conn: &Connection,
     program: &Program,
     ctx: &ExecContext,
     own: bool,
     state: &ExecState,
 ) -> Result<Outcome, ExecError> {
+    let db = unsafe { conn.handle() };
     exec_sql(db, &format!("SAVEPOINT {SAVEPOINT_NAME}"))?;
     let rejection = {
         let _det = DetScope::set(db, ctx)?;
@@ -334,7 +336,7 @@ fn run_inner(
             transaction_id: ctx.transaction_id.clone(),
         };
         let _identity = IdentityScope(state);
-        run_steps(db, program, ctx)?
+        run_steps(conn, program, ctx)?
     };
     let transaction_gone = unsafe { sys::sqlite3_get_autocommit(db) } != 0;
     match rejection {
@@ -367,10 +369,10 @@ fn run_inner(
     }
 }
 
-fn run_steps(db: *mut sys::sqlite3, program: &Program, ctx: &ExecContext) -> Result<Option<(String, usize)>, ExecError> {
+fn run_steps(conn: &Connection, program: &Program, ctx: &ExecContext) -> Result<Option<(String, usize)>, ExecError> {
     let Profile::Consensus { schema_admin } = ctx.profile;
     for (index, statement) in program.steps.iter().enumerate() {
-        match run_statement(db, statement, &ctx.limits, schema_admin) {
+        match run_statement(conn, statement, &ctx.limits, schema_admin) {
             Ok(()) => {}
             Err(Fail::Reject(code)) => return Ok(Some((code, index))),
             Err(Fail::Fatal(error)) => return Err(error),
@@ -496,7 +498,7 @@ impl Drop for Stmt {
 }
 
 fn run_statement(
-    db: *mut sys::sqlite3,
+    conn: &Connection,
     statement: &Statement,
     limits: &Limits,
     schema_admin: bool,
@@ -508,7 +510,9 @@ fn run_statement(
     if sql.len() > limits.max_sql_bytes {
         return Err(reject("too_large"));
     }
-    let auth = RefCell::new(Authorizer::new(AuthMode::Consensus, AuthOptions { schema_admin }));
+    let db = unsafe { conn.handle() };
+    let auth = RefCell::new(profile_authorizer(conn, AuthMode::Consensus, AuthOptions { schema_admin })
+        .map_err(Fail::Fatal)?);
     let budget = Budget {
         callbacks: Cell::new(0),
         max_callbacks: limits.max_vm_steps.div_ceil(u64::from(limits.progress_granularity)).max(1),
@@ -561,7 +565,7 @@ pub fn check_statement(conn: &Connection, sql: &str, mode: AuthMode, options: Au
     if bytes.len() > limits.max_sql_bytes {
         return Err("too_large".into());
     }
-    let auth = RefCell::new(Authorizer::new(mode, options));
+    let auth = RefCell::new(profile_authorizer(conn, mode, options).map_err(|e| format!("operational: {e}"))?);
     let budget = Budget {
         callbacks: Cell::new(0),
         max_callbacks: limits.max_vm_steps.div_ceil(u64::from(limits.progress_granularity)).max(1),
@@ -588,6 +592,43 @@ pub fn check_statement(conn: &Connection, sql: &str, mode: AuthMode, options: Au
         Some(rest) if is_trivia_only(rest) => Ok(()),
         _ => Err("prepare".into()),
     }
+}
+
+fn profile_authorizer(conn: &Connection, mode: AuthMode, options: AuthOptions) -> Result<Authorizer, ExecError> {
+    let mut auth = Authorizer::new(mode, options);
+    if matches!(mode, AuthMode::Consensus | AuthMode::Platform) {
+        auth.set_lifecycle_triggers(lifecycle_triggers(conn).map_err(|error| {
+            let code = match &error {
+                rusqlite::Error::SqliteFailure(cause, _) => cause.extended_code,
+                _ => sys::SQLITE_ERROR,
+            };
+            ExecError::Operational { code, message: format!("cannot read Chronolog table registry: {error}") }
+        })?);
+    }
+    Ok(auth)
+}
+
+/// Only a trusted platform operation can register a table or create these
+/// reserved triggers. Check the live registry and attached schema, rather
+/// than using a schema cookie that can repeat after rollback.
+fn lifecycle_triggers(conn: &Connection) -> rusqlite::Result<HashSet<String>> {
+    let has_registry = conn.prepare_cached(
+        "SELECT EXISTS (SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = 'chronolog_tables')"
+    )?.query_row([], |row| row.get::<_, bool>(0))?;
+    if !has_registry {
+        return Ok(HashSet::new());
+    }
+    let mut stmt = conn.prepare_cached(
+        "SELECT lower(s.name)
+           FROM main.sqlite_schema s JOIN main.chronolog_tables t
+             ON s.tbl_name = t.name COLLATE NOCASE
+          WHERE s.type = 'trigger' AND lower(s.name) IN (
+                'chronolog_k_' || lower(s.tbl_name) || '_upd',
+                'chronolog_k_' || lower(s.tbl_name) || '_del',
+                'chronolog_l_' || lower(s.tbl_name) || '_ins')"
+    )?;
+    let names = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    names.collect()
 }
 
 /// The result of [`local_query`].
@@ -1158,12 +1199,14 @@ unsafe fn register_state<'a>(db: *mut sys::sqlite3) -> Result<&'a ExecState, Exe
         }
         let state = Box::into_raw(Box::new(ExecState { identity: Mutex::default() }));
         let flags = sys::SQLITE_UTF8 | sys::SQLITE_INNOCUOUS;
-        let defs: [(&CStr, c_int, c_int, unsafe extern "C" fn(*mut sys::sqlite3_context, c_int, *mut *mut sys::sqlite3_value)); 5] = [
+        let defs: [(&CStr, c_int, c_int, unsafe extern "C" fn(*mut sys::sqlite3_context, c_int, *mut *mut sys::sqlite3_value)); 7] = [
             (c"chronolog_assert", 2, flags | sys::SQLITE_DETERMINISTIC, chronolog_assert),
             (c"chronolog_actor", 0, flags, chronolog_actor),
             (c"chronolog_actor_id", 0, flags, chronolog_actor_id),
             (c"chronolog_transaction_id", 0, flags, chronolog_transaction_id),
             (c"chronolog_policy_violation", 2, flags, chronolog_policy_violation),
+            (c"chronolog_row_key", -1, flags | sys::SQLITE_DETERMINISTIC, crate::owner_values::row_key),
+            (c"chronolog_value_equal", 2, flags | sys::SQLITE_DETERMINISTIC, crate::owner_values::value_equal),
         ];
         for (name, n_args, f, func) in defs {
             let rc = sys::sqlite3_create_function_v2(db, name.as_ptr(), n_args, f, ptr::null_mut(), Some(func), None, None, None);

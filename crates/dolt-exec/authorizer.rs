@@ -166,6 +166,7 @@ pub struct Authorizer {
     mode: AuthMode,
     options: AuthOptions,
     dropped_tables: HashSet<String>,
+    lifecycle_triggers: HashSet<String>,
     /// Set while the statement is being stepped (not prepared): authorizer
     /// calls then come from SQL a virtual-table module runs internally.
     pub in_step: bool,
@@ -177,7 +178,14 @@ pub struct Authorizer {
 
 impl Authorizer {
     pub fn new(mode: AuthMode, options: AuthOptions) -> Self {
-        Self { mode, options, dropped_tables: HashSet::new(), in_step: false, denied: false }
+        Self {
+            mode, options, dropped_tables: HashSet::new(), lifecycle_triggers: HashSet::new(),
+            in_step: false, denied: false,
+        }
+    }
+
+    pub(crate) fn set_lifecycle_triggers(&mut self, names: HashSet<String>) {
+        self.lifecycle_triggers = names;
     }
 
     /// `true` to allow (SQLITE_OK), `false` to deny (SQLITE_DENY). Arguments
@@ -267,6 +275,20 @@ impl Authorizer {
         }
         if mode == AuthMode::LocalRead {
             return false;
+        }
+
+        // These exact generated triggers retire grants, offers and reader
+        // policies when their row is changed. Application triggers cannot
+        // inherit the permission or change any other policy column.
+        if action_code == a::UPDATE && database == "main" && self.lifecycle_triggers.contains(&caller)
+            && matches!(
+                (object.as_str(), secondary.as_str()),
+                ("chronolog_grants", "revoked_tx")
+                    | ("chronolog_transfers", "state" | "closed_tx")
+                    | ("chronolog_reader_policies", "closed_tx" | "row_key")
+            )
+        {
+            return true;
         }
 
         // ---- consensus writes ----

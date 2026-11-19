@@ -13,7 +13,7 @@
 
 mod common;
 
-use celld_dolt_exec::pin_clock;
+use celld_dolt_exec::{pin_clock, register_functions};
 use common::*;
 use rusqlite::Connection;
 
@@ -68,4 +68,27 @@ fn per_connection_prng_matches_the_chronolog_addon_stream() {
         .remove(0);
         assert_eq!(got, want.to_vec(), "seed {seed}");
     }
+}
+
+#[test]
+fn stored_row_keys_and_exact_equality_match_the_current_chronolog_addon() {
+    let c = Connection::open_in_memory().unwrap();
+    register_functions(&c).unwrap();
+    let got = rows_as_strings(
+        &c,
+        "SELECT chronolog_row_key(NULL, -42, 1.5000000000000002, CAST(x'61ff00' AS TEXT), x'61006f6e65', '', x'', -0.0),
+                chronolog_value_equal('a' COLLATE NOCASE, 'A'), chronolog_value_equal(1, 1.0),
+                chronolog_value_equal(x'31', '1'), chronolog_value_equal(NULL, NULL),
+                chronolog_value_equal(-0.0, 0.0)",
+    ).remove(0);
+    assert_eq!(got, [
+        "rk1:00080001ffffffffffffffd6023ff8000000000001030000000361ff00040000000561006f6e6503000000000400000000028000000000000000",
+        "0", "0", "0", "1", "0",
+    ]);
+    let mut two = c.prepare("SELECT chronolog_row_key()").unwrap();
+    assert!(two.query_row([], |row| row.get::<_, String>(0)).is_err());
+    let mut query = String::from("SELECT chronolog_row_key(");
+    query.push_str(&["NULL"; 65].join(","));
+    query.push(')');
+    assert!(c.query_row(&query, [], |row| row.get::<_, String>(0)).is_err());
 }

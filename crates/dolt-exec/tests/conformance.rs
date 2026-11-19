@@ -9,7 +9,7 @@
 mod common;
 
 use celld_dolt_exec::{
-    check_statement, execute, execute_in_transaction, prng_seed_from_tx_id, AuthMode, AuthOptions, ExecContext,
+    check_statement, execute, execute_in_transaction, prng_seed_from_tx_id, register_functions, AuthMode, AuthOptions, ExecContext,
     ExecError, Limits, Outcome, Parameter, Profile, Program, SqlValue, Statement,
 };
 use common::*;
@@ -48,6 +48,66 @@ fn rejected(conn: &Connection, p: &Program, ctx: &ExecContext) -> (String, Optio
         Outcome::Rejected { code, statement_index } => (code, statement_index),
         Outcome::Accepted => panic!("expected a rejection: {p:?}"),
     }
+}
+
+#[test]
+fn only_registered_lifecycle_triggers_can_update_their_policy_columns() {
+    let (_dir, c) = fresh_dolt();
+    register_functions(&c).unwrap();
+    c.execute_batch(
+        "CREATE TABLE chronolog_tables (name TEXT PRIMARY KEY);
+         CREATE TABLE chronolog_grants (id INTEGER PRIMARY KEY, revoked_tx BLOB, scope TEXT);
+         CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
+         INSERT INTO chronolog_tables VALUES ('notes');
+         INSERT INTO chronolog_grants VALUES (1, NULL, 'original');
+         INSERT INTO notes VALUES (1, 'original');
+         CREATE TRIGGER chronolog_k_notes_upd BEFORE UPDATE ON notes BEGIN
+           UPDATE chronolog_grants SET revoked_tx = chronolog_transaction_id() WHERE id = OLD.id;
+         END;",
+    ).unwrap();
+    let mut user = user_ctx(1);
+    user.transaction_id = Some(vec![0x42; 32]);
+    accepted(&c, &prog(&["UPDATE notes SET body = 'changed' WHERE id = 1"]), &user);
+    assert_eq!(
+        c.query_row("SELECT revoked_tx, scope FROM chronolog_grants", [], |r|
+            Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, String>(1)?))).unwrap(),
+        (vec![0x42; 32], "original".into()),
+    );
+    assert_eq!(
+        rejected(&c, &prog(&["UPDATE chronolog_grants SET revoked_tx = NULL"]), &user),
+        ("denied".into(), Some(0)),
+    );
+    c.execute_batch(
+        "CREATE TRIGGER arbitrary AFTER UPDATE ON notes BEGIN
+           UPDATE chronolog_grants SET revoked_tx = NULL WHERE id = OLD.id;
+         END;",
+    ).unwrap();
+    assert_eq!(
+        rejected(&c, &prog(&["UPDATE notes SET body = 'denied'"]), &user),
+        ("denied".into(), Some(0)),
+    );
+    c.execute_batch(
+        "DROP TRIGGER arbitrary;
+         DROP TRIGGER chronolog_k_notes_upd;
+         CREATE TRIGGER chronolog_k_notes_upd BEFORE UPDATE ON notes BEGIN
+           UPDATE chronolog_grants SET scope = 'widened' WHERE id = OLD.id;
+         END;",
+    ).unwrap();
+    assert_eq!(
+        rejected(&c, &prog(&["UPDATE notes SET body = 'denied'"]), &user),
+        ("denied".into(), Some(0)),
+    );
+    c.execute_batch(
+        "DROP TRIGGER chronolog_k_notes_upd;
+         DELETE FROM chronolog_tables;
+         CREATE TRIGGER chronolog_k_notes_upd BEFORE UPDATE ON notes BEGIN
+           UPDATE chronolog_grants SET revoked_tx = NULL WHERE id = OLD.id;
+         END;",
+    ).unwrap();
+    assert_eq!(
+        rejected(&c, &prog(&["UPDATE notes SET body = 'denied'"]), &user),
+        ("denied".into(), Some(0)),
+    );
 }
 
 /// The database the Chronolog security tests build, plus reserved names.

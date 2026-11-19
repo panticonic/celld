@@ -1775,6 +1775,22 @@ pushes them.
    The celld engine uses DoltLite 0.51.11 with its own execution digest.
    The workspace materializer still needs to bind one verified profile
    end to end. See `chronolog-current-sql-baseline.log`.
+   The fork's `celld-spec10-v3` profile implements the current
+   `chronolog_row_key()` and `chronolog_value_equal()` functions and
+   restricts policy-column updates to registered lifecycle triggers.
+   All 77 Dolt executor tests passed, including vectors taken directly
+   from the current patched addon. A real Dolt cell installed the
+   exact generated current Chronolog schema and triggers. It accepted
+   owner writes and a column grant, rejected a foreign-row write at
+   the correct step and rolled back that program. It also refused a
+   case-only change outside the grant and a direct metadata write.
+   An owner changing the row key atomically revoked the grant, and
+   the results survived restart. See
+   `chronolog-current-generated-owner-native.log` and
+   `celld-current-owner-lifecycle-green.log`.
+   This fixture prepares the schema and grant as trusted setup. The
+   current materializer still needs the native transaction adapter for
+   signed schema and platform operations.
    Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
    below.
    - A Chronolog node per workspace node and the `chronolog` host service.

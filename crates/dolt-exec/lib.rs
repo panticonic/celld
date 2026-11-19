@@ -19,6 +19,7 @@ pub mod authorizer;
 mod exec;
 mod ffi;
 mod manifest;
+mod owner_values;
 
 pub use authorizer::{AuthMode, AuthOptions, Authorizer};
 pub use exec::{

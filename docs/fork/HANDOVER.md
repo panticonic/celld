@@ -281,6 +281,19 @@ with no other heavy build running. See
 `p5-native-replay-private-content3.log` and
 `p5-replay-private-base-types2.log`.
 
+Host `09175c1e9` can recover ownership of a migrated interactive copy
+from durable authenticated session records on ordinary startup. It
+assigns ownership only when those records identify a single user and
+keeps any recorded owner. In managed run `runtime-source40`, the frozen
+history was installed and stopped with the original copy still unassigned.
+After a normal restart, its original signed owner reopened the same
+context and read the same bytes. A second signed session was refused.
+Both launches stopped normally. They peaked at 3.39 and 4.59 GiB.
+The 66 focused host tests, type check and targeted lint passed. This
+verifies recovery of installed history. First-time cutover remains open.
+See `p5-managed-runtime-source40-evidence.log` and
+`p5-replayed-session-owners-check2.log`.
+
 **Native checkout measurement.** The replayed workspace had 5,135 versioned
 files and 10,000 local table rows. Each warm run had 200 quiet checkouts and
 200 after a local write, alternating between distinct revisions. Collecting
@@ -292,6 +305,15 @@ completed-request p95 was 42.61–43.29 ms and 50.14–50.77 ms respectively.
 A separate syscall trace confirmed successful disk syncs during both cases.
 The trace and the uninstrumented request samples are in
 `p5-native-checkout-profile/` in the private state directory.
+
+The optimized `a6dce5d` Linux release passed the full model-free sweep:
+48 passed, the known R2 ETag contract failed as expected, and the two
+model-dependent scenarios were skipped. The container scenario passed in
+the 8 GiB verification scope. It needs capacity for five declared 1 GiB
+reservations plus the runtime. The earlier 3 GiB run refused a container
+under admission pressure. See `celld-optimized-release-full.log` and its
+JSON report. The same revision passed Windows recovery in GitHub Actions
+run 44511291186. The staged Vibestudio runtime remains pinned to `c8dfc2e`.
 
 P5 has a local implementation on Base `feat/gad-participant-cells` and
 host `feat/gad-participant-admission`. Base `69ffa6b` and host `ccf995f0b`

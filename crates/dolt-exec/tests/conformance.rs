@@ -9,8 +9,11 @@
 mod common;
 
 use celld_dolt_exec::{
-    check_statement, execute, execute_in_transaction, prng_seed_from_tx_id, register_functions, AuthMode, AuthOptions, ExecContext,
-    ExecError, Limits, Outcome, Parameter, Profile, Program, SqlValue, Statement,
+    check_statement, clear_transaction_program, execute, execute_in_transaction,
+    finish_program_transaction, pin_transaction_program, prepare_program_transaction,
+    prng_seed_from_tx_id, register_functions, run_pinned_transaction_step,
+    transaction_program_id, AuthMode, AuthOptions, ExecContext, ExecError, Limits,
+    Outcome, Parameter, Profile, Program, SqlValue, Statement,
 };
 use common::*;
 use rusqlite::Connection;
@@ -470,6 +473,73 @@ fn a_write_that_exhausts_the_step_budget_is_a_rejection_and_leaves_no_trace() {
     // The connection is fine: the next program runs.
     accepted(&c, &prog(&["INSERT INTO t VALUES (3)"]), &admin_ctx(2));
     assert_eq!(q1::<i64>(&c, "SELECT count(*) FROM t"), 2);
+}
+
+#[test]
+fn an_interleaved_program_shares_the_clock_identity_and_random_stream() {
+    let (_dir, c) = fresh_dolt();
+    c.execute_batch(
+        "PRAGMA foreign_keys = OFF;
+         CREATE TABLE draws (id INTEGER PRIMARY KEY, value BLOB, at TEXT, actor INTEGER, tx BLOB);
+         CREATE TABLE chronolog_grants (id INTEGER PRIMARY KEY, value INTEGER);
+         CREATE TABLE linked (id INTEGER PRIMARY KEY REFERENCES draws(id));",
+    ).unwrap();
+    let mut ctx = user_ctx(1);
+    ctx.actor_id = Some(9_007_199_254_740_993);
+    ctx.transaction_id = Some(vec![0x42; 32]);
+    let first = "INSERT INTO draws VALUES (1, randomblob(16), datetime('now'), chronolog_actor_id(), chronolog_transaction_id())";
+    let second = "INSERT INTO draws VALUES (2, randomblob(16), datetime('now'), chronolog_actor_id(), chronolog_transaction_id())";
+    accepted(&c, &prog(&[first, second]), &ctx);
+    let expected = rows_as_strings(&c, "SELECT * FROM draws ORDER BY id");
+    c.execute_batch("DELETE FROM draws").unwrap();
+
+    prepare_program_transaction(&c).unwrap();
+    c.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let pin = pin_transaction_program(&c, &ctx).unwrap();
+    assert_eq!(transaction_program_id(&c), Some(pin));
+    assert!(pin_transaction_program(&c, &ctx).is_err());
+    let step = |sql, mode| run_pinned_transaction_step(&c, &s(sql), mode, false).unwrap();
+    assert_eq!(step(first, AuthMode::Consensus), Outcome::Accepted);
+    assert_eq!(step("INSERT INTO chronolog_grants VALUES (1, 1)", AuthMode::Platform), Outcome::Accepted);
+    assert_eq!(step("DELETE FROM chronolog_grants", AuthMode::Consensus), Outcome::Rejected {
+        code: "denied".into(), statement_index: None,
+    });
+    assert_eq!(step("INSERT INTO linked VALUES (100)", AuthMode::Platform), Outcome::Rejected {
+        code: "constraint".into(), statement_index: None,
+    });
+    assert_eq!(step(second, AuthMode::Consensus), Outcome::Accepted);
+    assert_eq!(rows_as_strings(&c, "SELECT * FROM draws ORDER BY id"), expected);
+    clear_transaction_program(&c);
+    c.execute_batch("COMMIT").unwrap();
+    finish_program_transaction(&c).unwrap();
+    assert_eq!(transaction_program_id(&c), None);
+    assert_eq!(q1::<i64>(&c, "PRAGMA foreign_keys"), 0);
+    assert_eq!(q1::<i64>(&c, "SELECT chronolog_actor_id() IS NULL"), 1);
+    assert_eq!(q1::<i64>(&c, "SELECT count(*) FROM chronolog_grants"), 1);
+}
+
+#[test]
+fn an_interrupted_pinned_write_rolls_back_the_whole_transaction() {
+    let (_dir, c) = fresh_dolt();
+    c.execute_batch("PRAGMA foreign_keys = OFF; CREATE TABLE t (n INTEGER PRIMARY KEY)").unwrap();
+    let mut ctx = user_ctx(1);
+    ctx.limits.max_vm_steps = 5_000;
+    prepare_program_transaction(&c).unwrap();
+    c.execute_batch("BEGIN IMMEDIATE; SAVEPOINT app").unwrap();
+    pin_transaction_program(&c, &ctx).unwrap();
+    let step = |sql| run_pinned_transaction_step(&c, &s(sql), AuthMode::Consensus, false).unwrap();
+    assert_eq!(step("INSERT INTO t VALUES (1)"), Outcome::Accepted);
+    assert_eq!(
+        step("WITH RECURSIVE n(i) AS (SELECT 10 UNION ALL SELECT i+1 FROM n) INSERT INTO t SELECT i FROM n"),
+        Outcome::Rejected { code: "step_limit".into(), statement_index: None },
+    );
+    assert!(c.is_autocommit());
+    finish_program_transaction(&c).unwrap();
+    assert_eq!(transaction_program_id(&c), None);
+    assert_eq!(q1::<i64>(&c, "PRAGMA foreign_keys"), 0);
+    assert_eq!(q1::<i64>(&c, "SELECT count(*) FROM t"), 0);
+    accepted(&c, &prog(&["INSERT INTO t VALUES (2)"]), &ctx);
+    assert_eq!(q1::<i64>(&c, "SELECT n FROM t"), 2);
 }
 
 #[test]

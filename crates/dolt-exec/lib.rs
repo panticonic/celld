@@ -23,7 +23,11 @@ mod owner_values;
 
 pub use authorizer::{AuthMode, AuthOptions, Authorizer};
 pub use exec::{
-    check_statement, det_context_active, execute, execute_in_transaction, local_query, scoped_query, LocalRows, pin_clock, prng_seed_from_tx_id, register_functions, Binding, DetScope,
+    check_statement, clear_transaction_program, det_context_active, execute, execute_in_transaction,
+    finish_program_transaction, local_query, pin_clock, pin_transaction_program,
+    prepare_program_transaction, prng_seed_from_tx_id, program_transaction_prepared,
+    register_functions, run_pinned_transaction_step, scoped_query, transaction_program_id,
+    Binding, DetScope, LocalRows,
     ExecContext, ExecError, ExecState, Limits, Outcome, Parameter, Profile, Program, SqlValue, Statement,
 };
 pub use manifest::{

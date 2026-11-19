@@ -3502,8 +3502,16 @@ pub fn transaction_control(
     action: &str,
     nested: bool,
     savepoint: &str,
+    program: bool,
 ) -> Result<Option<i64>, String> {
+    let ends_outer = !nested && matches!(action, "commit" | "rollback" | "rollback_explicit");
+    if program && (action != "start" || nested || !is_dolt(scope)) {
+        return Err("a program transaction must start at the outermost Dolt storage boundary".into());
+    }
     if let Some(error) = sql_critical_error(scope) {
+        if ends_outer {
+            with(scope, crate::dolt_exec::clear_transaction_program);
+        }
         let result = match action {
             "rollback" => Ok(None),
             "rollback_explicit" => Err(error),
@@ -3541,7 +3549,14 @@ pub fn transaction_control(
                 }
                 _ => return Err("invalid storage transaction action".to_string()),
             };
-            connection.execute_batch(&query).map_err(|error| {
+            if program {
+                crate::dolt_exec::prepare_program_transaction(connection)
+                    .map_err(|error| error.to_string())?;
+            }
+            if ends_outer {
+                crate::dolt_exec::clear_transaction_program(connection);
+            }
+            let result = connection.execute_batch(&query).map_err(|error| {
                 // A critical failure while committing or rolling back can make
                 // SQLite destroy the whole transaction; classify it so the
                 // actor poisons exactly like a mid-statement critical error.
@@ -3560,12 +3575,18 @@ pub fn transaction_control(
                     }
                 }
                 error.to_string()
-            })
+            });
+            if ends_outer || (program && result.is_err()) {
+                let cleanup = crate::dolt_exec::finish_program_transaction(connection)
+                    .map_err(|error| error.to_string());
+                return result.and(cleanup);
+            }
+            result
         })
     })
     .unwrap_or_else(|| Err(format!("no db for {scope}")));
     let result = result.map(|()| None);
-    if result.is_ok() && !nested && matches!(action, "commit" | "rollback" | "rollback_explicit") {
+    if result.is_ok() && ends_outer {
         let published = publish_alarm_if_transaction_dirty(scope);
         if action == "commit" {
             return Ok(published);
@@ -3576,7 +3597,12 @@ pub fn transaction_control(
 
 /// Whether `scope`'s connection is inside a transaction.
 pub(crate) fn transaction_open(scope: &str) -> bool {
-    with(scope, |connection| !connection.is_autocommit()).unwrap_or(false)
+    with(scope, |connection| {
+        !connection.is_autocommit()
+            || crate::dolt_exec::transaction_program_id(connection).is_some()
+            || crate::dolt_exec::program_transaction_prepared(connection)
+    })
+    .unwrap_or(false)
 }
 
 /// Roll back the transaction a terminated turn left open on `scope`'s
@@ -3585,12 +3611,12 @@ pub(crate) fn transaction_open(scope: &str) -> bool {
 /// later statement, and the next commit of the connection made them durable.
 pub(crate) fn rollback_abandoned_transaction(scope: &str) -> Result<(), String> {
     with(scope, |connection| {
-        if connection.is_autocommit() {
-            return Ok(());
-        }
+        crate::dolt_exec::clear_transaction_program(connection);
         without_sql_authorizer(connection, || {
-            connection
-                .execute_batch("ROLLBACK")
+            if !connection.is_autocommit() {
+                connection.execute_batch("ROLLBACK").map_err(|error| error.to_string())?;
+            }
+            crate::dolt_exec::finish_program_transaction(connection)
                 .map_err(|error| error.to_string())
         })
     })
@@ -4692,6 +4718,12 @@ pub fn dolt_op(scope: &str, op: &str, args: &serde_json::Value) -> Result<serde_
         if !cell.connection.is_autocommit() {
             return Err("a Dolt operation cannot run inside a storage transaction".to_string());
         }
+        if op == "programEngineProfile" {
+            return Ok(serde_json::json!({
+                "engineDigest": crate::dolt_exec::engine_digest_hex(),
+                "sqliteVec": cell.sqlite_vec,
+            }));
+        }
         if crate::dolt_cell::mutates(op) {
             // Counted before it runs: a failed checkout or merge can still
             // have committed part of its work.
@@ -4821,7 +4853,25 @@ pub fn dolt_tx_op(
         let connection = &cell.connection;
         let result = without_sql_authorizer(connection, || {
             let result = crate::dolt_cell::run_in_transaction(connection, op, args, &cell.dolt_local);
-            if result.is_ok() && cell.replicated_wake && crate::dolt_cell::changes_schema_in_transaction(op) {
+            if let Err(error) = &result {
+                if let Some(crate::dolt_exec::ExecError::Operational { code, .. }) =
+                    error.downcast_ref::<crate::dolt_exec::ExecError>()
+                {
+                    record_sqlite_operation_failure(scope, unsafe { connection.handle() }, true, *code, &error.to_string());
+                }
+            }
+            if op == "programStep" && connection.is_autocommit() {
+                crate::dolt_exec::clear_transaction_program(connection);
+                crate::dolt_exec::finish_program_transaction(connection)?;
+                return match result {
+                    Ok(value) => Ok(value),
+                    Err(error) => Ok(serde_json::json!({
+                        "transactionRolledBack": true,
+                        "error": error.to_string(),
+                    })),
+                };
+            }
+            if result.is_ok() && !connection.is_autocommit() && cell.replicated_wake && crate::dolt_cell::changes_schema_in_transaction(op) {
                 if let Err(error) = crate::dolt_cell::ensure_wake_triggers(connection) {
                     return Err(error.context("restore the wake triggers"));
                 }

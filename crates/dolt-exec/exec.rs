@@ -303,6 +303,9 @@ fn run(conn: &Connection, program: &Program, ctx: &ExecContext, own: bool) -> Re
     if !own && !in_txn {
         return Err(ExecError::TransactionState("execute_in_transaction() needs an open transaction"));
     }
+    if det_context_active(conn) {
+        return Err(ExecError::TransactionState("the connection already has a pinned context"));
+    }
     let _profile = ProfileScope::enter(db, &ctx.limits, !own)?;
     if own {
         exec_sql(db, "BEGIN IMMEDIATE")?;
@@ -329,13 +332,8 @@ fn run_inner(
     let db = unsafe { conn.handle() };
     exec_sql(db, &format!("SAVEPOINT {SAVEPOINT_NAME}"))?;
     let rejection = {
-        let _det = DetScope::set(db, ctx)?;
-        *state.identity.lock().unwrap() = ExecutionIdentity {
-            actor: ctx.actor.clone(),
-            actor_id: ctx.actor_id,
-            transaction_id: ctx.transaction_id.clone(),
-        };
-        let _identity = IdentityScope(state);
+        install_program_context(db, state, ctx)?;
+        let _pin = ProgramPin { db, state };
         run_steps(conn, program, ctx)?
     };
     let transaction_gone = unsafe { sys::sqlite3_get_autocommit(db) } != 0;
@@ -372,7 +370,7 @@ fn run_inner(
 fn run_steps(conn: &Connection, program: &Program, ctx: &ExecContext) -> Result<Option<(String, usize)>, ExecError> {
     let Profile::Consensus { schema_admin } = ctx.profile;
     for (index, statement) in program.steps.iter().enumerate() {
-        match run_statement(conn, statement, &ctx.limits, schema_admin) {
+        match run_statement(conn, statement, &ctx.limits, AuthMode::Consensus, schema_admin) {
             Ok(()) => {}
             Err(Fail::Reject(code)) => return Ok(Some((code, index))),
             Err(Fail::Fatal(error)) => return Err(error),
@@ -390,6 +388,10 @@ fn validate(program: &Program, ctx: &ExecContext) -> Result<(), ExecError> {
             program.steps.len()
         )));
     }
+    validate_context(ctx)
+}
+
+fn validate_context(ctx: &ExecContext) -> Result<(), ExecError> {
     if !(0..=253_402_300_799_999).contains(&ctx.now_ms) {
         return Err(ExecError::InvalidInput("now_ms is out of range".into()));
     }
@@ -501,6 +503,7 @@ fn run_statement(
     conn: &Connection,
     statement: &Statement,
     limits: &Limits,
+    mode: AuthMode,
     schema_admin: bool,
 ) -> Result<(), Fail> {
     let sql = statement.sql.as_bytes();
@@ -511,7 +514,7 @@ fn run_statement(
         return Err(reject("too_large"));
     }
     let db = unsafe { conn.handle() };
-    let auth = RefCell::new(profile_authorizer(conn, AuthMode::Consensus, AuthOptions { schema_admin })
+    let auth = RefCell::new(profile_authorizer(conn, mode, AuthOptions { schema_admin })
         .map_err(Fail::Fatal)?);
     let budget = Budget {
         callbacks: Cell::new(0),
@@ -1140,7 +1143,8 @@ fn pragma_int(db: *mut sys::sqlite3, name: &str) -> Result<i64, ExecError> {
     if rc != sys::SQLITE_OK || stmt.0.is_null() {
         return Err(ExecError::Operational { code: rc, message: format!("PRAGMA {name} failed") });
     }
-    if unsafe { sys::sqlite3_step(stmt.0) } != sys::SQLITE_ROW {
+    let rc = unsafe { sys::sqlite3_step(stmt.0) };
+    if rc != sys::SQLITE_ROW {
         return Err(ExecError::Operational { code: rc, message: format!("PRAGMA {name} returned no row") });
     }
     Ok(unsafe { sys::sqlite3_column_int64(stmt.0, 0) })
@@ -1154,13 +1158,13 @@ struct ProfileScope {
     db: *mut sys::sqlite3,
     limits: Vec<(c_int, c_int)>,
     config: Vec<(c_int, c_int)>,
-    recursive_triggers: i64,
+    recursive_triggers: Option<i64>,
     foreign_keys_restore: Option<c_int>,
 }
 
 impl ProfileScope {
     fn enter(db: *mut sys::sqlite3, l: &Limits, in_transaction: bool) -> Result<Self, ExecError> {
-        let mut scope = Self { db, limits: vec![], config: vec![], recursive_triggers: 0, foreign_keys_restore: None };
+        let mut scope = Self { db, limits: vec![], config: vec![], recursive_triggers: None, foreign_keys_restore: None };
         // Limits (chronolog configureSqliteLimits). Applied, read back, verified.
         let wanted: [(c_int, c_int); 12] = [
             (ffi::LIMIT_LENGTH, l.max_value_bytes as c_int),
@@ -1224,8 +1228,9 @@ impl ProfileScope {
             exec_sql(db, "PRAGMA foreign_keys = ON")?;
             scope.foreign_keys_restore = Some(fk);
         }
-        scope.recursive_triggers = pragma_int(db, "recursive_triggers")?;
-        if scope.recursive_triggers != 1 {
+        let recursive = pragma_int(db, "recursive_triggers")?;
+        if recursive != 1 {
+            scope.recursive_triggers = Some(recursive);
             exec_sql(db, "PRAGMA recursive_triggers = ON")?;
         }
         Ok(scope)
@@ -1235,7 +1240,7 @@ impl ProfileScope {
 impl Drop for ProfileScope {
     fn drop(&mut self) {
         let db = self.db;
-        if self.recursive_triggers != 1 {
+        if self.recursive_triggers == Some(0) {
             let _ = exec_sql(db, "PRAGMA recursive_triggers = OFF");
         }
         if let Some(old) = self.foreign_keys_restore {
@@ -1261,15 +1266,6 @@ pub struct DetScope {
 }
 
 impl DetScope {
-    fn set(db: *mut sys::sqlite3, ctx: &ExecContext) -> Result<Self, ExecError> {
-        Self::set_raw(
-            db,
-            ctx.now_ms,
-            ctx.seed,
-            ffi::SQLITE_DOLTLITE_DET_UTC_LOCALTIME | ffi::SQLITE_DOLTLITE_DET_RESET_COUNTERS,
-        )
-    }
-
     fn set_raw(db: *mut sys::sqlite3, now_ms: i64, seed: u64, flags: u32) -> Result<Self, ExecError> {
         let rc = unsafe { ffi::sqlite3_doltlite_set_det_context(db, now_ms, seed, flags) };
         if rc != sys::SQLITE_OK {
@@ -1315,13 +1311,174 @@ struct ExecutionIdentity {
 /// Per-connection identity, freed by SQLite when the connection closes.
 pub struct ExecState {
     identity: Mutex<ExecutionIdentity>,
+    program_pinned: Cell<bool>,
+    program_serial: Cell<u64>,
+    program_limits: Cell<Limits>,
+    program_steps: Cell<usize>,
+    program_foreign_keys: Cell<Option<bool>>,
 }
 
-struct IdentityScope<'a>(&'a ExecState);
+struct ProgramPin<'a> {
+    db: *mut sys::sqlite3,
+    state: &'a ExecState,
+}
 
-impl Drop for IdentityScope<'_> {
+impl Drop for ProgramPin<'_> {
     fn drop(&mut self) {
-        *self.0.identity.lock().unwrap() = ExecutionIdentity::default();
+        clear_program_context(self.db, self.state);
+    }
+}
+
+fn install_program_context(db: *mut sys::sqlite3, state: &ExecState, ctx: &ExecContext) -> Result<(), ExecError> {
+    let rc = unsafe {
+        ffi::sqlite3_doltlite_set_det_context(db, ctx.now_ms, ctx.seed,
+            ffi::SQLITE_DOLTLITE_DET_UTC_LOCALTIME | ffi::SQLITE_DOLTLITE_DET_RESET_COUNTERS)
+    };
+    if rc != sys::SQLITE_OK {
+        return Err(ExecError::Operational { code: rc, message: "cannot pin SQL program context".into() });
+    }
+    *state.identity.lock().unwrap() = ExecutionIdentity {
+        actor: ctx.actor.clone(),
+        actor_id: ctx.actor_id,
+        transaction_id: ctx.transaction_id.clone(),
+    };
+    state.program_limits.set(ctx.limits);
+    state.program_steps.set(0);
+    state.program_pinned.set(true);
+    Ok(())
+}
+
+fn clear_program_context(db: *mut sys::sqlite3, state: &ExecState) {
+    if state.program_pinned.replace(false) {
+        *state.identity.lock().unwrap() = ExecutionIdentity::default();
+        unsafe { ffi::sqlite3_doltlite_clear_det_context(db) };
+    }
+}
+
+/// Pin the deterministic inputs once for a caller-owned SQL transaction.
+/// The owning runtime must clear the scope on commit, rollback and unwind.
+pub fn pin_transaction_program(conn: &Connection, context: &ExecContext) -> Result<u64, ExecError> {
+    context.limits.validate()?;
+    validate_context(context)?;
+    if conn.is_autocommit() {
+        return Err(ExecError::TransactionState("program pin requires an open storage transaction"));
+    }
+    if det_context_active(conn) {
+        return Err(ExecError::TransactionState("the connection already has a pinned context"));
+    }
+    if !foreign_keys(conn)? {
+        return Err(ExecError::Profile("foreign_keys must be ON before the caller's transaction begins".into()));
+    }
+    let db = unsafe { conn.handle() };
+    let state = unsafe { register_state(db) }?;
+    let serial = state.program_serial.get().checked_add(1)
+        .ok_or_else(|| ExecError::InvalidInput("program scope sequence exhausted".into()))?;
+    install_program_context(db, state, context)?;
+    state.program_serial.set(serial);
+    Ok(serial)
+}
+
+fn existing_program_state(conn: &Connection) -> Option<&ExecState> {
+    let db = unsafe { conn.handle() };
+    let known = unsafe { ffi::sqlite3_get_clientdata(db, CLIENT_DATA_KEY.as_ptr()) };
+    if known.is_null() {
+        None
+    } else {
+        Some(unsafe { &*(known as *const ExecState) })
+    }
+}
+
+const FOREIGN_KEYS: rusqlite::config::DbConfig = rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_FKEY;
+
+fn foreign_keys(conn: &Connection) -> Result<bool, ExecError> {
+    conn.db_config(FOREIGN_KEYS)
+        .map_err(|error| ExecError::Profile(format!("read foreign_keys: {error}")))
+}
+
+fn set_foreign_keys(conn: &Connection, enabled: bool) -> Result<(), ExecError> {
+    let actual = conn.set_db_config(FOREIGN_KEYS, enabled)
+        .map_err(|error| ExecError::Profile(format!("set foreign_keys: {error}")))?;
+    if actual != enabled {
+        return Err(ExecError::Profile("foreign_keys did not apply".into()));
+    }
+    Ok(())
+}
+
+/// Set up the connection before the runtime begins a program transaction.
+pub fn prepare_program_transaction(conn: &Connection) -> Result<(), ExecError> {
+    if !conn.is_autocommit() {
+        return Err(ExecError::TransactionState("a program transaction must open at the outermost boundary"));
+    }
+    let state = unsafe { register_state(conn.handle()) }?;
+    if state.program_foreign_keys.get().is_some() {
+        return Err(ExecError::TransactionState("the previous program transaction has not ended"));
+    }
+    let previous = foreign_keys(conn)?;
+    if !previous {
+        set_foreign_keys(conn, true)?;
+    }
+    state.program_foreign_keys.set(Some(previous));
+    Ok(())
+}
+
+pub fn program_transaction_prepared(conn: &Connection) -> bool {
+    existing_program_state(conn).is_some_and(|state| state.program_foreign_keys.get().is_some())
+}
+
+/// Restore the configuration only after the native transaction has ended.
+pub fn finish_program_transaction(conn: &Connection) -> Result<(), ExecError> {
+    if let Some(state) = existing_program_state(conn) {
+        if let Some(previous) = state.program_foreign_keys.get() {
+            if conn.is_autocommit() {
+                clear_transaction_program(conn);
+                if !previous {
+                    set_foreign_keys(conn, false)?;
+                }
+                state.program_foreign_keys.set(None);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn transaction_program_id(conn: &Connection) -> Option<u64> {
+    let state = existing_program_state(conn)?;
+    state.program_pinned.get().then(|| state.program_serial.get())
+}
+
+/// Clear only a program pin. This is safe after SQLite has already canceled
+/// the transaction itself and after an earlier successful clear.
+pub fn clear_transaction_program(conn: &Connection) {
+    if let Some(state) = existing_program_state(conn) {
+        clear_program_context(unsafe { conn.handle() }, state);
+    }
+}
+
+/// A statement in the same native transaction and deterministic stream.
+pub fn run_pinned_transaction_step(
+    conn: &Connection, statement: &Statement, mode: AuthMode, schema_admin: bool,
+) -> Result<Outcome, ExecError> {
+    if conn.is_autocommit() {
+        return Err(ExecError::TransactionState("program step requires an open pinned transaction"));
+    }
+    let state = existing_program_state(conn).filter(|state| state.program_pinned.get())
+        .ok_or(ExecError::TransactionState("program step requires an open pinned transaction"))?;
+    if !matches!(mode, AuthMode::Consensus | AuthMode::Platform) {
+        return Err(ExecError::InvalidInput("program step requires a writable profile".into()));
+    }
+    let limits = state.program_limits.get();
+    if mode == AuthMode::Consensus {
+        let steps = state.program_steps.get();
+        if steps >= limits.max_steps {
+            return Err(ExecError::InvalidInput(format!("a program can have at most {} steps", limits.max_steps)));
+        }
+        state.program_steps.set(steps + 1);
+    }
+    let _profile = ProfileScope::enter(unsafe { conn.handle() }, &limits, true)?;
+    match run_statement(conn, statement, &limits, mode, schema_admin) {
+        Ok(()) => Ok(Outcome::Accepted),
+        Err(Fail::Reject(code)) => Ok(Outcome::Rejected { code, statement_index: None }),
+        Err(Fail::Fatal(error)) => Err(error),
     }
 }
 
@@ -1348,7 +1505,14 @@ unsafe fn register_state<'a>(db: *mut sys::sqlite3) -> Result<&'a ExecState, Exe
         if !existing.is_null() {
             return Ok(&*(existing as *const ExecState));
         }
-        let state = Box::into_raw(Box::new(ExecState { identity: Mutex::default() }));
+        let state = Box::into_raw(Box::new(ExecState {
+            identity: Mutex::default(),
+            program_pinned: Cell::new(false),
+            program_serial: Cell::new(0),
+            program_limits: Cell::new(Limits::default()),
+            program_steps: Cell::new(0),
+            program_foreign_keys: Cell::new(None),
+        }));
         let flags = sys::SQLITE_UTF8 | sys::SQLITE_INNOCUOUS;
         let defs: [(&CStr, c_int, c_int, unsafe extern "C" fn(*mut sys::sqlite3_context, c_int, *mut *mut sys::sqlite3_value)); 7] = [
             (c"chronolog_assert", 2, flags | sys::SQLITE_DETERMINISTIC, chronolog_assert),

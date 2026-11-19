@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 
 /// Bump when the Rust-side execution semantics change (authorizer table,
 /// rejection mapping, profile pragmas, limits handling).
-pub const EXEC_PROFILE: &str = "celld-spec10-v4";
+pub const EXEC_PROFILE: &str = "celld-spec10-v5";
 
 /// The sqlite-vec crate is pinned exactly (`=0.1.9`) in the workspace.
 pub const SQLITE_VEC_VERSION: &str = "0.1.9";

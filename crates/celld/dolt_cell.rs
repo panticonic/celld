@@ -409,13 +409,13 @@ pub(crate) fn changes_schema(op: &str) -> bool {
 /// Whether an operation that runs inside the caller's open transaction
 /// ([`run_in_transaction`]) can change the store.
 pub(crate) fn mutates_in_transaction(op: &str) -> bool {
-    matches!(op, "txCommit" | "mergeBegin" | "mergeTake" | "mergeFinish")
+    matches!(op, "txCommit" | "mergeBegin" | "mergeTake" | "mergeFinish" | "programStep")
 }
 
 /// Whether an operation that runs inside the caller's open transaction can
 /// change the schema the connection sees.
 pub(crate) fn changes_schema_in_transaction(op: &str) -> bool {
-    matches!(op, "mergeBegin")
+    matches!(op, "mergeBegin" | "programStep")
 }
 
 /// Run one operation inside the caller's open storage transaction, with the
@@ -439,6 +439,21 @@ pub(crate) fn run_in_transaction(
         "mergeBegin" => merge_begin(connection, args),
         "mergeTake" => merge_take(connection, args),
         "mergeFinish" => merge_finish(connection, args),
+        "programPin" => {
+            let id = crate::dolt_exec::pin_transaction_program(connection, &execution_context(&args["context"])?)
+                .map_err(|error| anyhow!("{error}"))?;
+            Ok(json!(id.to_string()))
+        }
+        "programStep" => program_step(connection, args),
+        "programQuery" => {
+            require_program_pin(connection, args)?;
+            query(connection, args, false)
+        }
+        "programUnpin" => {
+            require_program_pin(connection, args)?;
+            crate::dolt_exec::clear_transaction_program(connection);
+            Ok(Value::Null)
+        }
         other => bail!("dolt operation {other:?} cannot run inside a storage transaction"),
     }
 }
@@ -2502,10 +2517,7 @@ mod tests {
 /// program and clears them; `storage::dolt_op` reinstalls the cell's
 /// application authorizer afterwards.
 fn execute(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
-    use crate::dolt_exec::{
-        execute as run_program, execute_in_transaction, ExecContext, Limits, Outcome, Profile, Program,
-    };
-    use base64::Engine as _;
+    use crate::dolt_exec::{execute as run_program, execute_in_transaction, Outcome, Program};
 
     let steps = args["program"]
         .as_array()
@@ -2514,31 +2526,7 @@ fn execute(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
         .map(statement)
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    let context = &args["context"];
-    let mut ctx = ExecContext::new(
-        integer(&context["nowMs"], "context.nowMs")?,
-        u64::try_from(integer(&context["seed"], "context.seed")?)
-            .map_err(|_| anyhow!("context.seed must not be negative"))?,
-    );
-    let optional_bytes = |key: &str| -> anyhow::Result<Option<Vec<u8>>> {
-        let value = &context[key];
-        if value.is_null() {
-            return Ok(None);
-        }
-        let encoded = value.as_str().ok_or_else(|| anyhow!("context.{key} must be base64url"))?;
-        Ok(Some(
-            base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .decode(encoded)
-                .with_context(|| format!("context.{key} must be base64url"))?,
-        ))
-    };
-    ctx.actor = optional_bytes("actor")?;
-    ctx.transaction_id = optional_bytes("transactionId")?;
-    if !context["actorId"].is_null() {
-        ctx.actor_id = Some(integer(&context["actorId"], "context.actorId")?);
-    }
-    ctx.profile = Profile::Consensus { schema_admin: context["schemaAdmin"].as_bool().unwrap_or(false) };
-    ctx.limits = limits(&context["limits"], Limits::default())?;
+    let ctx = execution_context(&args["context"])?;
     let program = Program::new(steps);
 
     let log = match args.get("log").filter(|value| !value.is_null()) {
@@ -2592,6 +2580,61 @@ fn outcome_json(outcome: &crate::dolt_exec::Outcome) -> Value {
             "statementIndex": statement_index,
         }),
     }
+}
+
+fn execution_context(context: &Value) -> anyhow::Result<crate::dolt_exec::ExecContext> {
+    use crate::dolt_exec::{ExecContext, Limits, Profile};
+    use base64::Engine as _;
+    let mut ctx = ExecContext::new(
+        integer(&context["nowMs"], "context.nowMs")?,
+        u64::try_from(integer(&context["seed"], "context.seed")?)
+            .map_err(|_| anyhow!("context.seed must not be negative"))?,
+    );
+    let optional_bytes = |key: &str| -> anyhow::Result<Option<Vec<u8>>> {
+        let value = &context[key];
+        if value.is_null() {
+            return Ok(None);
+        }
+        let encoded = value.as_str().ok_or_else(|| anyhow!("context.{key} must be base64url"))?;
+        Ok(Some(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(encoded)
+                .with_context(|| format!("context.{key} must be base64url"))?,
+        ))
+    };
+    ctx.actor = optional_bytes("actor")?;
+    ctx.transaction_id = optional_bytes("transactionId")?;
+    if !context["actorId"].is_null() {
+        ctx.actor_id = Some(integer(&context["actorId"], "context.actorId")?);
+    }
+    ctx.profile = Profile::Consensus { schema_admin: context["schemaAdmin"].as_bool().unwrap_or(false) };
+    ctx.limits = limits(&context["limits"], Limits::default())?;
+    Ok(ctx)
+}
+
+fn require_program_pin(connection: &Connection, args: &Value) -> anyhow::Result<()> {
+    let id = args["pin"].as_str().and_then(|value| value.parse::<u64>().ok());
+    anyhow::ensure!(id.is_some() && id == crate::dolt_exec::transaction_program_id(connection),
+        "SQL program no longer owns this transaction");
+    Ok(())
+}
+
+fn program_step(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
+    use crate::dolt_exec::{run_pinned_transaction_step, AuthMode};
+    require_program_pin(connection, args)?;
+    let mode = match args["mode"].as_str() {
+        Some("consensus") => AuthMode::Consensus,
+        Some("platform") => AuthMode::Platform,
+        _ => bail!("SQL program statement mode must be consensus or platform"),
+    };
+    let step = statement(args)?;
+    let result = run_pinned_transaction_step(connection, &step, mode, args["schemaAdmin"].as_bool().unwrap_or(false))?;
+    Ok(json!({
+        "result": outcome_json(&result),
+        "changes": connection.changes().to_string(),
+        "lastInsertRowid": connection.last_insert_rowid().to_string(),
+        "transactionRolledBack": connection.is_autocommit(),
+    }))
 }
 
 /// The log statement of `execute`: the caller's bindings plus the outcome

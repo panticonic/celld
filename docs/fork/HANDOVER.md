@@ -379,6 +379,18 @@ See `p5-managed-runtime-source48-evidence.log`,
 `p5-native-provenance-query-types2.log` and
 `celld-scoped-read-count-acceptance.log`.
 
+Host `6cd55892e` resumes native history startup after a system-owned
+canonical lifetime has been reserved. Managed run `runtime-source49`
+stopped with the legacy source unfrozen and no replay receipt. A normal
+restart froze the protected event, replayed the original working copy,
+reopened the same context for its authenticated owner and refused access
+from a second signed participant. Both starts stopped normally. The restart
+peaked at 4.71 GiB with no memory-limit or OOM events. Base `74439cc`
+shares the external-edit draft planner with the existing history path.
+Registration of live external edits and the initial default native
+reservation remain open. See `p5-managed-runtime-source49-evidence.log`
+and `p5-external-delta-planner-check.log`.
+
 **Native checkout measurement.** The replayed workspace had 5,135 versioned
 files and 10,000 local table rows. Each warm run had 200 quiet checkouts and
 200 after a local write, alternating between distinct revisions. Collecting
@@ -1894,6 +1906,19 @@ pushes them.
    a refused transaction and produced the same rows after restart.
    See `celld-current-owner-protected-index-acceptance.log` and
    `celld-current-virtual-owner-test2.log`.
+   The `celld-spec10-v5` runtime lets the trusted materializer interleave
+   its platform writes with consensus SQL in one native transaction.
+   A savepoint can roll back a refused program while the encompassing
+   transaction retains its rejection log. If a write exceeds the engine
+   budget and SQLite aborts the encompassing transaction, both layers
+   close and no earlier writes survive. The real worker probe verified
+   exact identity, matching random sequences, foreign keys, protected
+   writes, rejection logging and restart. The runtime reports whether the
+   actual cell enables sqlite-vec alongside the engine digest. See
+   `celld-chronolog-program-tx-native.log` and
+   `celld-chronolog-program-tx-executor.log`.
+   Chronolog still needs its current materializer wired to this adapter
+   and to read-only connections pinned to exact commits.
    Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
    below.
    - A Chronolog node per workspace node and the `chronolog` host service.

@@ -713,6 +713,7 @@ pub(super) fn op_storage_transaction_control(
     let action = args.get(1).to_rust_string_lossy(scope);
     let nested = args.get(2).boolean_value(scope);
     let savepoint = args.get(3).to_rust_string_lossy(scope);
+    let program = args.get(4).boolean_value(scope);
     let timing_started = (tracing::enabled!(target: "queue_timing", tracing::Level::DEBUG)
         && cell
             .split_once(':')
@@ -724,7 +725,7 @@ pub(super) fn op_storage_transaction_control(
     // Clearing the cell queue on rollback would also discard parent writes;
     // flushing after rollback would commit the canceled writes outside it.
     let result = flush_pending_puts(scope, &cell)
-        .and_then(|()| storage::transaction_control(&cell, &action, nested, &savepoint));
+        .and_then(|()| storage::transaction_control(&cell, &action, nested, &savepoint, program));
     if let Some(timing_started) = timing_started {
         tracing::debug!(
             target: "queue_timing",

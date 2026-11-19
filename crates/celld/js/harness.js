@@ -1752,27 +1752,70 @@ class DoltStorage {
     if (!Array.isArray(program)) throw new TypeError("dolt.execute: program must be an array");
     const steps = program.map((step, i) => __doltStatement(step, `statement ${i}`));
     const log = options.log == null ? null : __doltStatement(options.log, "the log statement");
-    if (context.nowMs == null || context.seed == null)
-      throw new TypeError("dolt.execute: context.nowMs and context.seed are required");
-    if (context.actorId != null && typeof context.actorId !== "bigint")
-      throw new TypeError("dolt.execute: context.actorId must be a bigint");
-    const actor = context.actor == null ? null : __doltBase64Url(__doltBytes(context.actor, "context.actor"));
-    const actorId = context.actorId == null ? null : String(context.actorId);
-    const transactionId = context.transactionId == null
-      ? null : __doltBase64Url(__doltBytes(context.transactionId, "context.transactionId"));
     return this._op("execute", {
       program: steps,
-      context: {
-        nowMs: String(BigInt(context.nowMs)),
-        seed: String(BigInt(context.seed)),
-        actor,
-        actorId,
-        transactionId,
-        schemaAdmin: !!context.schemaAdmin,
-        limits: context.limits || {},
-      },
+      context: __doltExecutionContext(context, "dolt.execute"),
       log,
     });
+  }
+  // Trusted platform adapters can interleave their own operations with
+  // consensus statements on one native deterministic transaction stream.
+  beginProgramTransaction() {
+    return this._storage._transactionRoot._beginTransactionSync(true);
+  }
+  pinTransactionProgram(context) {
+    const root = this._storage._transactionRoot;
+    const view = root._activeSyncTransaction;
+    if (view === null)
+      throw new Error("dolt.pinTransactionProgram requires an active synchronous storage transaction");
+    view._assertTransactionActive("dolt.pinTransactionProgram");
+    const captured = __doltExecutionContext(context, "dolt.pinTransactionProgram");
+    const pin = view._doltTransactionOp("programPin", { context: captured });
+    let open = true;
+    const requireActive = () => {
+      if (!open || root._activeSyncTransaction !== view)
+        throw new Error("the pinned SQL program no longer owns the active storage transaction");
+      view._assertTransactionActive("dolt pinned program");
+    };
+    const program = Object.freeze({
+      step(statement, options = {}) {
+        requireActive();
+        const { result, changes, lastInsertRowid, transactionRolledBack, error } = view._doltTransactionOp("programStep", {
+          ...__doltStatement(statement, "pinned program statement"),
+          pin, mode: options.mode ?? "consensus", schemaAdmin: options.schemaAdmin ?? captured.schemaAdmin,
+        });
+        if (transactionRolledBack) {
+          // SQLite can end the whole transaction on a write interrupt,
+          // including all nested savepoints. Do not run a phantom COMMIT.
+          open = false;
+          let control = view._transactionControl;
+          while (control !== null) {
+            control.rolledBack = true;
+            control = control.parent;
+          }
+        }
+        if (error !== undefined) throw new Error("dolt.programStep: " + error);
+        return { result, changes: BigInt(changes), lastInsertRowid: BigInt(lastInsertRowid), transactionRolledBack };
+      },
+      query(sql, bindings = [], options = {}) {
+        requireActive();
+        const statement = __doltStatement({ sql, bindings }, "pinned program query");
+        return __doltReadQueryResult("programQuery", view._doltTransactionOp("programQuery", {
+          ...statement, pin, limits: options.limits || {},
+          maxRows: options.maxRows == null ? 10000 : Number(options.maxRows),
+        }));
+      },
+      close() {
+        if (!open) return;
+        if (!view._transactionControl.rolledBack && !view._transactionControl.committed) {
+          requireActive();
+          view._doltTransactionOp("programUnpin", { pin });
+        }
+        open = false;
+      },
+    });
+    view._transactionControl.closeDoltProgram = program.close;
+    return program;
   }
   // A local read (Spec 10 section 7): one read-only statement under the
   // local-read authorizer and a step budget, on the checked-out branch.
@@ -1798,18 +1841,38 @@ class DoltStorage {
       projections,
       maxRows: options.maxRows == null ? 10000 : Number(options.maxRows),
     });
-    if (result.error) {
-      const error = new Error("dolt." + op + ": " + result.error);
-      error.code = result.error;
-      throw error;
-    }
-    return {
-      columns: result.columns,
-      rows: result.rows.map((row) => row.map(__doltUntagValue)),
-    };
+    return __doltReadQueryResult(op, result);
   }
   engineDigest() { return this._op("engineDigest", {}); }
+  programEngineProfile() { return this._op("programEngineProfile", {}); }
 }
+function __doltReadQueryResult(op, result) {
+  if (result.error) {
+    const error = new Error("dolt." + op + ": " + result.error);
+    error.code = result.error;
+    throw error;
+  }
+  return {
+    columns: result.columns,
+    rows: result.rows.map((row) => row.map(__doltUntagValue)),
+  };
+}
+
+function __doltExecutionContext(context, label) {
+  if (context.nowMs == null || context.seed == null)
+    throw new TypeError(label + ": context.nowMs and context.seed are required");
+  if (context.actorId != null && typeof context.actorId !== "bigint")
+    throw new TypeError(label + ": context.actorId must be a bigint");
+  const actor = context.actor == null ? null : __doltBase64Url(__doltBytes(context.actor, "context.actor"));
+  const actorId = context.actorId == null ? null : String(context.actorId);
+  const transactionId = context.transactionId == null
+    ? null : __doltBase64Url(__doltBytes(context.transactionId, "context.transactionId"));
+  return {
+    nowMs: String(BigInt(context.nowMs)), seed: String(BigInt(context.seed)), actor, actorId, transactionId,
+    schemaAdmin: !!context.schemaAdmin, limits: context.limits || {},
+  };
+}
+
 // The arguments of a Dolt commit: `{ message, author?, date?, allowEmpty? }`
 // or just the message.
 function __doltCommitArgs(options) {
@@ -2298,11 +2361,11 @@ class DurableObjectStorage {
       throw new Error("the Durable Object was reset; this event's storage is closed");
     return JSON.parse(__dolt_op(this._scope, op, JSON.stringify(args), true));
   }
-  _transactionStart() {
+  _transactionStart(program = false) {
     const root = this._transactionRoot;
     const savepoint = "cells_tx_" + (++root._transactionSerial);
     __storage_transaction_control(
-      this._scope, "start", this._transactionDepth > 0, savepoint,
+      this._scope, "start", this._transactionDepth > 0, savepoint, program,
     );
     return savepoint;
   }
@@ -2347,11 +2410,17 @@ class DurableObjectStorage {
   // same turn, LIFO with any other transaction, and it is rolled back (and
   // the error logged) if it is still open when the turn's microtasks run.
   beginTransactionSync() {
+    return this._beginTransactionSync(false);
+  }
+  _beginTransactionSync(program) {
     this._assertTransactionActive("beginTransactionSync");
     const root = this._transactionRoot;
+    if (program && (this._transactionDepth !== 0 || root._activeSyncTransaction !== null ||
+        root._activeTransaction !== null))
+      throw new Error("dolt.beginProgramTransaction requires an outermost storage transaction");
     if (this._transactionDepth === 0 && root._activeSyncTransaction !== null)
       return root._activeSyncTransaction.beginTransactionSync();
-    const savepoint = this._transactionStart();
+    const savepoint = this._transactionStart(program);
     const control = this._newTransactionControl(savepoint);
     const view = this._transactionView(control);
     const previousSync = root._activeSyncTransaction;
@@ -2364,6 +2433,7 @@ class DurableObjectStorage {
     const rollback = (cause) => {
       if (!control.rolledBack) {
         try {
+          control.closeDoltProgram?.();
           this._transactionRollback(savepoint);
           control.rolledBack = true;
         } catch (rollbackError) {
@@ -2386,6 +2456,7 @@ class DurableObjectStorage {
         if (root._activeSyncTransaction !== view)
           throw new Error("beginTransactionSync: a nested transaction is still open");
         if (!control.rolledBack) {
+          control.closeDoltProgram?.();
           this._transactionCommit(savepoint);
           control.committed = true;
         }
@@ -2435,6 +2506,7 @@ class DurableObjectStorage {
       // inside the transaction, and a throw rolls it back.
       const value = f();
       if (!control.rolledBack) {
+        control.closeDoltProgram?.();
         if (commit !== null) this._commitInTransaction(commit, value);
         this._transactionCommit(savepoint);
         control.committed = true;
@@ -2443,6 +2515,7 @@ class DurableObjectStorage {
     } catch (error) {
       if (!control.rolledBack) {
         try {
+          control.closeDoltProgram?.();
           this._transactionRollback(savepoint);
           control.rolledBack = true;
         } catch (rollbackError) {
@@ -2461,7 +2534,9 @@ class DurableObjectStorage {
       committed: false,
       parent: this._transactionControl,
       pending: new Set(),
+      closeDoltProgram: null,
       rollback: () => {
+        control.closeDoltProgram?.();
         this._transactionRollback(savepoint, true);
         control.rollbackPerformed = true;
       },

@@ -432,8 +432,8 @@ Host `8f6d5035f` pins all four staged binaries from the successful
 `8c0898f` artifact run `44539697971`. The later runtime with exact
 Chronolog snapshot reads passed Linux and Windows artifact builds, and the
 macOS job was cancelled before it received a runner on both `macos-26` and
-`macos-15`. The Chronolog integration tests used the locally rebuilt later
-runtime.
+`macos-15`. The targeted macOS rerun later completed on `macos-15`.
+Host `f5cbd9d82` pins the resulting four-platform `9116b07` release.
 
 Host `c2569708b` routes ordinary context clones through the originating
 participant's working history. Managed run `runtime-source59` used the
@@ -2221,12 +2221,13 @@ pushes them.
    Google Workspace `42c5271617`, News `b9d8875b2b`, Personal
    `65737d4227`, System `d6df7f918e`, and System-testing
    `b82cffe650`. Pi's sealed package source is `c6d518177`.
-   The matching owner releases and the macOS ARM celld 9116b07 artifact
-   remain outstanding. GitHub's run 44550708879 finished Linux x64,
-   Linux ARM64, and Windows x64. The host's packaging verifier staged
-   those three exact binaries and checked their source, platform, and
-   digest. See `celld-v6-ci-9116b07-verification.json`. The macOS job was
-   cancelled before setup.
+   GitHub run `44550708879` succeeded on its second attempt. The host's
+   packaging verifier staged all four exact `9116b07` binaries, validated
+   their source, platform, and digest, and ran the Linux x64 executable.
+   Host `f5cbd9d82` pins all four. All nine focused host artifact tests
+   passed. See `celld-v6-complete-verification.json` and
+   `celld-v6-complete-pin-host.log`. The matching companion releases
+   are still local candidates.
    Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
    below.
    - A Chronolog node per workspace node and the `chronolog` host service.
@@ -2246,7 +2247,7 @@ pushes them.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
      Current local merge candidates are Host `integration/gad-participant-main`
-     (`07c2950ea`) and Base `integration/gad-participant-base-main`
+     (`03d25cf57`) and Base `integration/gad-participant-base-main`
      (`05ecc1b`). Both include the signed-receipt retries and initial
      shared history workflow above. The Host
      merge retains one console-history filter and

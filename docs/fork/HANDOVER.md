@@ -387,8 +387,7 @@ reopened the same context for its authenticated owner and refused access
 from a second signed participant. Both starts stopped normally. The restart
 peaked at 4.71 GiB with no memory-limit or OOM events. Base `74439cc`
 shares the external-edit draft planner with the existing history path.
-Registration of live external edits and the initial default native
-reservation remain open. See `p5-managed-runtime-source49-evidence.log`
+See `p5-managed-runtime-source49-evidence.log`
 and `p5-external-delta-planner-check.log`.
 
 Base `2fadc1c` and host `1864afa50` verify scoped history reads before
@@ -408,6 +407,55 @@ returned its exact receipt. An independent signed participant was refused
 both the draft and its raw blob. The instance stopped normally with a peak
 of 3.03 GiB and no memory limit or OOM events. See
 `p5-managed-runtime-source52-evidence.log` and the matching release manifest.
+
+Host `8d0105869` and Base `e85b9b9` complete the live draft route. In managed
+run `runtime-source58` the writer reviewed the actual old upstream content,
+withdrew one draft, and applied another that combined independent line edits
+and required an explicit choice for a conflict. It refused early finalization,
+replayed the exact merge and finalization receipts, and saved the external
+source on the resulting event. A second signed participant was refused the
+withdrawn draft and its raw blob. After approval of the exact two-file diff,
+the second participant read the merged files from shared history and kept
+their independent working revision. The instance stopped normally at 4.22
+GiB peak, with zero memory limit or OOM events. See
+`p5-managed-runtime-source58-evidence.log` and its release manifest.
+Host `8f6d5035f` pins all four staged binaries from the successful
+`8c0898f` artifact run `44539697971`. The later runtime with exact
+Chronolog snapshot reads passed Linux and Windows artifact builds, and the
+macOS job was cancelled before it received a runner on both `macos-26` and
+`macos-15`. The Chronolog integration tests used the locally rebuilt later
+runtime.
+
+Host `c2569708b` routes ordinary context clones through the originating
+participant's working history. Managed run `runtime-source59` used the
+four-platform pin's Linux binary. The signed creator saw the private file at
+the same revision in the clone, a retry returned the same clone, and an
+unrelated participant was refused. The shared head stayed fixed. It stopped
+normally at 3.64 GiB peak with zero memory-limit or OOM events. See
+`p5-managed-runtime-source59-evidence.log` and its release manifest.
+Host `f0ec59d87` and Base `6077d1a` then retained the captured source for
+the admitted clone lifetime. In managed run `runtime-source60`, the cloned
+Durable Object called normal VCS methods under its own authenticated identity
+and read the captured private file. The source still reported its original
+revision, the clone retry returned the same result, and an unrelated caller
+was refused. The shared head stayed fixed. The instance stopped normally at
+3.78 GiB peak with no memory-limit or OOM events. See
+`p5-managed-runtime-source60-evidence.log` and the release manifest.
+
+Host `d72055f91` reserves native history after activating a workspace with
+a manifest that declares the native history class. The first normal startup
+then found a legacy code lookup from an infrastructure context. Host
+`9eef46137` and Base `2d61bed` now restore a storage fork from its source's
+sealed executable. Managed run `runtime-source62` used normal provisioning
+and the staged `8c0898f` Linux binary. It opened two signed working copies,
+applied and finalized reviewed external changes, and published the exact
+two-file diff. The second participant read the published files while their
+private revision stayed fixed. The instance stopped normally at 4.88 GiB
+peak with zero memory-limit or OOM events. See
+`p5-managed-runtime-source62-evidence.log` and the matching release manifest.
+Host `e9922b2f6` also routes foreign-epoch publication through the native
+protected gate. Its focused host tests pass. The installed cross-epoch
+restart still needs a live run.
 
 **Native checkout measurement.** The replayed workspace had 5,135 versioned
 files and 10,000 local table rows. Each warm run had 200 quiet checkouts and
@@ -1544,8 +1592,8 @@ also passed at `e25fcad`.
    The two-node `dolt-remote-p2p` scenario passed on `b5742d1`.
    It validates native fetch and push, exact commits, a wrong-peer
    refusal and revocation. The P2P stream regression passed alongside
-   it. P6 still needs this carrier wired to Vibestudio's workspace
-   instances and Chronolog membership.
+   it. The later P6 work connects the carrier to Chronolog membership and the
+   Vibestudio workspace history cells. See the current evidence in §6.
 4. **Known limits, documented and unfixed:**
    - A facet RPC in flight is not cancelled on abort; it rejects in
      JavaScript.
@@ -1555,8 +1603,13 @@ also passed at `e25fcad`.
      forever; a cut-off event's rollback also rolls back a concurrent event's
      transaction on the same object; and microtasks that V8 drops can belong
      to other objects.
-   - From E14: the closing-checkpoint path of `finish_turn` was fixed by
-     reading the code and has no scenario.
+   - E14 now has a closing-checkpoint scenario. A reply property queues a
+     transaction from an already-ended event when the runtime reads it.
+     The new scenario, the two continuation scenarios, and the facet
+     limit recovery scenario pass. The pre-fix binary fails the new
+     scenario with the original input-gate refusal. See
+     `e14-closing-checkpoint-compat.log` and
+     `e14-closing-checkpoint-control.log`.
 5. **Upstream defects still open:**
    - E2: the dev R2 etag is a counter.
    - E4: static-assets answers `/index.html` with a 307 and serves a 404
@@ -1595,8 +1648,8 @@ those of `docs/dolt-redesign.md` §10.
 | P2b General dynamic code    | **Done.**<br>• `hostCode` (`packages/durable/src/codeHost.ts`); the admission service `dynamicCodeService` (`admit`, `release`, `reset`, `dispose`); `EvalKernel` (Base `workers/eval-kernel`); `SessionDO` (Base `workers/session`).<br>• The CLI, panels, the system-test runner, the agent, the website spec and the headless test all pull.<br>• `evalService`, `EvalDO`, `UNSAFE_EVAL`, `resultReceiver`, redelivery, `evalEngine` and `settle` are deleted. The remaining `rg` hits are D5 migration code and deliberate guards. |
 | P3 Durable services         | **Done.** `WorkspaceStateDO` is a Dolt cell, with a replaying import from the retired `WorkspaceDO`; the maintenance journal and `cloneDO` are deleted.                                                                                                                                                                                                                                                                                                                                                                |
 | P4 Agent system             | **Mostly done**, see below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| P5 GAD decentralized        | Local participant storage, replay, file routing, native integration, protected publication and retirement passed focused tests. Disposable managed instances verified separate editable folders, paired publication and normal shutdown. Default startup cutover, the remaining public history methods, and acceptance benchmarks are open. |
-| P6 Chronolog capability     | The fork's direct transfer and Chronolog's two-node replay are verified. The Vibestudio service and membership check for publication are open. |
+| P5 GAD decentralized        | Fresh default startup and two signed participants passed on managed source `#62`, including private work, reviewed publication, and normal shutdown. The installed cross-epoch handoff and migration-retirement gates remain. |
+| P6 Chronolog capability     | Installed group writes passed. The native workspace directory, host ingress, and real GAD cells passed a signed two-node publication with verified file bytes. The two-installed-workspace release test remains. |
 
 **P4 in detail** (slices are in `docs/dolt-redesign.md` §6.8–§6.11):
 
@@ -1959,6 +2012,139 @@ pushes them.
    Both peers refused a query of the runtime KV tables. See
    `chronolog-current-celld-iroh-sql-native.log` and
    `chronolog-current-celld-private-package.log`.
+   A second clean-consumer run on the same package rejected a signed write
+   into another participant's row. Both peers kept the exact prior rows,
+   including rolling back the denied writer's earlier insert from the same
+   transaction. See `chronolog-current-celld-iroh-owner.log`.
+   A signed generation change then restored the same earlier history on
+   both nodes. Both removed the excluded SQL row and event, preserved the
+   surviving data and public signing keys, and reopened the selected
+   history after restart. The reader already open before the change still
+   returned its original view. The fixture delivered the signed generation
+   change to the second node explicitly and synchronized data over Iroh.
+   See `chronolog-current-celld-iroh-replay3.log`.
+   Chronolog `758fa47` signs and verifies a protected workspace publication
+   against the publisher role, selected group generation, destination node
+   and workspace, and both exact heads. The tests refused new destinations,
+   changed heads, signature tampering and a proof after publishing authority
+   was revoked. The host carrier still needs to consume this proof.
+   Chronolog `af670ca` allows a workspace node with an explicit relay grant
+   to carry the account's independently signed attempt. The coordinator
+   verifies the account's current write grant and signature. Local retries
+   are scoped by account and operation ID. Vibestudio `9d7818f88` keeps one
+   encrypted signing key per verified hub account. The process-authenticated
+   workspace-child port checks current workspace membership before and after
+   loading the key. The 80 focused host tests passed.
+   Chronolog `bd15feb` adds member-scoped reads and live queries, receipts by
+   exact transaction hash, and the precise failing program step on rejection.
+   The two-node packaged run confirmed account-signed row ownership through
+   the follower, duplicate operation IDs under different keys, exact retry
+   across restart, member-only query, live query cancellation, stale revision
+   refusal, and atomic rejection at the offending SQL statement. It retained
+   the earlier independent SQL, replay and Iroh authorization checks.
+   See `chronolog-current-celld-group-data-iroh.log`.
+   Chronolog `a1f9813a` persists group genesis, the signed invitation, and
+   admitted peer endpoints. An offline-installed archive used two separately
+   keyed celld nodes and two account keys. It verified creation retry,
+   administrator-only invitations, denial for an unrelated joiner, a second
+   account admitted through the same follower, account-owned rows, and an
+   unchanged invitation and transaction after retry. See
+   `chronolog-current-celld-group-control-iroh.log`.
+   Vibestudio `f84d16bf8` defines the reviewed transaction and member read
+   surface. The dispatcher test refuses a changed request until another review
+   and releases the signing key only after approval. Read calls request the
+   public identity. Host typecheck, targeted lint, and 82 focused tests passed.
+   Host `efeff4fcf` wires this service to its workspace's deployed celld
+   node. The host build accepts a verified, clean local Chronolog package
+   directory via `VIBESTUDIO_CHRONOLOG_PACKAGE_ROOT`, fingerprints the
+   exact package, and packages both trusted classes in its existing runtime
+   executable. The scoped SQLite directory routes `chronolog/1` to an
+   independent Dolt cell for each installed group. Class credentials stay
+   out of script variables. The native route shares one durable Iroh
+   identity per workspace and one bounded WebSocket handoff within a node.
+   Chronolog `3ca2381` passed two independent workspaces with signed account
+   writes in two groups, administrator-issued invitations, exact receipts
+   and reconnection after restart. The combined Vibestudio runtime passed
+   those account and restart checks through the real private workerd
+   router and refused a request missing the host dispatch secret. This
+   used the exact v6 celld binary. See
+   `chronolog-current-celld-workspace-node6-iroh.log` and
+   `chronolog-combined-host2-iroh.log`. Host typecheck, targeted lint,
+   109 unit tests and eight runtime artifact tests passed.
+   Fresh managed source `#63` started normally and installed native
+   workspace history. Its agent code could not see the Chronolog namespace.
+   Host `dc5dcdae4` and Base `f5a3dae` expose the same typed Chronolog
+   operations to panels, workers and eval through the portable runtime.
+   All four Base type configurations and 56 runtime/help tests passed.
+   Fresh managed source `#64` reached the approval queue and exposed a
+   missing review label for Chronolog. Host `20baa2e45` supplies the
+   reviewed capability descriptions and binds each approval to its exact
+   request. Fresh managed source `#65` then created a group, held a write
+   in the real approval queue, resumed it after a one-time approval, and
+   verified that the signed-in account owned the row. This used Base
+   `f5a3dae`, the sealed Chronolog `2e85c17` archive, and celld
+   `b78e4d0`. See `chronolog-managed65-1119-evidence.log`. No model
+   calls were made. The fixture and registry shut down. The managed
+   instance peaked at 4.02 GiB with zero OOM events and hard-limit hits.
+   The earlier `#63` managed instance peaked at 3.97 GiB with the same
+   zero counters; its fixture and registry also shut down.
+   Chronolog `2e85c17` checks publication signatures through the selected
+   native group session and the receiver's own workspace node identity.
+   Two real celld nodes then accepted a signed exact Dolt `main` transition
+   over Iroh in a separate fixture. A tampered signature left the shared
+   head unchanged. The accepted update carried the exact contents and head.
+   The recording is `chronolog-current-protected-dolt-iroh.log`. This
+   used a fixture graph; the installed workspace GAD carrier still needs
+   to use the same verification and enforce transfer of its referenced
+   content blobs.
+   A fresh two-node native run with the sealed Chronolog `93b8dfb`
+   archive replayed two groups, rejected a proof naming the wrong Iroh
+   sender, and left the head unchanged after a forged signature. After a
+   restart with the coordinator offline, the follower served retained
+   reads, saved a signed write, and reconciled the same attempt when the
+   coordinator returned. The original invitation retried byte-for-byte
+   after its endpoint hint changed. See
+   `chronolog-current-offline-carrier4-iroh.log`.
+   Host `74bbc69ce`, Base `ae0fcd3`, and Chronolog `2e969ab` add
+   reviewed history sharing and publication. The receiver first gives the
+   signed sender a native grant to one private staging branch, checks every
+   referenced digest, and confirms current Chronolog authority again before
+   applying the exact protected-main transition. Host and portable type
+   checks passed for the changes they compiled. On the preceding combined
+   Base candidate, four type configurations and 223 focused tests passed.
+   The signed two-node fixture used the actual Chronolog workspace directory,
+   host ingress handler, and Base GAD history cells. It rejected a publish
+   with a missing file and rejected unrelated and incorrect bytes. After the
+   exact file arrived, it advanced shared history to the signed head and
+   returned the same result on retry. See `native-gad-chronolog6.log`; this
+   fixture peaked at 369.5 MiB and shut down both nodes. The two histories
+   were linked by an exact test seed from the receiver. A normal signed
+   publication requires a shared ancestor; provisioning a shared history
+   between independently created workspaces is still open.
+   Host source preparation with the sealed `2e969ab` archive passed, along
+   with 61 focused host tests. Managed source `#66` passed the new
+   sharing command and current-head query through the installed approval
+   surface. The signed-in administrator approved sharing, the workspace
+   returned the exact history revision and its live Iroh address, and
+   the fixture retired. This run peaked at 3.99 GiB with zero OOM events
+   or hard-limit hits and made no model calls. See
+   `chronolog-managed66-1119-evidence.log`.
+   The local merged host `29eead0fa` and Base `404f345` passed
+   the host type checks, the authority catalog check, 24 host tests,
+   four portable type configurations, and 223 focused template tests.
+   Evidence is in `p5-integrated-host-final4.log`,
+   `p5-integrated-host-final5.log`, and
+   `p5-current-main-base-check10.log`. The final Base check peaked at
+   6.6 GiB. A prior scope with a 5 GiB soft limit was killed by
+   systemd-oomd at 5.4 GiB. The final check used a 9 GiB hard ceiling
+   without that soft limit.
+   The companion local merge candidates are Examples `7abe5a667b`,
+   Google Workspace `42c5271617`, News `b9d8875b2b`, Personal
+   `65737d4227`, System `d6df7f918e`, and System-testing
+   `b82cffe650`. Pi's sealed package source is `c6d518177`.
+   The matching owner releases and the macOS ARM celld 9116b07 artifact
+   remain outstanding. GitHub's run 44550708879 finished Linux x64,
+   Linux ARM64, and Windows x64. The macOS job was cancelled before setup.
    Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
    below.
    - A Chronolog node per workspace node and the `chronolog` host service.
@@ -1977,6 +2163,14 @@ pushes them.
      to remove.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
+     Current local merge candidates are Host `integration/gad-participant-main`
+     (`3be428760`) and Base `integration/gad-participant-base-main`
+     (`f4e74da`). The Host merge retains one console-history filter and
+     pagination implementation and the read-only legacy workspace importer.
+     The active Dolt workspace state already contains upstream's slot
+     history selection fix. The Base merge preserves the sealed Pi pins
+     and upstream messaging and channel origin support. These candidates
+     still need combined verification before release.
      Use host `feat/gad-participant-admission` and Base
      `feat/gad-participant-cells`, which already include the earlier P0/P2
      changes. A preview against the locally fetched main refs found host

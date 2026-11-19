@@ -1,0 +1,91 @@
+name: Fork runtime artifacts
+
+on:
+  push:
+    branches: [unified-fork]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-runtime-artifacts-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUST_VERSION: "1.94.1"
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  build:
+    name: celld ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux
+            arch: x64
+            binary: celld
+          - runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform: linux
+            arch: arm64
+            binary: celld
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            platform: darwin
+            arch: arm64
+            binary: celld
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: win32
+            arch: x64
+            binary: celld.exe
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+      - uses: actions/checkout@v6
+      - run: rustup toolchain install "$RUST_VERSION" --profile minimal --target "${{ matrix.target }}"
+      - run: cargo "+$RUST_VERSION" build -p celld --locked --release --target "${{ matrix.target }}"
+      - name: Verify and describe artifact
+        env:
+          TARGET: ${{ matrix.target }}
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+          BINARY: ${{ matrix.binary }}
+        run: |
+          "target/$TARGET/release/$BINARY" --version
+          mkdir -p out
+          cp "target/$TARGET/release/$BINARY" out/
+          cp LICENSE NOTICE out/
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          digest = hashlib.sha256()
+          with Path("out", os.environ["BINARY"]).open("rb") as source:
+              for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                  digest.update(chunk)
+          manifest = {
+              "commit": os.environ["GITHUB_SHA"],
+              "platform": os.environ["PLATFORM"],
+              "arch": os.environ["ARCH"],
+              "binary": os.environ["BINARY"],
+              "sha256": digest.hexdigest(),
+          }
+          Path("out/target.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: celld-${{ matrix.platform }}-${{ matrix.arch }}
+          path: out/
+          if-no-files-found: error

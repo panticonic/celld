@@ -1159,6 +1159,14 @@ those of `docs/dolt-redesign.md` §10.
 
 ### 4.4 Chronolog on the fork (`feature/celld-host`)
 
+- Chronolog `aa64e21` runs the shared conformance replay fixture in
+  independent celld nodes under UTC and Pacific/Apia. Both reached
+  revision 2 at commit `148871e88e2489f8992004bc75a328a6c9240929` with
+  identical replay digest `1230bfaab1a6e0dbd3eb5a152a4bd54483c3a34da45522e6cd4df43da5faf77b`.
+  It also removes the old event anchor now that the object owns its
+  peer streams. The real two-node group test passed, including replay
+  and a peer restart, alongside 40 conformance and transport tests,
+  typecheck, and scoped lint. Both native tests used `b5742d1`.
 - **Works:** a two-node end-to-end test on the fork
   (`apps/chronolog-celld/scripts/e2e.ts`). It covers genesis, join,
   transactions on both sides with identical rows and identical Dolt commit
@@ -1169,12 +1177,10 @@ those of `docs/dolt-redesign.md` §10.
   digest or fixture needs regenerating, and both nodes must run the same
   fork build.
 - **Remaining**, from `HANDOFF-celld-host.md` (priority order):
-  1. Port the conformance/replay fixture (`packages/conformance`) to drive a
-     `CelldMaterializer` through a celld dev instance. Compare digests across
-     two nodes and two TZ values.
-  2. Simplify using the fork-polish fixes: delete `EventAnchor`; keep P2P
-     streams in the object; `closed` settles; Ed25519 PKCS#8 v0 keys. The
-     handoff update lists the call sites.
+  1. The native conformance replay and two-time-zone comparison are verified
+     above.
+  2. The transport now uses object-owned streams and waits only for inbound
+     admission. The fork handles the version 0 Ed25519 key encoding.
   3. Cutover deletions:
      - delete `apps/chronologd`, `materializer-doltlite`,
        `@dolthub/doltlite` and its pnpm patch, and the SSB network layer of

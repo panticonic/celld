@@ -881,6 +881,27 @@ managed run peaked at 4.95 GiB with zero OOM kills and shut down
 normally. See `p5-child-build-typechecks.log` and
 `p5-managed-runtime-source20-evidence.log`.
 
+Host `9fb19ace6` recovers outstanding native publications before
+checking that the canonical event matches protected shared history.
+A mismatch keeps the attachment inactive. Base `4482b61` and host
+`03bbf74e8` bind the installed replay to the original write freeze.
+The disposable installed host verified that the same freeze resumes
+without staging any revision and that releasing and reacquiring the
+same operation cannot reuse that receipt. The source refused legacy
+writes during the freeze. The 68 host tests, 226 Base tests and both
+typechecks passed. The managed run peaked at 3.35 GiB with zero OOM
+kills and stopped normally. See `p5-frozen-plan-check2.log`,
+`p5-frozen-base-tests.log`, and `p5-managed-runtime-source23-setup.log`.
+
+Host `4e077f5b5` resolves worker listings, service declarations, and
+live documentation from the caller's admitted copy. Build preparation
+and resolution use the exact source that supplied the declarations.
+A signed writer saw its unpublished worker title, service, and docs.
+The second participant saw none of the three. The 66 focused tests
+and host typechecks passed. The managed run peaked at 3.39 GiB with
+zero OOM kills and shut down normally. See
+`p5-private-catalog-check.log` and `p5-managed-runtime-source24-evidence.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover
@@ -1389,6 +1410,12 @@ those of `docs/dolt-redesign.md` §10.
   tests and the two-node native test passed on `c8dfc2e`. See
   `chronolog-class-secret-check.log` and
   `chronolog-feeds-cutover-check.log`.
+
+- Chronolog `5a826eb` moved governance and health RPC adapters out of
+  the old daemon. The 87 focused tests, typecheck, and lint passed. Two
+  native nodes converged on `c8dfc2e`. The restarted node served health
+  and Prometheus metrics for the converged revision. See
+  `chronolog-native-rpc-check2.log`.
 
 - Chronolog `aa64e21` runs the shared conformance replay fixture in
   independent celld nodes under UTC and Pacific/Apia. Both reached

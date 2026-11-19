@@ -191,6 +191,9 @@ export class Repo {
           for (const binding of step.bindings ?? []) binding.value = value(binding.value);
         if (typeof context.actor === "string")
           context.actor = value({ t: "blob", v: context.actor });
+        if (typeof context.actorId === "string") context.actorId = BigInt(context.actorId);
+        if (typeof context.transactionId === "string")
+          context.transactionId = value({ t: "blob", v: context.transactionId });
         const options = {};
         if (url.searchParams.get("log"))
           options.log = {

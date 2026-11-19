@@ -4675,6 +4675,9 @@ pub fn is_dolt(scope: &str) -> bool {
 /// exactly as it does for a SQL write.
 pub fn dolt_op(scope: &str, op: &str, args: &serde_json::Value) -> Result<serde_json::Value, String> {
     require_sql_healthy(scope)?;
+    let checkout_started = (op == "checkout"
+        && tracing::enabled!(target: "celld::dolt_checkout", tracing::Level::DEBUG))
+    .then(std::time::Instant::now);
     let result = dbs(|d| {
         let mut dbs = d.borrow_mut();
         let Some(cell) = dbs.get_mut(scope) else {
@@ -4714,6 +4717,14 @@ pub fn dolt_op(scope: &str, op: &str, args: &serde_json::Value) -> Result<serde_
     if crate::dolt_cell::changes_schema(op) {
         close_sql_statement_cache(scope);
         cells(|c| c.schema_cookies.borrow_mut().remove(scope));
+    }
+    if let Some(started) = checkout_started {
+        tracing::debug!(
+            target: "celld::dolt_checkout",
+            duration_us = started.elapsed().as_micros() as u64,
+            success = result.is_ok(),
+            "completed Dolt checkout"
+        );
     }
     result
 }

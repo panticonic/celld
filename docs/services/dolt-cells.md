@@ -58,6 +58,10 @@ Every method is synchronous, like `ctx.storage.sql`, and throws on failure.
 | `query(sql, bindings?, { limits?, maxRows? })` | one read-only statement under the local-read profile and a step budget, `{ columns, rows }` with exact storage classes: INTEGER is a `bigint`, REAL a number, BLOB a `Uint8Array`. A refusal throws an error whose `code` is `SQL_PROFILE_VIOLATION`, `SQL_STEP_LIMIT`, `SQL_RESULT_LIMIT`, ... |
 | `engineDigest()` | the digest of the engine build and execution profile; it changes whenever execution semantics could |
 
+Set `RUST_LOG=info,celld::dolt_checkout=debug` to record the native duration
+and outcome of each checkout. The duration covers the storage operation and
+its statement cache cleanup. Request timing measures the full response.
+
 ### Merge with a resolver
 
 `merge(name, { resolve })` merges `name` into the checked-out branch and lets

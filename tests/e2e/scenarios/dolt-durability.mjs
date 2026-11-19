@@ -200,14 +200,19 @@ const steps = [
   ...survives(
     "execute (deterministic program, with DDL)",
     async (t) => {
+      const request = program([
+        "CREATE TABLE ledger (id INTEGER PRIMARY KEY, v TEXT, principal INTEGER DEFAULT (chronolog_actor_id()), tx BLOB)",
+        "INSERT INTO ledger(v, tx) VALUES ('x', chronolog_transaction_id())",
+      ]);
       const res = await call(t, "/exec", {
         method: "POST",
         json: {
-          ...program([
-            "CREATE TABLE ledger (id INTEGER PRIMARY KEY, v TEXT)",
-            "INSERT INTO ledger(v) VALUES ('x')",
-          ]),
-          probe: "SELECT v FROM ledger",
+          ...request,
+          context: {
+            ...request.context,
+            actorId: "9007199254740993",
+            transactionId: Buffer.alloc(32, 183).toString("base64url"),
+          },
         },
       });
       t.assert(res.outcome.outcome === "accepted", JSON.stringify(res));
@@ -215,9 +220,20 @@ const steps = [
     async (t) => {
       const res = await call(t, "/exec", {
         method: "POST",
-        json: { ...program(["SELECT 1"]), probe: "SELECT v FROM ledger" },
+        json: {
+          ...program(["SELECT 1"]),
+          probe: `SELECT v, CAST(principal AS TEXT) AS principal, hex(tx) AS tx,
+                         chronolog_actor_id() AS outside_principal,
+                         chronolog_transaction_id() AS outside_tx FROM ledger`,
+        },
       });
-      eq(t, res.rows, [{ v: "x" }], "the program's rows");
+      eq(t, res.rows, [{
+        v: "x",
+        principal: "9007199254740993",
+        tx: "B7".repeat(32),
+        outside_principal: null,
+        outside_tx: null,
+      }], "the program's data and cleared execution identity");
     },
   ),
   // The cell is on `main` with notes; checking out another branch and coming

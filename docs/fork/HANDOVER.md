@@ -958,6 +958,18 @@ recorded zero OOM kills, and stopped normally. See
 and `p5-managed-runtime-source31-evidence.log`. The general blobstore's
 digest-only reads still need participant visibility enforcement.
 
+Base `b8a7a12` and host `99c277452` apply undo against the caller's
+exact participant history. The native fixture reversed a text edit
+through its recorded content mapping, restored file and repository
+tombstones, and verified an identical retry. The signed workspace run
+restored text and an entire project with the original file identity.
+Shared history stayed fixed, and the second signed session could not
+counteract the first session's private change. The 48 focused host
+tests, 226 Base tests and both typechecks passed. The managed workspace
+peaked at 3.50 GiB, recorded zero OOM kills, and stopped normally.
+See `p5-native-revert/verify3.log`, `p5-native-revert-check2.log`, and
+`p5-managed-runtime-source32-evidence.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

@@ -11,7 +11,7 @@
 
 use crate::error::{Error, Result};
 use crate::ltx::{self, FileInfo};
-use crate::{ltx_file_path, ltx_level_dir, TXID};
+use crate::{local_ltx_file_path, local_ltx_level_dir, TXID};
 use async_trait::async_trait;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -33,7 +33,7 @@ impl FileReplicaClient {
 #[async_trait]
 impl ReplicaClient for FileReplicaClient {
     async fn ltx_files(&self, level: i32, seek: TXID) -> Result<Vec<FileInfo>> {
-        let dir = ltx_level_dir(&self.path, level as u32);
+        let dir = local_ltx_level_dir(&self.path, level as u32);
         let mut rd = match tokio::fs::read_dir(&dir).await {
             Ok(rd) => rd,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -71,7 +71,7 @@ impl ReplicaClient for FileReplicaClient {
     }
 
     async fn open_ltx_file(&self, level: i32, min_txid: TXID, max_txid: TXID) -> Result<Vec<u8>> {
-        let path = ltx_file_path(&self.path, level as u32, min_txid, max_txid);
+        let path = local_ltx_file_path(&self.path, level as u32, min_txid, max_txid);
         // NotFound is preserved so callers can classify auto-recoverable errors.
         tokio::fs::read(&path).await.map_err(Error::Io)
     }
@@ -87,8 +87,8 @@ impl ReplicaClient for FileReplicaClient {
         let header = ltx::Header::parse(data)?;
         let created_at = Some(UNIX_EPOCH + Duration::from_millis(header.timestamp.max(0) as u64));
 
-        let filename = ltx_file_path(&self.path, level as u32, min_txid, max_txid);
-        let dir = ltx_level_dir(&self.path, level as u32);
+        let filename = local_ltx_file_path(&self.path, level as u32, min_txid, max_txid);
+        let dir = local_ltx_level_dir(&self.path, level as u32);
         tokio::fs::create_dir_all(&dir).await?;
 
         // Write to a temp file then atomically rename; clean the temp on error.
@@ -118,7 +118,7 @@ impl ReplicaClient for FileReplicaClient {
     ) -> Result<Vec<u8>> {
         use tokio::io::{AsyncReadExt, AsyncSeekExt};
         let mut file =
-            tokio::fs::File::open(ltx_file_path(&self.path, level as u32, min, max)).await?;
+            tokio::fs::File::open(local_ltx_file_path(&self.path, level as u32, min, max)).await?;
         file.seek(std::io::SeekFrom::Start(offset)).await?;
         let mut bytes = Vec::new();
         file.take(len).read_to_end(&mut bytes).await?;
@@ -136,10 +136,11 @@ impl ReplicaClient for FileReplicaClient {
         use tokio::io::AsyncWriteExt;
         let (mut file, first, size) = super::read_upload_chunk(file, &host, 0, 1 << 20).await?;
         let header = ltx::Header::parse(&first)?;
-        let filename = ltx_file_path(&self.path, level as u32, min_txid, max_txid);
-        tokio::fs::create_dir_all(ltx_level_dir(&self.path, level as u32)).await?;
+        let filename = local_ltx_file_path(&self.path, level as u32, min_txid, max_txid);
+        tokio::fs::create_dir_all(local_ltx_level_dir(&self.path, level as u32)).await?;
         // The named temporary file owns cleanup on errors and cancellation.
-        let temporary = tempfile::NamedTempFile::new_in(ltx_level_dir(&self.path, level as u32))?;
+        let temporary =
+            tempfile::NamedTempFile::new_in(local_ltx_level_dir(&self.path, level as u32))?;
         let mut output = tokio::fs::File::from_std(temporary.reopen()?);
         output.write_all(&first).await?;
         let mut offset = first.len() as u64;
@@ -168,7 +169,8 @@ impl ReplicaClient for FileReplicaClient {
 
     async fn delete_ltx_files(&self, files: &[FileInfo]) -> Result<()> {
         for info in files {
-            let path = ltx_file_path(&self.path, info.level as u32, info.min_txid, info.max_txid);
+            let path =
+                local_ltx_file_path(&self.path, info.level as u32, info.min_txid, info.max_txid);
             match tokio::fs::remove_file(&path).await {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

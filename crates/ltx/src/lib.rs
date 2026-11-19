@@ -555,6 +555,75 @@ pub fn ltx_level_dir(root: &str, level: u32) -> String {
 /// and `FormatFilename` in ltx@v0.5.1 ltx.go:487
 /// (`fmt.Sprintf("%s-%s.ltx", minTXID.String(), maxTXID.String())`).
 pub fn ltx_file_path(root: &str, level: u32, min_txid: TXID, max_txid: TXID) -> String {
-    let filename = format!("{}-{}.ltx", min_txid, max_txid);
-    path_join(&[&ltx_level_dir(root, level), &filename])
+    path_join(&[
+        &ltx_level_dir(root, level),
+        &ltx_filename(min_txid, max_txid),
+    ])
+}
+
+fn ltx_filename(min_txid: TXID, max_txid: TXID) -> String {
+    format!("{min_txid}-{max_txid}.ltx")
+}
+
+// The local database can live under a Windows verbatim path. Win32 rejects
+// forward slashes there, so use native joins for disk paths on Windows.
+pub(crate) fn local_ltx_dir(root: &str) -> String {
+    #[cfg(windows)]
+    {
+        use std::path::Path;
+        Path::new(root).join("ltx").to_string_lossy().into_owned()
+    }
+    #[cfg(not(windows))]
+    ltx_dir(root)
+}
+
+pub(crate) fn local_ltx_level_dir(root: &str, level: u32) -> String {
+    #[cfg(windows)]
+    {
+        std::path::Path::new(&local_ltx_dir(root))
+            .join(level.to_string())
+            .to_string_lossy()
+            .into_owned()
+    }
+    #[cfg(not(windows))]
+    ltx_level_dir(root, level)
+}
+
+pub(crate) fn local_ltx_file_path(
+    root: &str,
+    level: u32,
+    min_txid: TXID,
+    max_txid: TXID,
+) -> String {
+    #[cfg(windows)]
+    {
+        std::path::Path::new(&local_ltx_level_dir(root, level))
+            .join(ltx_filename(min_txid, max_txid))
+            .to_string_lossy()
+            .into_owned()
+    }
+    #[cfg(not(windows))]
+    ltx_file_path(root, level, min_txid, max_txid)
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn local_ltx_paths_under_a_windows_verbatim_root() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let root_string = root.to_str().unwrap();
+    assert!(root_string.starts_with(r"\\?\"));
+    let level = local_ltx_level_dir(root_string, 0);
+    let path = local_ltx_file_path(root_string, 0, TXID(1), TXID(2));
+    std::fs::create_dir_all(&level).unwrap();
+    std::fs::write(&path, b"local LTX").unwrap();
+    assert_eq!(
+        std::fs::read(
+            root.join("ltx")
+                .join("0")
+                .join(ltx_filename(TXID(1), TXID(2)))
+        )
+        .unwrap(),
+        b"local LTX"
+    );
 }

@@ -50,8 +50,9 @@ use crate::error::{new_ltx_error, Error, Result};
 use crate::ltx::{self, lock_pgno, Crc64};
 use crate::wal::{WalError, WalReader};
 use crate::{
-    ltx_file_path, ltx_level_dir, Pos, CHECKPOINT_MODE_PASSIVE, CHECKPOINT_MODE_RESTART,
-    CHECKPOINT_MODE_TRUNCATE, META_DIR_SUFFIX, TXID, WAL_FRAME_HEADER_SIZE, WAL_HEADER_SIZE,
+    local_ltx_file_path, local_ltx_level_dir, Pos, CHECKPOINT_MODE_PASSIVE,
+    CHECKPOINT_MODE_RESTART, CHECKPOINT_MODE_TRUNCATE, META_DIR_SUFFIX, TXID,
+    WAL_FRAME_HEADER_SIZE, WAL_HEADER_SIZE,
 };
 use rusqlite::ffi;
 use rusqlite::Connection;
@@ -583,12 +584,12 @@ impl Db {
 
     /// Root LTX directory (`<meta>/ltx`). Ported from `DB.LTXDir` (db.go:302).
     fn ltx_dir(&self) -> String {
-        crate::ltx_dir(&self.meta_path.to_string_lossy())
+        crate::local_ltx_dir(&self.meta_path.to_string_lossy())
     }
 
     /// LTX level sub-directory. Ported from `DB.LTXLevelDir` (db.go:332).
     fn ltx_level_dir(&self, level: u32) -> String {
-        ltx_level_dir(&self.meta_path.to_string_lossy(), level)
+        local_ltx_level_dir(&self.meta_path.to_string_lossy(), level)
     }
 
     /// Local path of a single LTX file. Ported from `DB.LTXPath` (db.go:338).
@@ -597,7 +598,7 @@ impl Db {
     /// the capture loop wrote and upload them (the Go exported `DB.LTXPath`,
     /// used by `Replica.uploadLTXFile`, replica.go:183).
     pub fn ltx_path(&self, level: u32, min_txid: TXID, max_txid: TXID) -> String {
-        ltx_file_path(&self.meta_path.to_string_lossy(), level, min_txid, max_txid)
+        local_ltx_file_path(&self.meta_path.to_string_lossy(), level, min_txid, max_txid)
     }
 
     /// Reads one local LTX file through the host filesystem.

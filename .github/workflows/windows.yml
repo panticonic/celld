@@ -63,7 +63,10 @@ jobs:
         run: cargo test -p celld-dolt-exec -p doltlite-spike --locked
 
       - name: Windows port unit tests
-        run: cargo test -p celld --lib --locked -- fsname
+        run: |
+          cargo test -p celld --lib --locked -- fsname
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p celld-ltx --lib --locked -- local_ltx_paths_under_a_windows_verbatim_root
 
       - uses: actions/setup-node@v4
         with:

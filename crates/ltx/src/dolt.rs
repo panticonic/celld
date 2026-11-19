@@ -391,7 +391,7 @@ impl DoltStore {
     }
 
     fn level_dir(&self) -> String {
-        crate::ltx_level_dir(&self.meta_path.to_string_lossy(), 0)
+        crate::local_ltx_level_dir(&self.meta_path.to_string_lossy(), 0)
     }
 
     fn max_ltx(&self) -> Result<(TXID, TXID)> {
@@ -433,7 +433,7 @@ impl DoltStore {
     ) -> Result<()> {
         let dir = self.level_dir();
         self.host.create_dir_all(Path::new(&dir))?;
-        let path = crate::ltx_file_path(&self.meta_path.to_string_lossy(), 0, txid, txid);
+        let path = crate::local_ltx_file_path(&self.meta_path.to_string_lossy(), 0, txid, txid);
         let tmp = format!("{path}.tmp");
         let result = (|| -> Result<()> {
             let mut file = self.host.create(Path::new(&tmp))?;
@@ -687,7 +687,7 @@ impl CellStore for DoltStore {
     }
 
     fn ltx_path(&self, level: u32, min_txid: TXID, max_txid: TXID) -> String {
-        crate::ltx_file_path(&self.meta_path.to_string_lossy(), level, min_txid, max_txid)
+        crate::local_ltx_file_path(&self.meta_path.to_string_lossy(), level, min_txid, max_txid)
     }
 
     fn seed_l0_baseline(&mut self, min_txid: TXID, max_txid: TXID, data: &[u8]) -> Result<()> {
@@ -697,7 +697,7 @@ impl CellStore for DoltStore {
             Err(error) => return Err(error.into()),
         }
         self.host.create_dir_all(Path::new(&self.level_dir()))?;
-        let path = crate::ltx_file_path(&self.meta_path.to_string_lossy(), 0, min_txid, max_txid);
+        let path = crate::local_ltx_file_path(&self.meta_path.to_string_lossy(), 0, min_txid, max_txid);
         let tmp = format!("{path}.tmp");
         let mut file = self.host.create(Path::new(&tmp))?;
         file.write_all(data)?;

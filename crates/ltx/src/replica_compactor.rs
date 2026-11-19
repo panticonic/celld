@@ -8,7 +8,7 @@ use crate::compaction_level::SNAPSHOT_LEVEL;
 use crate::compactor::Compactor;
 use crate::error::{Error, Result};
 use crate::ltx::{FileInfo, HEADER_FLAG_NO_CHECKSUM};
-use crate::ltx_file_path;
+use crate::local_ltx_file_path;
 use crate::LtxHost;
 use crate::TXID;
 use std::io::{BufReader, BufWriter, Cursor, Read};
@@ -206,7 +206,7 @@ impl<'a, C: ReplicaClient> ReplicaCompactor<'a, C> {
         for file in &source {
             let bytes = match &self.local_path {
                 Some(path) => {
-                    let filename = ltx_file_path(
+                    let filename = local_ltx_file_path(
                         &path.to_string_lossy(),
                         file.level as u32,
                         file.min_txid,
@@ -284,7 +284,7 @@ impl<'a, C: ReplicaClient> ReplicaCompactor<'a, C> {
     ) -> Result<CompactionOutput> {
         let host = self.host.clone();
         let local = self.local_path.as_ref().map(|path| {
-            PathBuf::from(ltx_file_path(
+            PathBuf::from(local_ltx_file_path(
                 &path.to_string_lossy(),
                 source.level as u32,
                 source.min_txid,

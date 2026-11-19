@@ -15,7 +15,7 @@ use crate::client::ReplicaClient;
 use crate::codec::{decode_page_frame_of, decode_page_index};
 use crate::error::{Error, Result};
 use crate::ltx::{FileInfo, Header, HEADER_SIZE, TRAILER_SIZE};
-use crate::ltx_file_path;
+use crate::local_ltx_file_path;
 use crate::TXID;
 use futures_util::StreamExt;
 use std::collections::BTreeSet;
@@ -270,7 +270,7 @@ pub trait RangeReader: Send + Sync {
     fn read_range(&self, info: &FileInfo, offset: u64, len: u64) -> Result<Vec<u8>>;
 }
 
-/// A [`RangeReader`] over the file replica layout (`ltx_file_path`).
+/// A [`RangeReader`] over the file replica layout (`local_ltx_file_path`).
 pub struct FileRangeReader {
     root: String,
 }
@@ -287,7 +287,7 @@ impl FileRangeReader {
 #[allow(clippy::disallowed_methods)]
 impl RangeReader for FileRangeReader {
     fn read_range(&self, info: &FileInfo, offset: u64, len: u64) -> Result<Vec<u8>> {
-        let path = ltx_file_path(&self.root, info.level as u32, info.min_txid, info.max_txid);
+        let path = local_ltx_file_path(&self.root, info.level as u32, info.min_txid, info.max_txid);
         let mut file = std::fs::File::open(path)?;
         file.seek(std::io::SeekFrom::Start(offset))?;
         let mut out = vec![0; len as usize];

@@ -872,6 +872,15 @@ events, and shut down normally. See
 `p5-native-build-source-receipt/verify.log` and
 `p5-managed-runtime-source19-evidence.log`.
 
+Base `f294999` and host `6edbd0f61` route a signed build to
+the caller's owned child copy by context or exact content hash. The
+writer compiled both ways and inspected the resulting execution. The
+second participant was refused both build paths and execution
+inspection. The 96 focused host tests and both typechecks passed. The
+managed run peaked at 4.95 GiB with zero OOM kills and shut down
+normally. See `p5-child-build-typechecks.log` and
+`p5-managed-runtime-source20-evidence.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover
@@ -1371,6 +1380,15 @@ those of `docs/dolt-redesign.md` §10.
   after late insertion and restart on the pinned `c8dfc2e` Linux binary.
   Typecheck, lint and the focused materializer tests passed. See
   `chronolog-exact-replay-check.log`.
+
+- Chronolog `f0a5259` moved the signing seed into the native node
+  class secret. The pinned runtime refused to start without the seed
+  and passed the two-node test through replay and restart when the
+  secret was installed. Chronolog `b9f401a` moved feed storage and
+  signing out of the old SSB transport. Typecheck, lint, 99 focused
+  tests and the two-node native test passed on `c8dfc2e`. See
+  `chronolog-class-secret-check.log` and
+  `chronolog-feeds-cutover-check.log`.
 
 - Chronolog `aa64e21` runs the shared conformance replay fixture in
   independent celld nodes under UTC and Pacific/Apia. Both reached

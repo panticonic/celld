@@ -2137,8 +2137,8 @@ pushes them.
    returned the same result on retry. See `native-gad-chronolog6.log`; this
    fixture peaked at 369.5 MiB and shut down both nodes. The two histories
    were linked by an exact test seed from the receiver. A normal signed
-   publication requires a shared ancestor; provisioning a shared history
-   between independently created workspaces is still open.
+   publication requires a shared ancestor. The operator workflow below
+   prepares that ancestor for a fresh installation.
    Host source preparation with the sealed `2e969ab` archive passed, along
    with 61 focused host tests. Managed source `#66` passed the new
    sharing command and current-head query through the installed approval
@@ -2165,6 +2165,35 @@ pushes them.
    after the publisher enabled it. See `native-gad-shared-egress.log`.
    The sealed `b97c42b6` celld package SHA-256 is
    `f45bb42051464d44df7335c024b1fadb58f9d3013afa51b63cbcfc2638fa6261`.
+   Chronolog `4d32d98` adds a Linux release job step for the celld package
+   and its build attestation. Its local package SHA-256 is
+   `680d7dfb4c6fb9e92f1340973e74efab5c7196e0d05ed6bfe5719e3803d4617b`.
+   Host `3476a4210` verifies the reviewed provenance fingerprint when
+   `VIBESTUDIO_CHRONOLOG_PACKAGE_MANIFEST_SHA256` is supplied with the
+   staged package root. The local package fingerprint is
+   `f51a0820bf14af8b83136830e75c946fc90777d276296d3e80e6faa382536876`.
+   The exact archive passed the host loader, and all eleven focused host
+   build-input tests passed. The same archive passed the two-node
+   publication test in `native-gad-release-candidate.log`. The Chronolog
+   release workflow is local.
+   A separate native copy probe fetched only one branch at the selected
+   published head. The new workspace kept its original node identity.
+   The probe refused a private branch, the wrong peer, an incorrect
+   event, and any attempt to replace an installed history. See
+   `native-gad-copy-seed.log`. Base `cf6a457` and Host `7ad54a8c1`
+   add a local operator workflow. An existing workspace exports its exact
+   published branch and reachable file contents. A newly registered workspace
+   verifies the bundle and publishes its initial history through normal
+   protected creation before activation. The recipient keeps its own node
+   identity. The operator setup is documented in the host's
+   `STATE_DIRECTORY.md`. The real native bundle test verified the exact
+   revision, file bytes, distinct identities, grant retirement, and retry.
+   See `native-gad-seed-bundle.log`. All 21 focused host tests passed.
+   `native-gad-seed-protected.log` also composed the production protected
+   host ref publication with the native copy, observed the creation gate,
+   and reopened the recorded origin after removing the staged bundle.
+   The next installed check needs two workspaces on the matching combined
+   release and the normal creation review on the seeded destination.
    The local merged host `29eead0fa` and Base `404f345` passed
    the host type checks, the authority catalog check, 24 host tests,
    four portable type configurations, and 223 focused template tests.
@@ -2203,8 +2232,9 @@ pushes them.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
      Current local merge candidates are Host `integration/gad-participant-main`
-     (`8a38cf846`) and Base `integration/gad-participant-base-main`
-     (`07d18d3`). Both include the signed-receipt retries above. The Host
+     (`07c2950ea`) and Base `integration/gad-participant-base-main`
+     (`05ecc1b`). Both include the signed-receipt retries and initial
+     shared history workflow above. The Host
      merge retains one console-history filter and
      pagination implementation and the read-only legacy workspace importer.
      The active Dolt workspace state already contains upstream's slot

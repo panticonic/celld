@@ -391,6 +391,24 @@ Registration of live external edits and the initial default native
 reservation remain open. See `p5-managed-runtime-source49-evidence.log`
 and `p5-external-delta-planner-check.log`.
 
+Base `2fadc1c` and host `1864afa50` verify scoped history reads before
+freezing a workspace. Managed run `runtime-source50` reserved the canonical
+lifetime, restarted on the older pinned runtime and made another write
+to the still-active legacy working copy. A second restart on `b78e4d0`
+migrated the later private revision and reopened it for its signed owner.
+A second participant was refused. The three scopes stopped normally, with
+a peak of 4.69 GiB and no OOM or hard-limit events. See
+`p5-managed-runtime-source50-evidence.log`.
+
+Base `7745744` and host `ab52ca3bd` stage sealed external changes in the
+owner's native history. Managed run `runtime-source52` verified that the
+working revision, file contents and shared history stayed fixed while the
+owner registered and superseded a draft. Retrying the original registration
+returned its exact receipt. An independent signed participant was refused
+both the draft and its raw blob. The instance stopped normally with a peak
+of 3.03 GiB and no memory limit or OOM events. See
+`p5-managed-runtime-source52-evidence.log` and the matching release manifest.
+
 **Native checkout measurement.** The replayed workspace had 5,135 versioned
 files and 10,000 local table rows. Each warm run had 200 quiet checkouts and
 200 after a local write, alternating between distinct revisions. Collecting
@@ -1917,8 +1935,6 @@ pushes them.
    actual cell enables sqlite-vec alongside the engine digest. See
    `celld-chronolog-program-tx-native.log` and
    `celld-chronolog-program-tx-executor.log`.
-   Chronolog still needs its current materializer wired to this adapter
-   and to read-only connections pinned to exact commits.
    The `celld-spec10-v6` runtime adds detached reads by exact commit hash.
    An independent read-only connection resolves the saved hash and uses the
    cell's active vector module. Current Chronolog `89d3dc87` binds these
@@ -1935,6 +1951,14 @@ pushes them.
    `chronolog-current-celld-sql-package.log`,
    `chronolog-current-celld-sql-probe3.log` and
    `celld-chronolog-snapshot-full.log`.
+   Chronolog `354d148d` keeps device and peer records in the Dolt cell's
+   private runtime KV. The clean package `chronolog-peer-session-354d148d-celld.tgz`
+   joined two native nodes through a signed invitation over Iroh. Both
+   wrote SQL rows as distinct owners, saw the same data and event history,
+   and retained the same identity, authority and rows after restart.
+   Both peers refused a query of the runtime KV tables. See
+   `chronolog-current-celld-iroh-sql-native.log` and
+   `chronolog-current-celld-private-package.log`.
    Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
    below.
    - A Chronolog node per workspace node and the `chronolog` host service.

@@ -35,7 +35,7 @@ jobs:
             platform: linux
             arch: arm64
             binary: celld
-          - runner: macos-26
+          - runner: macos-15
             target: aarch64-apple-darwin
             platform: darwin
             arch: arm64

@@ -21,7 +21,7 @@
 //! (I/O, corruption, out of memory, busy, interrupt from outside) is an
 //! [`ExecError`] and stops replay on that replica.
 
-use crate::authorizer::{AuthMode, AuthOptions, Authorizer};
+use crate::authorizer::{AuthMode, AuthOptions, Authorizer, OwnerTablePolicy};
 use crate::ffi;
 use rusqlite::ffi as sys;
 use rusqlite::Connection;
@@ -596,15 +596,28 @@ pub fn check_statement(conn: &Connection, sql: &str, mode: AuthMode, options: Au
 
 fn profile_authorizer(conn: &Connection, mode: AuthMode, options: AuthOptions) -> Result<Authorizer, ExecError> {
     let mut auth = Authorizer::new(mode, options);
-    if matches!(mode, AuthMode::Consensus | AuthMode::Platform) {
-        auth.set_lifecycle_triggers(lifecycle_triggers(conn).map_err(|error| {
-            let code = match &error {
-                rusqlite::Error::SqliteFailure(cause, _) => cause.extended_code,
-                _ => sys::SQLITE_ERROR,
-            };
-            ExecError::Operational { code, message: format!("cannot read Chronolog table registry: {error}") }
-        })?);
-    }
+    let mut catalogue = || -> rusqlite::Result<()> {
+        let has_registry = conn.prepare_cached(
+            "SELECT EXISTS (SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = 'chronolog_tables')"
+        )?.query_row([], |row| row.get::<_, bool>(0))?;
+        if !has_registry {
+            return Ok(());
+        }
+        if mode == AuthMode::LocalRead {
+            auth.set_owner_tables(OwnerTablePolicy { shadow: shadow_tables(conn)?, ..Default::default() });
+        } else {
+            auth.set_lifecycle_triggers(lifecycle_triggers(conn)?);
+            auth.set_owner_tables(owner_table_policy(conn)?);
+        }
+        Ok(())
+    };
+    catalogue().map_err(|error| {
+        let code = match &error {
+            rusqlite::Error::SqliteFailure(cause, _) => cause.extended_code,
+            _ => sys::SQLITE_ERROR,
+        };
+        ExecError::Operational { code, message: format!("cannot read Chronolog table registry: {error}") }
+    })?;
     Ok(auth)
 }
 
@@ -612,12 +625,6 @@ fn profile_authorizer(conn: &Connection, mode: AuthMode, options: AuthOptions) -
 /// reserved triggers. Check the live registry and attached schema, rather
 /// than using a schema cookie that can repeat after rollback.
 fn lifecycle_triggers(conn: &Connection) -> rusqlite::Result<HashSet<String>> {
-    let has_registry = conn.prepare_cached(
-        "SELECT EXISTS (SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = 'chronolog_tables')"
-    )?.query_row([], |row| row.get::<_, bool>(0))?;
-    if !has_registry {
-        return Ok(HashSet::new());
-    }
     let mut stmt = conn.prepare_cached(
         "SELECT lower(s.name)
            FROM main.sqlite_schema s JOIN main.chronolog_tables t
@@ -629,6 +636,81 @@ fn lifecycle_triggers(conn: &Connection) -> rusqlite::Result<HashSet<String>> {
     )?;
     let names = stmt.query_map([], |row| row.get::<_, String>(0))?;
     names.collect()
+}
+
+fn shadow_tables(conn: &Connection) -> rusqlite::Result<HashSet<String>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT lower(name) FROM pragma_table_list WHERE schema = 'main' AND type = 'shadow'"
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    rows.collect()
+}
+
+/// The current Chronolog policy also covers tables which do not have owner
+/// columns. Their direct writes cannot be treated as owner-checked SQL.
+fn owner_table_policy(conn: &Connection) -> rusqlite::Result<OwnerTablePolicy> {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+
+    static VIRTUAL: OnceLock<regex::Regex> = OnceLock::new();
+    static VEC: OnceLock<regex::Regex> = OnceLock::new();
+    static VECTOR_COLUMN: OnceLock<regex::Regex> = OnceLock::new();
+    let virtual_table = VIRTUAL.get_or_init(|| regex::Regex::new(r"(?iu)^\s*create\s+virtual\s+table\b").unwrap());
+    let vec_definition = VEC.get_or_init(|| regex::Regex::new(
+        r"(?isu)^\s*create\s+virtual\s+table\s+.*?\busing\s+vec0\s*\((.*)\)\s*$"
+    ).unwrap());
+    let vector_column = VECTOR_COLUMN.get_or_init(|| regex::Regex::new(r"(?iu)\b(?:float|f32|int8|i8|bit)\s*\[").unwrap());
+
+    let mut policy = OwnerTablePolicy::default();
+    let mut tables = conn.prepare_cached(
+        "SELECT name, sql FROM main.sqlite_schema WHERE type = 'table' AND sql IS NOT NULL"
+    )?;
+    let catalogue = tables.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut vector_tables = HashMap::new();
+    for (name, declaration) in &catalogue {
+        if !virtual_table.is_match(declaration) {
+            continue;
+        }
+        policy.protected.insert(name.to_ascii_lowercase());
+        if let Some(captures) = vec_definition.captures(declaration) {
+            vector_tables.insert(name.to_ascii_lowercase(), vector_column.find_iter(&captures[1]).count());
+        }
+    }
+    let mut columns = conn.prepare_cached(
+        r#"SELECT name, upper(type), "notnull", pk, hidden FROM pragma_table_xinfo(?1, 'main') ORDER BY cid"#
+    )?;
+    for (name, _) in catalogue {
+        let normalized = name.to_ascii_lowercase();
+        let Some((owner, ordinal)) = normalized.rsplit_once("_vector_chunks") else { continue };
+        let Some(count) = vector_tables.get(owner) else { continue };
+        if ordinal.len() != 2 || !ordinal.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let index = usize::from(ordinal.as_bytes()[0] - b'0') * 10 + usize::from(ordinal.as_bytes()[1] - b'0');
+        if index >= *count { continue; }
+        let shape = columns.query_map([name], |row| Ok((
+            row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?, row.get::<_, i64>(4)?,
+        )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        // DoltLite can store vec0's implicit rowid type as an empty
+        // declaration. The exact primary-key and payload shape is unchanged.
+        if matches!(shape.as_slice(),
+            [(rowid, rowid_type, 0, 1, 0), (vectors, payload_type, 1, 0, 0)]
+                if rowid == "rowid" && matches!(rowid_type.as_str(), "" | "INTEGER")
+                    && vectors == "vectors" && payload_type == "BLOB")
+        {
+            policy.protected.insert(normalized);
+        }
+    }
+    let mut triggers = conn.prepare_cached(
+        "SELECT lower(s.name) FROM main.sqlite_schema s
+          JOIN main.chronolog_tables t ON s.tbl_name = t.name COLLATE NOCASE
+          WHERE s.type = 'trigger' AND substr(lower(s.name), 1, 10) <> 'chronolog_'"
+    )?;
+    policy.application_triggers = triggers.query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(policy)
 }
 
 /// The result of [`local_query`].
@@ -654,8 +736,9 @@ pub fn local_query(
     limits: &Limits,
     max_rows: usize,
 ) -> Result<LocalRows, String> {
-    query_with_authorizer(conn, statement, limits, max_rows,
-        Authorizer::new(AuthMode::LocalRead, AuthOptions::default()), None)
+    let auth = profile_authorizer(conn, AuthMode::LocalRead, AuthOptions::default())
+        .map_err(|error| format!("operational: {error}"))?;
+    query_with_authorizer(conn, statement, limits, max_rows, auth, None)
 }
 
 /// Read solely through prepared, caller-owned CTEs. CTE names must be

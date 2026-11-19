@@ -362,6 +362,23 @@ It stopped normally at 4.33 GiB with zero memory-limit or OOM events.
 See `p5-managed-runtime-source46-evidence.log` and the focused host and
 Base results in `p5-native-history-walk-check.log`.
 
+Base `0e418e4` and host `89b29b4c5` run provenance queries on the same
+admitted native revisions. The worker supplies the approved views to
+the fork's `queryScoped` boundary. SQLite authorizes underlying reads
+only through those views. Fork `634d297` preserves aggregate queries by
+materializing the trusted projections when SQLite requires it. Managed
+run `runtime-source48` verified the author's private intent and exact
+application basis, result limits, admitted file placement, aggregate
+queries, and refusal of direct backing-table reads and unrelated private
+work. After publication, the reader queried the exact event and work
+membership while retaining their own working revision. The run used
+the locally built `634d297` runtime, peaked at 4.61 GiB without OOM or
+memory-limit events, and stopped normally. The 83 focused host tests,
+55 Base tests, targeted lint, and host and four Base type checks passed.
+See `p5-managed-runtime-source48-evidence.log`,
+`p5-native-provenance-query-types2.log` and
+`celld-scoped-read-count-acceptance.log`.
+
 **Native checkout measurement.** The replayed workspace had 5,135 versioned
 files and 10,000 local table rows. Each warm run had 200 quiet checkouts and
 200 after a local write, alternating between distinct revisions. Collecting
@@ -1866,6 +1883,17 @@ pushes them.
    This fixture prepares the schema and grant as trusted setup. The
    current materializer still needs the native transaction adapter for
    signed schema and platform operations.
+   The `celld-spec10-v4` profile also protects virtual tables and the
+   physical vector chunk tables which carry no row owner. A registered
+   application table's triggers may maintain its indexes. Direct
+   application writes to those indexes remain outside that authority.
+   All 80 executor tests passed. A native cell installed the current
+   generated owner rows and an application index, with the `sqlite_vec`
+   compatibility flag. It refused direct index and vector-chunk writes,
+   applied an owner-checked index update, rolled back the earlier step of
+   a refused transaction and produced the same rows after restart.
+   See `celld-current-owner-protected-index-acceptance.log` and
+   `celld-current-virtual-owner-test2.log`.
    Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
    below.
    - A Chronolog node per workspace node and the `chronolog` host service.

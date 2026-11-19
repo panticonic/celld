@@ -788,6 +788,62 @@ fn register_vec_once() {
     });
 }
 
+#[test]
+fn owner_checked_tables_control_virtual_index_writes() {
+    let (_dir, conn) = fresh_dolt();
+    conn.execute_batch(
+        "CREATE TABLE chronolog_tables(name TEXT PRIMARY KEY);
+         CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);
+         CREATE TABLE unchecked(id INTEGER PRIMARY KEY, body TEXT NOT NULL);
+         INSERT INTO chronolog_tables VALUES ('notes');
+         CREATE VIRTUAL TABLE note_index USING fts5(body);
+         CREATE TRIGGER sync_note AFTER INSERT ON notes BEGIN
+             INSERT INTO note_index(rowid, body) VALUES (new.id, new.body);
+         END;
+         CREATE TRIGGER sync_unchecked AFTER INSERT ON unchecked BEGIN
+             INSERT INTO note_index(rowid, body) VALUES (new.id, new.body);
+         END;"
+    ).unwrap();
+    for statement in [
+        "INSERT INTO note_index(rowid, body) VALUES (1, 'caller text')",
+        "INSERT INTO unchecked VALUES (1, 'unowned trigger')",
+    ] {
+        assert_eq!(
+            execute(&conn, &prog(&[statement]), &admin_ctx(1)).unwrap(),
+            Outcome::Rejected { code: "denied".into(), statement_index: Some(0) },
+        );
+    }
+    assert!(execute(&conn, &prog(&["INSERT INTO notes VALUES (2, 'indexed')"]), &admin_ctx(2))
+        .unwrap().is_accepted());
+    let rows = celld_dolt_exec::local_query(
+        &conn, &s("SELECT body FROM note_index WHERE note_index MATCH 'indexed'"), &Limits::default(), 10,
+    ).unwrap();
+    assert_eq!(rows.rows, vec![vec![SqlValue::Text("indexed".into())]]);
+    assert_eq!(conn.query_row("SELECT count(*) FROM note_index", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+}
+
+#[test]
+fn vector_chunk_tables_are_protected_even_without_shadow_names() {
+    register_vec_once();
+    let (_dir, conn) = fresh_dolt();
+    conn.execute_batch(
+        "CREATE TABLE chronolog_tables(name TEXT PRIMARY KEY);
+         CREATE VIRTUAL TABLE vectors USING vec0(embedding float[4]);
+         CREATE TABLE genuine(name TEXT PRIMARY KEY, vectors BLOB NOT NULL);"
+    ).unwrap();
+    for statement in [
+        "INSERT INTO vectors(rowid, embedding) VALUES (1, vec_f32('[1,2,3,4]'))",
+        "UPDATE vectors_vector_chunks00 SET vectors = x'00'",
+    ] {
+        assert_eq!(
+            execute(&conn, &prog(&[statement]), &admin_ctx(1)).unwrap(),
+            Outcome::Rejected { code: "denied".into(), statement_index: Some(0) }, "{statement}",
+        );
+    }
+    assert!(execute(&conn, &prog(&["INSERT INTO genuine VALUES ('ordinary', x'00')"]), &admin_ctx(2))
+        .unwrap().is_accepted());
+}
+
 /// One corpus entry: a name, whether the signer is a schema admin, and steps.
 struct Case {
     name: &'static str,

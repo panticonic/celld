@@ -22,6 +22,7 @@ path = "lib.rs"
 libsqlite3-sys = { version = "0.28", features = ["bundled"] }
 rusqlite = { workspace = true, features = ["bundled", "hooks"] }
 serde_json.workspace = true
+regex.workspace = true
 sha2.workspace = true
 hex.workspace = true
 

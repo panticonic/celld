@@ -158,6 +158,13 @@ pub fn ascii_lower(value: &str) -> String {
     value.chars().map(|c| c.to_ascii_lowercase()).collect()
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct OwnerTablePolicy {
+    pub protected: HashSet<String>,
+    pub application_triggers: HashSet<String>,
+    pub shadow: HashSet<String>,
+}
+
 /// One authorizer per statement: it remembers which tables the statement
 /// drops, because `DROP TABLE` reports a `DROP_TRIGGER` for each of the
 /// table's triggers, including its `chronolog_*` platform triggers.
@@ -168,6 +175,7 @@ pub struct Authorizer {
     dropped_tables: HashSet<String>,
     lifecycle_triggers: HashSet<String>,
     read_scopes: Option<HashSet<String>>,
+    owner_tables: OwnerTablePolicy,
     /// Set while the statement is being stepped (not prepared): authorizer
     /// calls then come from SQL a virtual-table module runs internally.
     pub in_step: bool,
@@ -181,7 +189,7 @@ impl Authorizer {
     pub fn new(mode: AuthMode, options: AuthOptions) -> Self {
         Self {
             mode, options, dropped_tables: HashSet::new(), lifecycle_triggers: HashSet::new(),
-            read_scopes: None, in_step: false, denied: false,
+            read_scopes: None, owner_tables: OwnerTablePolicy::default(), in_step: false, denied: false,
         }
     }
 
@@ -189,6 +197,10 @@ impl Authorizer {
         let mut authorizer = Self::new(AuthMode::LocalRead, AuthOptions::default());
         authorizer.read_scopes = Some(sources);
         authorizer
+    }
+
+    pub(crate) fn set_owner_tables(&mut self, policy: OwnerTablePolicy) {
+        self.owner_tables = policy;
     }
 
     pub(crate) fn set_lifecycle_triggers(&mut self, names: HashSet<String>) {
@@ -315,7 +327,9 @@ impl Authorizer {
             return true;
         }
         if mode == AuthMode::LocalRead {
-            return false;
+            return matches!(action_code, a::INSERT | a::UPDATE | a::DELETE)
+                && caller.is_empty() && database == "main"
+                && self.owner_tables.shadow.contains(&object);
         }
 
         // These exact generated triggers retire grants, offers and reader
@@ -340,6 +354,11 @@ impl Authorizer {
                 return database == "main" || database == "temp";
             }
             if database != "main" {
+                return false;
+            }
+            if self.owner_tables.protected.contains(&object) && !self.in_step
+                && !self.owner_tables.application_triggers.contains(&caller)
+            {
                 return false;
             }
             return !is_reserved_schema_object_name(&object);

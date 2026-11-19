@@ -459,6 +459,7 @@ version = "0.6.3"
 dependencies = [
  "hex",
  "libsqlite3-sys",
+ "regex",
  "rusqlite",
  "serde_json",
  "sha2 0.10.9",

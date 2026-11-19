@@ -1480,6 +1480,15 @@ those of `docs/dolt-redesign.md` §10.
   The static node refused dynamic genesis. Typecheck, lint, and 86
   focused tests passed. See `chronolog-static-group-check3.log`.
 
+- Chronolog `a9b1aa2` prepares fork seed plans from an exact native
+  revision and commit. Independent UTC and Pacific/Apia runs on
+  `c8dfc2e` produced identical plans, rejected a stale revision, and
+  recreated the source's application tables in a new Dolt object.
+  Both objects rejected reapplying each batch and kept the same table
+  digests. The 108 focused tests, typecheck, and lint passed. Native signed
+  archive operations and the group CLI still need adapters. See
+  `chronolog-native-fork-seed4.log`.
+
 - Chronolog `aa64e21` runs the shared conformance replay fixture in
   independent celld nodes under UTC and Pacific/Apia. Both reached
   revision 2 at commit `148871e88e2489f8992004bc75a328a6c9240929` with
@@ -1507,7 +1516,8 @@ those of `docs/dolt-redesign.md` §10.
        `@dolthub/doltlite` and its pnpm patch, and the SSB network layer of
        `transport-ssb`;
      - port snapshots, fork-seed, and secret-store backends. The feed
-       package and native static membership landed in the commits above.
+       package, native static membership and the native fork-seed planner
+       landed in the commits above.
   4. node-core tests and a chaos harness against the celld host.
 
 ---

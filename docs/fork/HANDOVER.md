@@ -712,6 +712,16 @@ publication, and cursors cannot change direction or roots. Both
 typechecks, 76 host and package tests, and 38 Base tests passed.
 See `p5-native-event-timeline.log` and `p5-event-timeline-check.log`.
 
+Base `4ab1f0b` and host `f4e57beb5` page authored file history
+at an exact revision. The native fixture verified clean adoption,
+explicitly accepted changes with the exact decision ID, retention of
+local changes, and exclusion of declined source changes. The first
+run surfaced that a whole-file choice can retain source history
+without a local applied-change row. The implementation now reads the
+persisted adoption itself. Both typechecks, 76 host and package
+tests, and 38 Base tests passed. See `p5-native-file-timeline-final.log`
+and `p5-file-timeline-check.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

@@ -1682,6 +1682,13 @@ pushes them.
    on two `c8dfc2e` nodes retained the exact selected generation after a
    process restart and retry. The 20 focused tests, type check and targeted
    lint passed. See `chronolog-celld-control-native.log`.
+   Fork `2ec8d17` adds the principal row and transaction identities used by
+   current Chronolog SQL. The executor pins both to one program and the engine
+   digest identifies the changed execution profile. All 75 focused Rust
+   tests passed. A locally built runtime verified exact integers above the
+   JavaScript safe-integer bound, identity cleanup after rejection, validation and restart
+   on a real Dolt cell. See `celld-current-chronolog-identity-native-exact.log`.
+   The published runtime pins still name `c8dfc2e`.
    Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
    below.
    - A Chronolog node per workspace node and the `chronolog` host service.

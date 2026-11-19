@@ -695,6 +695,23 @@ fails when reused on a different root or visible revision. Both
 typechecks, 76 host and package tests, and 38 Base tests passed. See
 `p5-native-neighbors.log` and `p5-neighbor-pages-check.log`.
 
+Base `26a49bf` and host `fe0447d7d` trace content annotations from
+the selected participant revision back to both authors of a text
+merge. Where both parents carry the same unchanged span, the
+annotation follows the applied base once and keeps both recorded
+parent mappings. The native fixture verified imported snapshot
+origins, mode-only changes, and paged, disjoint merge annotations.
+Both typechecks, 76 host and package tests, and 40 Base tests passed.
+See `p5-native-blame-authors.log` and `p5-native-blame-check.log`.
+
+Base `0aa63ff` and host `1d165ef49` page event history at the
+participant's admitted revisions. The native fixture verified that
+both saved parents are reachable, a future traversal from shared
+history excludes private events of a different participant until
+publication, and cursors cannot change direction or roots. Both
+typechecks, 76 host and package tests, and 38 Base tests passed.
+See `p5-native-event-timeline.log` and `p5-event-timeline-check.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover

@@ -2447,6 +2447,7 @@ mod tests {
 /// ```json
 /// { "program": [{ "sql": "...", "bindings": [{ "index": 1, "value": { "t": "int", "v": "9007199254740993" } }] }],
 ///   "context": { "nowMs": "1700000000000", "seed": "1", "actor": "<base64url>" | null,
+///                "actorId": "2" | null, "transactionId": "<base64url>" | null,
 ///                "schemaAdmin": false, "limits": { "maxVmSteps": 1000000, ... } },
 ///   "log": null | { "sql": "INSERT ...", "bindings": [...] } }
 /// ```
@@ -2482,12 +2483,22 @@ fn execute(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
         u64::try_from(integer(&context["seed"], "context.seed")?)
             .map_err(|_| anyhow!("context.seed must not be negative"))?,
     );
-    if let Some(actor) = context["actor"].as_str() {
-        ctx.actor = Some(
+    let optional_bytes = |key: &str| -> anyhow::Result<Option<Vec<u8>>> {
+        let value = &context[key];
+        if value.is_null() {
+            return Ok(None);
+        }
+        let encoded = value.as_str().ok_or_else(|| anyhow!("context.{key} must be base64url"))?;
+        Ok(Some(
             base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .decode(actor)
-                .context("context.actor must be base64url")?,
-        );
+                .decode(encoded)
+                .with_context(|| format!("context.{key} must be base64url"))?,
+        ))
+    };
+    ctx.actor = optional_bytes("actor")?;
+    ctx.transaction_id = optional_bytes("transactionId")?;
+    if !context["actorId"].is_null() {
+        ctx.actor_id = Some(integer(&context["actorId"], "context.actorId")?);
     }
     ctx.profile = Profile::Consensus { schema_admin: context["schemaAdmin"].as_bool().unwrap_or(false) };
     ctx.limits = limits(&context["limits"], Limits::default())?;

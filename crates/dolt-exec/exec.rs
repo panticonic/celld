@@ -169,13 +169,25 @@ pub struct ExecContext {
     pub seed: u64,
     /// The signing key: `chronolog_actor()` (1 to 64 bytes). `None` makes it NULL.
     pub actor: Option<Vec<u8>>,
+    /// The signer's resolved principal id within the application.
+    pub actor_id: Option<i64>,
+    /// The exact transaction identity available to deterministic SQL.
+    pub transaction_id: Option<Vec<u8>>,
     pub profile: Profile,
     pub limits: Limits,
 }
 
 impl ExecContext {
     pub fn new(now_ms: i64, seed: u64) -> Self {
-        Self { now_ms, seed, actor: None, profile: Profile::default(), limits: Limits::default() }
+        Self {
+            now_ms,
+            seed,
+            actor: None,
+            actor_id: None,
+            transaction_id: None,
+            profile: Profile::default(),
+            limits: Limits::default(),
+        }
     }
 }
 
@@ -316,8 +328,12 @@ fn run_inner(
     exec_sql(db, &format!("SAVEPOINT {SAVEPOINT_NAME}"))?;
     let rejection = {
         let _det = DetScope::set(db, ctx)?;
-        *state.actor.lock().unwrap() = ctx.actor.clone();
-        let _actor = ActorScope(state);
+        *state.identity.lock().unwrap() = ExecutionIdentity {
+            actor: ctx.actor.clone(),
+            actor_id: ctx.actor_id,
+            transaction_id: ctx.transaction_id.clone(),
+        };
+        let _identity = IdentityScope(state);
         run_steps(db, program, ctx)?
     };
     let transaction_gone = unsafe { sys::sqlite3_get_autocommit(db) } != 0;
@@ -379,6 +395,12 @@ fn validate(program: &Program, ctx: &ExecContext) -> Result<(), ExecError> {
         if actor.is_empty() || actor.len() > 64 {
             return Err(ExecError::InvalidInput("actor must be 1 to 64 bytes".into()));
         }
+    }
+    if ctx.actor_id.is_some_and(|id| id < 1) {
+        return Err(ExecError::InvalidInput("actor_id must be positive".into()));
+    }
+    if ctx.transaction_id.as_ref().is_some_and(|id| id.len() != 32) {
+        return Err(ExecError::InvalidInput("transaction_id must be 32 bytes".into()));
     }
     Ok(())
 }
@@ -1091,17 +1113,23 @@ pub fn det_context_active(conn: &Connection) -> bool {
 
 // ─────────────────────── chronolog_* native functions ────────────────────
 
-/// Per-connection state behind `chronolog_actor()`, stored as SQLite client
-/// data so it is freed with the connection.
-pub struct ExecState {
-    actor: Mutex<Option<Vec<u8>>>,
+#[derive(Default)]
+struct ExecutionIdentity {
+    actor: Option<Vec<u8>>,
+    actor_id: Option<i64>,
+    transaction_id: Option<Vec<u8>>,
 }
 
-struct ActorScope<'a>(&'a ExecState);
+/// Per-connection identity, freed by SQLite when the connection closes.
+pub struct ExecState {
+    identity: Mutex<ExecutionIdentity>,
+}
 
-impl Drop for ActorScope<'_> {
+struct IdentityScope<'a>(&'a ExecState);
+
+impl Drop for IdentityScope<'_> {
     fn drop(&mut self) {
-        *self.0.actor.lock().unwrap() = None;
+        *self.0.identity.lock().unwrap() = ExecutionIdentity::default();
     }
 }
 
@@ -1111,10 +1139,9 @@ unsafe extern "C" fn drop_state(p: *mut c_void) {
     drop(Box::from_raw(p as *mut ExecState));
 }
 
-/// Register `chronolog_assert`, `chronolog_actor` and
-/// `chronolog_policy_violation` on the connection. Idempotent. [`execute`]
-/// calls it; call it yourself to use `chronolog_actor()` (returns NULL outside
-/// an execution) in ordinary SQL such as a column DEFAULT.
+/// Register the Chronolog SQL functions on this connection. Idempotent.
+/// [`execute`] calls it, and ordinary SQL can register them to use the same
+/// schema defaults. Actor and transaction identities are NULL outside execution.
 pub fn register_functions(conn: &Connection) -> Result<(), ExecError> {
     // SAFETY: the handle is valid for the borrow of `conn`.
     unsafe { register_state(conn.handle()) }.map(|_| ())
@@ -1129,11 +1156,13 @@ unsafe fn register_state<'a>(db: *mut sys::sqlite3) -> Result<&'a ExecState, Exe
         if !existing.is_null() {
             return Ok(&*(existing as *const ExecState));
         }
-        let state = Box::into_raw(Box::new(ExecState { actor: Mutex::new(None) }));
+        let state = Box::into_raw(Box::new(ExecState { identity: Mutex::default() }));
         let flags = sys::SQLITE_UTF8 | sys::SQLITE_INNOCUOUS;
-        let defs: [(&CStr, c_int, c_int, unsafe extern "C" fn(*mut sys::sqlite3_context, c_int, *mut *mut sys::sqlite3_value)); 3] = [
+        let defs: [(&CStr, c_int, c_int, unsafe extern "C" fn(*mut sys::sqlite3_context, c_int, *mut *mut sys::sqlite3_value)); 5] = [
             (c"chronolog_assert", 2, flags | sys::SQLITE_DETERMINISTIC, chronolog_assert),
             (c"chronolog_actor", 0, flags, chronolog_actor),
+            (c"chronolog_actor_id", 0, flags, chronolog_actor_id),
+            (c"chronolog_transaction_id", 0, flags, chronolog_transaction_id),
             (c"chronolog_policy_violation", 2, flags, chronolog_policy_violation),
         ];
         for (name, n_args, f, func) in defs {
@@ -1194,19 +1223,46 @@ unsafe extern "C" fn chronolog_assert(ctx: *mut sys::sqlite3_context, _argc: c_i
     result_constraint_function(ctx, &message);
 }
 
-/// `chronolog_actor()`: the signer of the program being executed, else NULL.
-unsafe extern "C" fn chronolog_actor(ctx: *mut sys::sqlite3_context, _argc: c_int, _argv: *mut *mut sys::sqlite3_value) {
+/// The function context keeps its owning connection live for this call.
+unsafe fn with_execution_identity<R>(
+    ctx: *mut sys::sqlite3_context,
+    action: impl FnOnce(Option<&ExecutionIdentity>) -> R,
+) -> R {
     let db = sys::sqlite3_context_db_handle(ctx);
-    let p = ffi::sqlite3_get_clientdata(db, CLIENT_DATA_KEY.as_ptr());
-    if p.is_null() {
-        sys::sqlite3_result_null(ctx);
-        return;
-    }
-    let state = &*(p as *const ExecState);
-    match &*state.actor.lock().unwrap() {
-        Some(actor) => sys::sqlite3_result_blob(ctx, actor.as_ptr() as *const c_void, actor.len() as c_int, sys::SQLITE_TRANSIENT()),
+    let state = ffi::sqlite3_get_clientdata(db, CLIENT_DATA_KEY.as_ptr()) as *const ExecState;
+    let identity = state.as_ref().map(|state| state.identity.lock().unwrap());
+    action(identity.as_deref())
+}
+
+unsafe fn result_identity_blob(ctx: *mut sys::sqlite3_context, value: Option<&[u8]>) {
+    match value {
+        Some(bytes) => sys::sqlite3_result_blob(
+            ctx, bytes.as_ptr() as *const c_void, bytes.len() as c_int, sys::SQLITE_TRANSIENT(),
+        ),
         None => sys::sqlite3_result_null(ctx),
     }
+}
+
+/// `chronolog_actor()`: the signing key of the current program.
+unsafe extern "C" fn chronolog_actor(ctx: *mut sys::sqlite3_context, _argc: c_int, _argv: *mut *mut sys::sqlite3_value) {
+    with_execution_identity(ctx, |identity| {
+        result_identity_blob(ctx, identity.and_then(|value| value.actor.as_deref()));
+    });
+}
+
+/// `chronolog_actor_id()`: the signer's principal row for the current program.
+unsafe extern "C" fn chronolog_actor_id(ctx: *mut sys::sqlite3_context, _argc: c_int, _argv: *mut *mut sys::sqlite3_value) {
+    with_execution_identity(ctx, |identity| match identity.and_then(|value| value.actor_id) {
+        Some(id) => sys::sqlite3_result_int64(ctx, id),
+        None => sys::sqlite3_result_null(ctx),
+    });
+}
+
+/// `chronolog_transaction_id()`: the current signed transaction identity.
+unsafe extern "C" fn chronolog_transaction_id(ctx: *mut sys::sqlite3_context, _argc: c_int, _argv: *mut *mut sys::sqlite3_value) {
+    with_execution_identity(ctx, |identity| {
+        result_identity_blob(ctx, identity.and_then(|value| value.transaction_id.as_deref()));
+    });
 }
 
 /// `chronolog_policy_violation(table, command)`: always a

@@ -1737,7 +1737,8 @@ class DoltStorage {
   // or a bigint is INTEGER, any other number is REAL, a one-element
   // Float64Array is REAL even when integral, a Uint8Array/ArrayBuffer is
   // BLOB, a string is TEXT, null is NULL. Anything else is refused.
-  // context: { nowMs, seed, actor?: Uint8Array, schemaAdmin?, limits? }.
+  // context: { nowMs, seed, actor?: Uint8Array, actorId?: bigint,
+  //            transactionId?: Uint8Array, schemaAdmin?, limits? }.
   // Resolves to { outcome: "accepted" } or
   // { outcome: "rejected", code, statementIndex }; an operational failure
   // (I/O, corruption) throws, because the program's fate is then unknown.
@@ -1753,14 +1754,20 @@ class DoltStorage {
     const log = options.log == null ? null : __doltStatement(options.log, "the log statement");
     if (context.nowMs == null || context.seed == null)
       throw new TypeError("dolt.execute: context.nowMs and context.seed are required");
-    let actor = null;
-    if (context.actor != null) actor = __doltBase64Url(__doltBytes(context.actor, "context.actor"));
+    if (context.actorId != null && typeof context.actorId !== "bigint")
+      throw new TypeError("dolt.execute: context.actorId must be a bigint");
+    const actor = context.actor == null ? null : __doltBase64Url(__doltBytes(context.actor, "context.actor"));
+    const actorId = context.actorId == null ? null : String(context.actorId);
+    const transactionId = context.transactionId == null
+      ? null : __doltBase64Url(__doltBytes(context.transactionId, "context.transactionId"));
     return this._op("execute", {
       program: steps,
       context: {
         nowMs: String(BigInt(context.nowMs)),
         seed: String(BigInt(context.seed)),
         actor,
+        actorId,
+        transactionId,
         schemaAdmin: !!context.schemaAdmin,
         limits: context.limits || {},
       },

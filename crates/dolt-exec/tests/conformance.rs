@@ -558,6 +558,39 @@ fn chronolog_actor_is_the_signer_during_execution_and_null_otherwise() {
 }
 
 #[test]
+fn chronolog_principal_and_transaction_identity_stay_inside_the_program() {
+    let (_d, c) = fresh_dolt();
+    let mut ctx = admin_ctx(1);
+    ctx.actor_id = Some(9_007_199_254_740_993);
+    ctx.transaction_id = Some(vec![0xb7; 32]);
+    accepted(
+        &c,
+        &prog(&[
+            "CREATE TABLE authored (owner INTEGER DEFAULT (chronolog_actor_id()), tx BLOB)",
+            "INSERT INTO authored (tx) VALUES (chronolog_transaction_id())",
+        ]),
+        &ctx,
+    );
+    assert_eq!(
+        rows_as_strings(&c, "SELECT owner, hex(tx) FROM authored"),
+        vec![vec!["9007199254740993".to_string(), "B7".repeat(32)]],
+    );
+    assert_eq!(
+        rejected(&c, &prog(&["SELECT chronolog_assert(0, 'fixture')"]), &ctx),
+        ("assert:fixture".to_string(), Some(0)),
+    );
+    assert_eq!(
+        rows_as_strings(&c, "SELECT chronolog_actor_id(), chronolog_transaction_id()"),
+        vec![vec!["NULL", "NULL"]],
+    );
+    ctx.actor_id = Some(0);
+    assert!(matches!(execute(&c, &prog(&["SELECT 1"]), &ctx), Err(ExecError::InvalidInput(_))));
+    ctx.actor_id = None;
+    ctx.transaction_id = Some(vec![0xff; 31]);
+    assert!(matches!(execute(&c, &prog(&["SELECT 1"]), &ctx), Err(ExecError::InvalidInput(_))));
+}
+
+#[test]
 fn connection_profile_is_applied_for_the_program_and_restored_after() {
     let (_d, c) = fresh_dolt();
     // A plain connection: double-quoted strings work, ATTACH is allowed, limits are default.

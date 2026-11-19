@@ -902,6 +902,26 @@ and host typechecks passed. The managed run peaked at 3.39 GiB with
 zero OOM kills and shut down normally. See
 `p5-private-catalog-check.log` and `p5-managed-runtime-source24-evidence.log`.
 
+Host `fdb0e292e` and `1eb13088a` verify retained execution
+descriptors at the handoff to owner publication. A signed session had
+failed to start after another participant published because the build
+bytes survived but the old execution descriptor had not been admitted
+for that write. The 203 focused tests and host typechecks passed. Host
+`7a27b0449` keeps the signed person's working copy bound to the same
+interactive session across separate requests. The 141 focused tests and
+host typechecks passed.
+
+The signed end-to-end run verified a private edit across distinct runs
+of the same session. Alice then published from an owned child copy.
+Bob's separately saved work remained private as shared history moved.
+His reviewed integration retained the selected text, recorded Alice's
+event as a parent, and gave the same application on retry. A third
+session read Bob's exact published event from shared history. The
+managed workspace peaked at 3.78 GiB with zero OOM kills and stopped
+normally. See `p5-execution-publication-proof.log`,
+`p5-owned-interactive-session-check.log`, and
+`p5-managed-runtime-source28-evidence.log`.
+
 Workspace startup still needs a complete cutover to the participant
 source and the remaining public semantic operations. Incremental peer
 prefixes and remaining structural choices still need their cutover
@@ -1450,10 +1470,8 @@ those of `docs/dolt-redesign.md` §10.
      - delete `apps/chronologd`, `materializer-doltlite`,
        `@dolthub/doltlite` and its pnpm patch, and the SSB network layer of
        `transport-ssb`;
-     - move `feed-store.ts`, `types.ts` and `memory.ts` into a feeds
-       package;
-     - port the remaining chronologd features: snapshots and fork-seed,
-       static membership, secret-store backends.
+     - port snapshots, fork-seed, and secret-store backends. The feed
+       package and native static membership landed in the commits above.
   4. node-core tests and a chaos harness against the celld host.
 
 ---

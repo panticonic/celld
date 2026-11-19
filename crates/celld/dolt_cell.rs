@@ -1312,6 +1312,9 @@ mod tests {
         ] {
             assert_eq!(read(sql), json!({ "error": "SQL_PROFILE_VIOLATION" }));
         }
+        assert_eq!(read("SELECT count(*) AS total FROM prov_facts"), json!({
+            "columns": ["total"], "rows": [[{ "t": "int", "v": "1" }]]
+        }));
         assert_eq!(
             connection.query_row("SELECT count(*) FROM facts", [], |row| row.get::<_, i64>(0)).unwrap(),
             2,
@@ -2672,10 +2675,22 @@ fn query(connection: &Connection, args: &Value, scoped: bool) -> anyhow::Result<
     let mut limits = limits(&args["limits"], Limits::default())?;
     let max_rows = args["maxRows"].as_u64().unwrap_or(10_000) as usize;
     let result = if scoped {
-        let (sql, sources) = scoped_query_sql(&statement.sql, &args["projections"])?;
-        statement.sql = sql;
         limits.max_value_bytes = limits.max_value_bytes.min(512 * 1024);
-        scoped_query(connection, &statement, &limits, max_rows.min(201), sources)
+        let select = std::mem::take(&mut statement.sql);
+        let read = |statement: &mut crate::dolt_exec::Statement, materialized| {
+            let (sql, sources) = scoped_query_sql(&select, &args["projections"], materialized)?;
+            statement.sql = sql;
+            Ok::<_, anyhow::Error>(scoped_query(connection, statement, &limits, max_rows.min(201), sources))
+        };
+        let result = read(&mut statement, false)?;
+        if result.as_ref().err().is_some_and(|code| code == "SQL_PROFILE_VIOLATION") {
+            // SQLite can flatten a projection and report a synthetic
+            // COUNT(*) read as a direct access to the physical table. Retry
+            // with private CTEs materialized so the read names the projection.
+            read(&mut statement, true)?
+        } else {
+            result
+        }
     } else {
         local_query(connection, &statement, &limits, max_rows)
     };
@@ -2714,7 +2729,7 @@ fn query(connection: &Connection, args: &Value, scoped: bool) -> anyhow::Result<
 /// generated aliases identify the trusted SELECTs to SQLite's authorizer.
 /// The public projection names may appear freely in the untrusted query.
 fn scoped_query_sql(
-    sql: &str, projections: &Value,
+    sql: &str, projections: &Value, materialized: bool,
 ) -> anyhow::Result<(String, std::collections::HashSet<String>)> {
     let projections = projections.as_object().ok_or_else(|| anyhow!("projections must be a record of SELECTs"))?;
     anyhow::ensure!(!projections.is_empty() && projections.len() <= 64, "expected 1 to 64 projections");
@@ -2731,7 +2746,8 @@ fn scoped_query_sql(
         );
         let source = format!("celld_scope_{nonce:032x}_{index}");
         let projection = value.as_str().ok_or_else(|| anyhow!("projection {name:?} needs a SELECT"))?;
-        definitions.push(format!("{source} AS (\n{projection}\n), {name} AS (SELECT * FROM {source})"));
+        let modifier = if materialized { " MATERIALIZED" } else { "" };
+        definitions.push(format!("{source} AS{modifier} (\n{projection}\n), {name} AS (SELECT * FROM {source})"));
         scopes.insert(source);
     }
     Ok((format!("WITH {} SELECT * FROM (\n{sql}\n)", definitions.join(",\n")), scopes))

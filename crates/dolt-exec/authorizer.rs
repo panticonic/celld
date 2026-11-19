@@ -232,6 +232,12 @@ impl Authorizer {
                 a::SELECT => return true,
                 a::RECURSIVE => return trusted,
                 a::READ => {
+                    // COUNT(*) reports a synthetic read of a materialized
+                    // relation, with no database or column. Only an
+                    // internally allocated projection may use this form.
+                    if database.is_empty() && secondary.is_empty() && scopes.contains(&object) {
+                        return true;
+                    }
                     // CTE references do not authorize a database read. Every
                     // underlying table lookup must originate in a trusted
                     // projection authored by the calling worker.

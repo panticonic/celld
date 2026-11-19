@@ -199,6 +199,7 @@ fn scoped_reads_admit_only_the_published_projection() {
     for sql in [
         "SELECT private.value FROM prov_facts, private",
         "SELECT value FROM facts",
+        "SELECT count(*) FROM facts",
         "SELECT value FROM dolt_at_facts('HEAD')",
         "SELECT dolt_hashof('HEAD')",
         "SELECT name FROM pragma_table_info('private')",
@@ -206,6 +207,15 @@ fn scoped_reads_admit_only_the_published_projection() {
         let result = read(sql);
         assert_eq!(result.unwrap_err(), "SQL_PROFILE_VIOLATION", "{sql}");
     }
+    let count = scoped_query(
+        &conn,
+        &q("WITH fixed_fixture_projection AS MATERIALIZED (
+            SELECT value FROM dolt_at_facts('HEAD')
+        ), prov_facts AS (SELECT * FROM fixed_fixture_projection)
+          SELECT count(*) FROM prov_facts"),
+        &Limits::default(), 10, HashSet::from(["fixed_fixture_projection".into()]),
+    ).unwrap();
+    assert_eq!(count.rows, vec![vec![SqlValue::Integer(1)]]);
     // Failed scoped reads do not alter the connection's next execution.
     assert_eq!(
         local_query(&conn, &q("SELECT value FROM facts"), &Limits::default(), 10).unwrap().rows,

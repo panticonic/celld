@@ -1821,6 +1821,16 @@ pushes them.
    `chronolog-celld-current-invite-native3.log`. This exercised current
    Chronolog enrollment with a host-managed signer in a fixture. The
    Vibestudio invitation endpoint and its approval flow remain open.
+   Chronolog `8282562a` adds signed invitation envelopes to the current
+   celld package. The invited device validates its member key, the active
+   administrator, the selected generation and the signed Iroh address, then
+   persists the authority before opening the session. An independent
+   installation of `chronolog-peer-session-8282562a.tgz` refused an altered
+   route and accepted the exact envelope on two native nodes. The invited
+   device acquired the epoch key over Iroh, and both devices retained their
+   writes and authority after restart. The 47 focused tests, type check and
+   targeted lint passed. See `chronolog-current-celld-enrollment-native.log`
+   and `chronolog-current-celld-enrollment-check.log`.
    Fork `2ec8d17` adds the principal row and transaction identities used by
    current Chronolog SQL. The executor pins both to one program and the engine
    digest identifies the changed execution profile. All 75 focused Rust

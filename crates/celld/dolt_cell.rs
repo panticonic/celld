@@ -123,6 +123,26 @@ pub(crate) fn is_prolly(connection: &Connection) -> bool {
         .unwrap_or(false)
 }
 
+/// Open a detached snapshot without touching the active cell connection or
+/// using the working set of a branch whose name happens to be a hash.
+pub(crate) fn open_committed_snapshot(connection: &Connection, value: &Value) -> anyhow::Result<Connection> {
+    let hash = value.as_str().filter(|hash| hash.len() == 40 && hash.bytes().all(|byte|
+        byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+        .ok_or_else(|| anyhow!("a snapshot requires a complete Dolt commit hash"))?;
+    let path = connection.path().filter(|path| !path.is_empty())
+        .ok_or_else(|| anyhow!("the Dolt cell has no database file"))?;
+    // ~0 forces a detached open even when the ref could name a branch.
+    // Validate the resolved commit to catch tag or branch name collisions.
+    let selector = format!("{path}@{hash}~0");
+    let snapshot = Connection::open_with_flags(
+        crate::dolt_exec::prolly_uri(std::path::Path::new(&selector), None),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_URI,
+    ).context("open the committed view")?;
+    let detached: bool = snapshot.query_row("SELECT active_branch() IS NULL", [], |row| row.get(0))?;
+    anyhow::ensure!(detached && hash_of(&snapshot, "HEAD")? == hash, "the snapshot resolved to a different commit");
+    Ok(snapshot)
+}
+
 pub(crate) fn active_branch(connection: &Connection) -> anyhow::Result<String> {
     Ok(connection.query_row("SELECT active_branch()", [], |row| row.get(0))?)
 }
@@ -391,6 +411,7 @@ pub(crate) fn mutates(op: &str) -> bool {
         op,
         "commit"
             | "branchCreate"
+            | "branchForce"
             | "branchDelete"
             | "checkout"
             | "reset"
@@ -409,13 +430,13 @@ pub(crate) fn changes_schema(op: &str) -> bool {
 /// Whether an operation that runs inside the caller's open transaction
 /// ([`run_in_transaction`]) can change the store.
 pub(crate) fn mutates_in_transaction(op: &str) -> bool {
-    matches!(op, "txCommit" | "mergeBegin" | "mergeTake" | "mergeFinish" | "programStep")
+    matches!(op, "txCommit" | "mergeBegin" | "mergeTake" | "mergeFinish" | "programStep" | "programPlatformStep")
 }
 
 /// Whether an operation that runs inside the caller's open transaction can
 /// change the schema the connection sees.
 pub(crate) fn changes_schema_in_transaction(op: &str) -> bool {
-    matches!(op, "mergeBegin" | "programStep")
+    matches!(op, "mergeBegin" | "programStep" | "programPlatformStep")
 }
 
 /// Run one operation inside the caller's open storage transaction, with the
@@ -445,10 +466,21 @@ pub(crate) fn run_in_transaction(
             Ok(json!(id.to_string()))
         }
         "programStep" => program_step(connection, args),
+        "programPlatformStep" => {
+            let limits = limits(&args["limits"], crate::dolt_exec::Limits::default())?;
+            let result = crate::dolt_exec::run_platform_transaction_step(connection, &statement(args)?, &limits)?;
+            Ok(program_step_result(connection, &result))
+        }
+        "programPlatformQuery" => {
+            let limits = limits(&args["limits"], crate::dolt_exec::Limits::default())?;
+            let max_rows = args["maxRows"].as_u64().unwrap_or(10_000).min(10_000) as usize;
+            query_result(crate::dolt_exec::platform_transaction_query(connection, &statement(args)?, &limits, max_rows))
+        }
         "programQuery" => {
             require_program_pin(connection, args)?;
             query(connection, args, false)
         }
+        "triggerUsesIgnore" => trigger_uses_ignore(args),
         "programUnpin" => {
             require_program_pin(connection, args)?;
             crate::dolt_exec::clear_transaction_program(connection);
@@ -827,6 +859,14 @@ pub(crate) fn run_with(
             call(connection, "dolt_branch", &call_args)?;
             Ok(Value::Null)
         }
+        "branchForce" => {
+            let name = branch_name(&args["name"], "branch name")?;
+            let from = revision(&args["from"], "from")?;
+            anyhow::ensure!(name != HOME_BRANCH && name != active_branch(connection)?,
+                "cannot move the home or checked-out branch");
+            call(connection, "dolt_branch", &["-f".to_string(), name, from])?;
+            Ok(Value::Null)
+        }
         "branchDelete" => {
             let name = branch_name(&args["name"], "branch name")?;
             anyhow::ensure!(name != HOME_BRANCH, "the {HOME_BRANCH} branch cannot be deleted");
@@ -905,9 +945,15 @@ pub(crate) fn run_with(
         "execute" => execute(connection, args),
         "query" => query(connection, args, false),
         "queryScoped" => query(connection, args, true),
+        "triggerUsesIgnore" => trigger_uses_ignore(args),
         "engineDigest" => Ok(Value::String(crate::dolt_exec::engine_digest_hex())),
         other => bail!("unknown dolt operation {other:?}"),
     }
+}
+
+fn trigger_uses_ignore(args: &Value) -> anyhow::Result<Value> {
+    let sql = args["sql"].as_str().ok_or_else(|| anyhow!("the trigger SQL must be a string"))?;
+    Ok(json!(crate::dolt_exec::trigger_uses_ignore(sql)?))
 }
 
 pub(crate) fn hash_of(connection: &Connection, rev: &str) -> anyhow::Result<String> {
@@ -2629,12 +2675,16 @@ fn program_step(connection: &Connection, args: &Value) -> anyhow::Result<Value> 
     };
     let step = statement(args)?;
     let result = run_pinned_transaction_step(connection, &step, mode, args["schemaAdmin"].as_bool().unwrap_or(false))?;
-    Ok(json!({
-        "result": outcome_json(&result),
+    Ok(program_step_result(connection, &result))
+}
+
+fn program_step_result(connection: &Connection, result: &crate::dolt_exec::Outcome) -> Value {
+    json!({
+        "result": outcome_json(result),
         "changes": connection.changes().to_string(),
         "lastInsertRowid": connection.last_insert_rowid().to_string(),
         "transactionRolledBack": connection.is_autocommit(),
-    }))
+    })
 }
 
 /// The log statement of `execute`: the caller's bindings plus the outcome
@@ -2711,8 +2761,7 @@ fn run_log_statement(
 /// (`{ t, v }` tagged like `execute`'s bindings). A refusal answers
 /// `{ "error": "<code>" }` rather than throwing, so the caller sees the code.
 fn query(connection: &Connection, args: &Value, scoped: bool) -> anyhow::Result<Value> {
-    use crate::dolt_exec::{local_query, scoped_query, Limits, SqlValue};
-    use base64::Engine as _;
+    use crate::dolt_exec::{local_query, scoped_query, Limits};
 
     let mut statement = statement(args)?;
     let mut limits = limits(&args["limits"], Limits::default())?;
@@ -2737,6 +2786,20 @@ fn query(connection: &Connection, args: &Value, scoped: bool) -> anyhow::Result<
     } else {
         local_query(connection, &statement, &limits, max_rows)
     };
+    query_result(result)
+}
+
+pub(crate) fn query_committed_snapshot(connection: &Connection, args: &Value) -> anyhow::Result<Value> {
+    let limits = limits(&args["limits"], crate::dolt_exec::Limits::default())?;
+    let max_rows = args["maxRows"].as_u64().unwrap_or(10_000).min(10_000) as usize;
+    query_result(crate::dolt_exec::bounded_local_query(
+        connection, &statement(args)?, &limits, max_rows,
+    ))
+}
+
+fn query_result(result: Result<crate::dolt_exec::LocalRows, String>) -> anyhow::Result<Value> {
+    use crate::dolt_exec::SqlValue;
+    use base64::Engine as _;
     match result {
         Ok(result) => {
             let rows = result

@@ -202,6 +202,12 @@ pub fn prng_seed_from_tx_id(tx_id: &[u8]) -> u64 {
     u64::from(if seed == 0 { 1 } else { seed })
 }
 
+/// Inspect trigger SQL with the same tokenizer that executes the trigger.
+pub fn trigger_uses_ignore(sql: &str) -> Result<bool, ExecError> {
+    let sql = CString::new(sql).map_err(|_| ExecError::InvalidInput("trigger SQL contains NUL".into()))?;
+    Ok(unsafe { ffi::sqlite3_celld_trigger_uses_ignore(sql.as_ptr()) != 0 })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Accepted,
@@ -742,6 +748,38 @@ pub fn local_query(
     let auth = profile_authorizer(conn, AuthMode::LocalRead, AuthOptions::default())
         .map_err(|error| format!("operational: {error}"))?;
     query_with_authorizer(conn, statement, limits, max_rows, auth, None)
+}
+
+/// Read from an immutable local view with native limits and a response byte
+/// budget, before serializing the result across the worker boundary.
+pub fn bounded_local_query(
+    conn: &Connection,
+    statement: &Statement,
+    limits: &Limits,
+    max_rows: usize,
+) -> Result<LocalRows, String> {
+    limits.validate().map_err(|error| error.to_string())?;
+    let db = unsafe { conn.handle() };
+    let _profile = ScopedReadLimits::new(db, limits);
+    let auth = profile_authorizer(conn, AuthMode::LocalRead, AuthOptions::default())
+        .map_err(|error| format!("operational: {error}"))?;
+    query_with_authorizer(conn, statement, limits, max_rows, auth, Some(16 * 1024 * 1024))
+}
+
+/// Run a read authored by the trusted platform adapter in its transaction.
+pub fn platform_transaction_query(
+    conn: &Connection,
+    statement: &Statement,
+    limits: &Limits,
+    max_rows: usize,
+) -> Result<LocalRows, String> {
+    require_program_transaction(conn).map_err(|error| error.to_string())?;
+    limits.validate().map_err(|error| error.to_string())?;
+    let _profile = ProfileScope::enter(unsafe { conn.handle() }, limits, true)
+        .map_err(|error| format!("operational: {error}"))?;
+    let auth = profile_authorizer(conn, AuthMode::Platform, AuthOptions::default())
+        .map_err(|error| format!("operational: {error}"))?;
+    query_with_authorizer(conn, statement, limits, max_rows, auth, Some(16 * 1024 * 1024))
 }
 
 /// Read solely through prepared, caller-owned CTEs. CTE names must be
@@ -1425,6 +1463,26 @@ pub fn program_transaction_prepared(conn: &Connection) -> bool {
     existing_program_state(conn).is_some_and(|state| state.program_foreign_keys.get().is_some())
 }
 
+fn require_program_transaction(conn: &Connection) -> Result<(), ExecError> {
+    if conn.is_autocommit() || !program_transaction_prepared(conn) {
+        return Err(ExecError::TransactionState("the platform adapter needs an open program transaction"));
+    }
+    Ok(())
+}
+
+/// Trusted setup and logging can join a program transaction before or after
+/// the signer identity is pinned. The profiled program uses the pinned path.
+pub fn run_platform_transaction_step(
+    conn: &Connection, statement: &Statement, limits: &Limits,
+) -> Result<Outcome, ExecError> {
+    require_program_transaction(conn)?;
+    limits.validate()?;
+    if det_context_active(conn) {
+        return Err(ExecError::TransactionState("use the pinned program for writes while its context is active"));
+    }
+    profiled_transaction_step(conn, statement, AuthMode::Platform, false, limits)
+}
+
 /// Restore the configuration only after the native transaction has ended.
 pub fn finish_program_transaction(conn: &Connection) -> Result<(), ExecError> {
     if let Some(state) = existing_program_state(conn) {
@@ -1474,8 +1532,14 @@ pub fn run_pinned_transaction_step(
         }
         state.program_steps.set(steps + 1);
     }
-    let _profile = ProfileScope::enter(unsafe { conn.handle() }, &limits, true)?;
-    match run_statement(conn, statement, &limits, mode, schema_admin) {
+    profiled_transaction_step(conn, statement, mode, schema_admin, &limits)
+}
+
+fn profiled_transaction_step(
+    conn: &Connection, statement: &Statement, mode: AuthMode, schema_admin: bool, limits: &Limits,
+) -> Result<Outcome, ExecError> {
+    let _profile = ProfileScope::enter(unsafe { conn.handle() }, limits, true)?;
+    match run_statement(conn, statement, limits, mode, schema_admin) {
         Ok(()) => Ok(Outcome::Accepted),
         Err(Fail::Reject(code)) => Ok(Outcome::Rejected { code, statement_index: None }),
         Err(Fail::Fatal(error)) => Err(error),

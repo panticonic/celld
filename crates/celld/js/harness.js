@@ -1502,6 +1502,9 @@ class DoltStorage {
       create(name, options = {}) {
         dolt._op("branchCreate", { name: String(name), from: options.from ?? null });
       },
+      force(name, from) {
+        dolt._op("branchForce", { name: String(name), from: String(from) });
+      },
       delete(name, options = {}) {
         dolt._op("branchDelete", { name: String(name), force: !!options.force });
       },
@@ -1763,12 +1766,31 @@ class DoltStorage {
   beginProgramTransaction() {
     return this._storage._transactionRoot._beginTransactionSync(true);
   }
+  _programView(operation) {
+    const view = this._storage._transactionRoot._activeSyncTransaction;
+    if (view === null)
+      throw new Error(operation + " requires an active synchronous storage transaction");
+    view._assertTransactionActive(operation);
+    return view;
+  }
+  runPlatformTransactionStatement(statement, options = {}) {
+    const view = this._programView("dolt.runPlatformTransactionStatement");
+    return __doltProgramStepResult(view, view._doltTransactionOp("programPlatformStep", {
+      ...__doltStatement(statement, "platform statement"),
+      limits: options.limits || {},
+    }));
+  }
+  queryPlatformTransaction(sql, bindings = [], options = {}) {
+    const view = this._programView("dolt.queryPlatformTransaction");
+    return __doltReadQueryResult("programPlatformQuery", view._doltTransactionOp("programPlatformQuery", {
+      ...__doltStatement({ sql, bindings }, "platform query"),
+      limits: options.limits || {},
+      maxRows: options.maxRows == null ? 10000 : Number(options.maxRows),
+    }));
+  }
   pinTransactionProgram(context) {
     const root = this._storage._transactionRoot;
-    const view = root._activeSyncTransaction;
-    if (view === null)
-      throw new Error("dolt.pinTransactionProgram requires an active synchronous storage transaction");
-    view._assertTransactionActive("dolt.pinTransactionProgram");
+    const view = this._programView("dolt.pinTransactionProgram");
     const captured = __doltExecutionContext(context, "dolt.pinTransactionProgram");
     const pin = view._doltTransactionOp("programPin", { context: captured });
     let open = true;
@@ -1780,22 +1802,12 @@ class DoltStorage {
     const program = Object.freeze({
       step(statement, options = {}) {
         requireActive();
-        const { result, changes, lastInsertRowid, transactionRolledBack, error } = view._doltTransactionOp("programStep", {
+        const response = view._doltTransactionOp("programStep", {
           ...__doltStatement(statement, "pinned program statement"),
           pin, mode: options.mode ?? "consensus", schemaAdmin: options.schemaAdmin ?? captured.schemaAdmin,
         });
-        if (transactionRolledBack) {
-          // SQLite can end the whole transaction on a write interrupt,
-          // including all nested savepoints. Do not run a phantom COMMIT.
-          open = false;
-          let control = view._transactionControl;
-          while (control !== null) {
-            control.rolledBack = true;
-            control = control.parent;
-          }
-        }
-        if (error !== undefined) throw new Error("dolt.programStep: " + error);
-        return { result, changes: BigInt(changes), lastInsertRowid: BigInt(lastInsertRowid), transactionRolledBack };
+        if (response.transactionRolledBack) open = false;
+        return __doltProgramStepResult(view, response);
       },
       query(sql, bindings = [], options = {}) {
         requireActive();
@@ -1827,6 +1839,13 @@ class DoltStorage {
   query(sql, bindings = [], options = {}) {
     return this._readSql("query", sql, bindings, options, null);
   }
+  queryAt(hash, sql, bindings = [], options = {}) {
+    const statement = __doltStatement({ sql, bindings }, "dolt.queryAt");
+    return __doltReadQueryResult("queryAt", this._op("queryAt", {
+      ...statement, hash, limits: options.limits || {},
+      maxRows: options.maxRows == null ? 10000 : Number(options.maxRows),
+    }));
+  }
   // Treat SQL from a separate caller as untrusted. The worker's projections
   // describe the only relations it may read.
   queryScoped(sql, projections, options = {}) {
@@ -1845,6 +1864,25 @@ class DoltStorage {
   }
   engineDigest() { return this._op("engineDigest", {}); }
   programEngineProfile() { return this._op("programEngineProfile", {}); }
+  triggerUsesIgnore(sql) {
+    const args = { sql: String(sql) };
+    const view = this._storage._transactionRoot._activeSyncTransaction;
+    return view === null
+      ? this._op("triggerUsesIgnore", args)
+      : this._programView("dolt.triggerUsesIgnore")._doltTransactionOp("triggerUsesIgnore", args);
+  }
+}
+function __doltProgramStepResult(view, { result, changes, lastInsertRowid, transactionRolledBack, error }) {
+  if (transactionRolledBack) {
+    // A native write interrupt can end the transaction and every savepoint.
+    let control = view._transactionControl;
+    while (control !== null) {
+      control.rolledBack = true;
+      control = control.parent;
+    }
+  }
+  if (error !== undefined) throw new Error("dolt program step: " + error);
+  return { result, changes: BigInt(changes), lastInsertRowid: BigInt(lastInsertRowid), transactionRolledBack };
 }
 function __doltReadQueryResult(op, result) {
   if (result.error) {

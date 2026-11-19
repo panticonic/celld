@@ -53,20 +53,18 @@ pub const OWNER_COLUMN: &str = "chronolog_owner";
 /// Read-only pragmas whose answers depend only on the schema and the engine
 /// build. Allowed as statements and as table-valued functions.
 pub const READ_ONLY_PRAGMAS: &[&str] = &[
-    "collation_list",
-    "compile_options",
     "foreign_key_list",
-    "function_list",
     "index_info",
     "index_list",
     "index_xinfo",
-    "module_list",
-    "pragma_list",
     "table_info",
     "table_list",
     "table_xinfo",
     // SQLite runs quick_check itself while executing ALTER TABLE ... ADD COLUMN.
     "quick_check",
+];
+const LOCAL_DIAGNOSTIC_PRAGMAS: &[&str] = &[
+    "collation_list", "compile_options", "function_list", "module_list", "pragma_list",
 ];
 
 /// Functions whose result depends on connection history, physical storage,
@@ -79,6 +77,9 @@ pub const CONSENSUS_DENIED_FUNCTIONS: &[&str] = &[
     "total_changes",
     "sqlite_offset",
     "active_branch",
+    "sqlite_compileoption_get",
+    "sqlite_compileoption_used",
+    "sqlite_source_id",
     "fts5_locale",
 ];
 
@@ -310,7 +311,8 @@ impl Authorizer {
             if self.in_step && secondary.is_empty() && (object == "data_version" || object == "page_size") {
                 return true;
             }
-            return READ_ONLY_PRAGMAS.contains(&object.as_str());
+            return READ_ONLY_PRAGMAS.contains(&object.as_str())
+                || (mode == AuthMode::LocalRead && LOCAL_DIAGNOSTIC_PRAGMAS.contains(&object.as_str()));
         }
         if action_code == a::READ {
             // SQLite may omit the database name on follow-on READ callbacks.

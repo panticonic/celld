@@ -4722,7 +4722,17 @@ pub fn dolt_op(scope: &str, op: &str, args: &serde_json::Value) -> Result<serde_
             return Ok(serde_json::json!({
                 "engineDigest": crate::dolt_exec::engine_digest_hex(),
                 "sqliteVec": cell.sqlite_vec,
+                "manifest": crate::dolt_exec::engine_manifest().to_json(),
             }));
+        }
+        if op == "queryAt" {
+            return (|| -> anyhow::Result<serde_json::Value> {
+                let reader = crate::dolt_cell::open_committed_snapshot(&cell.connection, &args["hash"])?;
+                if cell.sqlite_vec {
+                    register_vec0_extension(&reader)?;
+                }
+                crate::dolt_cell::query_committed_snapshot(&reader, args)
+            })().map_err(|error| format!("{error:#}"));
         }
         if crate::dolt_cell::mutates(op) {
             // Counted before it runs: a failed checkout or merge can still
@@ -4860,7 +4870,7 @@ pub fn dolt_tx_op(
                     record_sqlite_operation_failure(scope, unsafe { connection.handle() }, true, *code, &error.to_string());
                 }
             }
-            if op == "programStep" && connection.is_autocommit() {
+            if matches!(op, "programStep" | "programPlatformStep") && connection.is_autocommit() {
                 crate::dolt_exec::clear_transaction_program(connection);
                 crate::dolt_exec::finish_program_transaction(connection)?;
                 return match result {

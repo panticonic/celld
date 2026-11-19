@@ -1919,6 +1919,22 @@ pushes them.
    `celld-chronolog-program-tx-executor.log`.
    Chronolog still needs its current materializer wired to this adapter
    and to read-only connections pinned to exact commits.
+   The `celld-spec10-v6` runtime adds detached reads by exact commit hash.
+   An independent read-only connection resolves the saved hash and uses the
+   cell's active vector module. Current Chronolog `89d3dc87` binds these
+   readers and the native transaction to its existing signed-schema
+   materializer and exposes them through the optional `/sql-celld` package
+   entry. The clean `chronolog-peer-session-89d3dc87-celld.tgz` installation
+   opened a signed application, accepted two writes, durably logged a
+   refused command and a write interrupted by the step budget, and kept
+   an older reader pinned while the live history advanced. A restart
+   recovered the same device, generation, successful events and rows.
+   The runtime suite passed 48 scenarios, with the known R2 failure
+   and two provider-dependent skips. It peaked at 592 MiB with no
+   memory-limit or OOM events. See
+   `chronolog-current-celld-sql-package.log`,
+   `chronolog-current-celld-sql-probe3.log` and
+   `celld-chronolog-snapshot-full.log`.
    Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
    below.
    - A Chronolog node per workspace node and the `chronolog` host service.

@@ -18,6 +18,7 @@ extern "C" {
     ) -> c_int;
     pub fn sqlite3_doltlite_clear_det_context(db: *mut sqlite3) -> c_int;
     pub fn sqlite3_doltlite_det_context_active(db: *mut sqlite3) -> c_int;
+    pub fn sqlite3_celld_trigger_uses_ignore(sql: *const c_char) -> c_int;
 
     pub fn sqlite3_get_clientdata(db: *mut sqlite3, name: *const c_char) -> *mut c_void;
     pub fn sqlite3_set_clientdata(

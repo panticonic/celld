@@ -12,7 +12,7 @@ use celld_dolt_exec::{
     check_statement, clear_transaction_program, execute, execute_in_transaction,
     finish_program_transaction, pin_transaction_program, prepare_program_transaction,
     prng_seed_from_tx_id, register_functions, run_pinned_transaction_step,
-    transaction_program_id, AuthMode, AuthOptions, ExecContext, ExecError, Limits,
+    transaction_program_id, trigger_uses_ignore, AuthMode, AuthOptions, ExecContext, ExecError, Limits,
     Outcome, Parameter, Profile, Program, SqlValue, Statement,
 };
 use common::*;
@@ -540,6 +540,28 @@ fn an_interrupted_pinned_write_rolls_back_the_whole_transaction() {
     assert_eq!(q1::<i64>(&c, "SELECT count(*) FROM t"), 0);
     accepted(&c, &prog(&["INSERT INTO t VALUES (2)"]), &ctx);
     assert_eq!(q1::<i64>(&c, "SELECT n FROM t"), 2);
+}
+
+#[test]
+fn trigger_inspection_uses_sqlite_tokens() {
+    assert!(trigger_uses_ignore("SELECT raise /* comment */ (\n ignore -- comment\n);").unwrap());
+    assert!(!trigger_uses_ignore("SELECT 'RAISE(IGNORE)', raise(ABORT, 'ignore');").unwrap());
+    assert!(!trigger_uses_ignore("-- RAISE(IGNORE)\nSELECT 1").unwrap());
+    assert!(trigger_uses_ignore("SELECT 1\0").is_err());
+}
+
+#[test]
+fn the_build_catalogs_are_local_reads_only() {
+    let (_dir, c) = fresh_dolt();
+    for sql in [
+        "PRAGMA compile_options",
+        "SELECT * FROM pragma_compile_options",
+        "SELECT sqlite_source_id()",
+        "SELECT sqlite_compileoption_used('ENABLE_FTS5')",
+    ] {
+        assert_eq!(rejected(&c, &prog(&[sql]), &admin_ctx(1)), ("denied".into(), Some(0)), "{sql}");
+        assert!(celld_dolt_exec::local_query(&c, &s(sql), &Limits::default(), 1000).is_ok(), "{sql}");
+    }
 }
 
 #[test]

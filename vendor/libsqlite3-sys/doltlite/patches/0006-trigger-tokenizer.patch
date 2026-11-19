@@ -1,0 +1,29 @@
+Use SQLite's tokenizer to detect RAISE(IGNORE) in generated trigger SQL.
+
+--- a/sqlite3.c
++++ b/sqlite3.c
+@@ -603673,4 +603673,24 @@
+ /* Return the source-id for this library */
+ SQLITE_API const char *sqlite3_sourceid(void){ return SQLITE_SOURCE_ID; }
++
++/* Detect the SQLite tokens RAISE ( IGNORE, ignoring trivia. */
++SQLITE_API int sqlite3_celld_trigger_uses_ignore(const char *zSql){
++  const unsigned char *z = (const unsigned char*)zSql;
++  int state = 0;
++  while( *z ){
++    int tokenType = 0;
++    i64 n = sqlite3GetToken(z, &tokenType);
++    if( n<=0 ) break;
++    z += n;
++    if( tokenType==TK_SPACE || tokenType==TK_COMMENT ) continue;
++    if( state==2 && tokenType==TK_IGNORE ) return 1;
++    if( state==1 && tokenType==TK_LP ){
++      state = 2;
++      continue;
++    }
++    state = tokenType==TK_RAISE ? 1 : 0;
++  }
++  return 0;
++}
+ #endif /* SQLITE_AMALGAMATION */
+ /************************** End of sqlite3.c ******************************/

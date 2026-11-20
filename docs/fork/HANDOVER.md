@@ -2476,8 +2476,16 @@ pushes them.
    scenario verifies the exact two-step progression of shared history and
    the idempotent repeat. It passed alongside the remote-operation restart
    scenario on the E19 Linux candidate. This verifies the runtime part of
-   the gate. The same concurrent conflict through the installed approval
-   service remains open. See `p5-e19-participant-push-repeat.log`.
+   the gate. See `p5-e19-participant-push-repeat.log`.
+   The installed upgrade now ends with the approval-service race in
+   `check_installed_participant_race.py`. Two authenticated participants
+   save distinct revisions from the same shared event and submit both
+   publications while the first is pending review. The driver verifies
+   the exact file digests on the approval card, the stale rejection, one
+   recorded merge decision, and the exact bytes from an independent
+   observer. Both winner orders passed the driver simulation, recorded in
+   `p5-installed-participant-race-driver-check.log`. The actual installed
+   run remains queued behind the benchmark and legacy retention check.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired

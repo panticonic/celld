@@ -13,7 +13,8 @@ The current fresh-install and two-workspace checks are queued in order
 after that run. Celld `61862f2` has a verified Ubuntu x64 build. Its
 Linux ARM64, macOS ARM64 and Windows x64 builds and the matching
 Vibestudio artifact pins are pending. GitHub has no workflow run for that
-commit.
+commit. A local Ubuntu 22.04 Linux ARM64 build is queued after the
+installation checks.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
@@ -3161,6 +3162,13 @@ pushes them.
    The verified runtime commit `61862f2` fast-forwarded
    `panticonic/unified-fork`. GitHub did not create a workflow run
    for that exact push. The three other platform artifacts remain pending.
+   The local ARM64 fallback `vs-build-celld-release-linux-arm64.service`
+   waits for the installed checks to finish and requires a successful
+   toolchain probe. It builds the exact fork commit on Ubuntu 22.04,
+   checks the ELF target and runs the result with the Ubuntu ARM64
+   libraries under QEMU. See
+   `p5-transaction-checkout-linux-arm64-toolchain.log` and
+   `p5-transaction-checkout-linux-arm64-build.log`.
    The local merged host `29eead0fa` and Base `404f345` passed
    the host type checks, the authority catalog check, 24 host tests,
    four portable type configurations, and 223 focused template tests.

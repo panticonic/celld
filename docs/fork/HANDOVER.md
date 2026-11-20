@@ -3022,8 +3022,15 @@ pushes them.
    the generated API checks, and the exact transcript search SQL passed.
    The scheduled install selects this Host and Base pair and includes
    template storage, search, reporting, and release-pair build tests.
-   The remaining implementation includes retiring old planner and store
-   modules that are still linked through shared operations.
+   Base `d1b5d96` separates mutation planning, lineage reads, cursor
+   formatting, record identities, and transcript schema from the old
+   planner and store. The production receivers load 31 workspace source
+   modules without importing the old workspace implementation. The
+   source audit compared all 15 moved operation bodies and found no
+   changes to their logic. The latest queued release selects Host
+   `84c85a79b` and Base `d1b5d96` and includes the native participant
+   and content-preparation suites. Removal of the legacy fixture-only
+   storage implementation remains open.
    Host `363c3b6cf` requires a verified participant for development
    build inputs, adopted repository reads, and template exchanges.
    Both directions of a reviewed exchange bind the participant's exact

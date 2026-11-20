@@ -3078,14 +3078,28 @@ pushes them.
    both origins. A physical fork starts with an empty index, and
    a normal reopen retains correct results. See
    `p5-workspace-commit-index/evidence.log`.
-   The queued installation uses this exact Host and Base pair and
-   the verified Chronolog `f7351ce` package.
+   The queued installation uses Host `a23423db4`, Base `298eae9`,
+   and the verified Chronolog `f7351ce` package. The release also includes
+   the following verified template merge trees against current main.
+
+   | Template | Main | Release candidate |
+   | --- | --- | --- |
+   | Examples | `52be2b0` | `c3455fe` |
+   | Google Workspace | `726cf99` | `2b85797` |
+   | News | `b53effc` | `a8a47b0` |
+   | Personal | `d73c01c` | `b827ad7` |
+   | System | `c96c839` | `976e318` |
+   | System-testing | `42d5c31` | `316f83f` |
+
+   The queue checks the pinned template trees and runs Host and Base type
+   checks before packaging. See
+   `p5-native-root-bootstrap-current-templates.tsv` for the full revisions.
    It now repeats the private saved and draft reopen checks, the signed
    publication race, and the reviewed two-parent merge after a normal
    restart, using the existing model-free fixtures. The earlier
    installed evidence is independent of this pending rerun.
    The running P4 benchmark retains its sealed package and had recorded
-   1,264 successful turns as of November 20, 20:30 UTC, after completing
+   1,286 successful turns as of November 20, 20:32 UTC, after completing
    the 65-turn soak. See `p4-native-clone-source-durable-progress.json`.
    GitHub still shows no Actions run for fork commit `61862f2`.
    Host `363c3b6cf` requires a verified participant for development
@@ -3245,6 +3259,8 @@ pushes them.
      Pi `c6d518177` is a fast-forward from `2f530d750`. The five staged
      archives passed fresh SHA-256, npm SHA-512, package identity, contents,
      and dependency checks. See `pi-native-release-package-owner-verification.log`.
+     Current Pi main `7016ecdc9` adds a Nix model catalog pin and previews
+     as a clean merge with that package source.
      Publish the five Pi packages in dependency order, then remove the local
      overrides and verify an install from the registry.
    - Host `34006ed5d` removes the retired SQLite `WorkspaceDO`, the

@@ -2251,8 +2251,17 @@ pushes them.
    the public mutation entry that waits for semantic readiness. Host
    `80f977d4c` takes the same publication lease directly during bootstrap.
    All 20 focused publication and startup tests passed, including seed
-   installation while readiness is pending. The resumed installed test
-   is owned by `vs-verify-installed-after-seed-readiness.service`.
+   installation while readiness is pending. The destination then
+   completed that publication on the installed app. Its launch record
+   binds the exact seed approval, and the staged pack matches its digest.
+   Creation review initially failed because a declared extension was
+   read from the destination's bootstrap template. Host `9c2fdab81` and
+   `fb3166562` now give review the imported state's exact source paths
+   from first graph discovery and exclude the provisional host-build
+   inventory from imported unit admission. The 20 focused host checks
+   include reopening the seed and reading the exact manifest from the
+   discovered path. The installed restart with these changes is owned
+   by `vs-verify-imported-graph-reopen.service`.
    GitHub accepted the celld fork update at `23c4855`. The artifact
    workflow dispatch was rejected because Actions is disabled on
    `panticonic/celld`. Four-platform artifacts for E19 and the matching

@@ -3103,12 +3103,12 @@ pushes them.
    a normal reopen retains correct results. See
    `p5-workspace-commit-index/evidence.log`.
    The queued installation uses Host `81726bc42` merged from main
-   `5ca222112`, Base `9829c21`, and the verified Chronolog `f7351ce`
+   `5ca222112`, Base `7d4535f`, and the verified Chronolog `f7351ce`
    package. It pins the following template revisions.
 
    | Template | Main | Release candidate |
    | --- | --- | --- |
-   | Base | `36906d0` | `9829c21` |
+   | Base | `36906d0` | `7d4535f` |
    | Examples | `52be2b0` | `c3455fe` |
    | Google Workspace | `726cf99` | `2b85797` |
    | News | `b53effc` | `a8a47b0` |
@@ -3151,7 +3151,14 @@ pushes them.
    history and trajectory evidence tests on the same release revisions.
    See `p5-mounted-type-module-compiler.log` and
    `p5-current-release-focused-pair.log`.
-   The complete Base check is queued on those exact commits. See
+   The complete Base type check passed for workspace, integration, and
+   both mobile configurations. Two older fixtures still used a fake
+   invocation digest and a removed visibility table. Base `7d4535f`
+   updates those fixtures. All 148 semantic control, recall, and protocol
+   tests then passed. The release queue now uses that revision. See
+   `p5-native-root-bootstrap-release-prepare-9829c21.log` and
+   `p5-native-fixture-retry.log`. The earlier type failures and mount
+   probe remain available in
    `p5-native-root-bootstrap-release-prepare-0e5f782.log` and
    `p5-natlang-types-probe.log`.
    The queue repeats the contract checks and runs Host and Base type checks

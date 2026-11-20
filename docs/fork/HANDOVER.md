@@ -7,14 +7,15 @@ The detailed per-stream handoffs it points to are authoritative for their own
 details; this file is authoritative for the overall order and the rules.
 
 **Current release status, 2026-11-20.** Section 5 records the latest
-release candidates and gates. The 65-turn soak passed, and the active
-10,000-turn benchmark had recorded 1,312 successful turns at 20:34 UTC.
-The current fresh-install and two-workspace checks are queued in order
-after that run. Celld `61862f2` has a verified Ubuntu x64 build. Its
+release candidates and gates. The 65-turn soak passed. The 10,000-turn
+benchmark had recorded 1,360 successful turns when it was last sampled.
+The machine-memory guard later stopped that instance. The fresh-install
+and two-workspace checks are queued and waiting for memory headroom.
+Celld `61862f2` has a verified Ubuntu x64 build. Its
 Linux ARM64, macOS ARM64 and Windows x64 builds and the matching
 Vibestudio artifact pins are pending. GitHub has no workflow run for that
-commit. A local Ubuntu 22.04 Linux ARM64 build is queued after the
-installation checks.
+commit. The Ubuntu 22.04 Linux ARM64 toolchain probe passed and a local
+build is queued after the installation checks.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
@@ -3115,9 +3116,12 @@ pushes them.
    workspace's protected main. The check encodes its SQL with the
    verified Chronolog package and records its result in
    `p6-native-root-shared-history-evidence.log`.
-   The running P4 benchmark retains its sealed package and had recorded
-   1,312 successful turns as of November 20, 20:34 UTC, after completing
-   the 65-turn soak. See `p4-native-clone-source-durable-progress.json`.
+   The P4 benchmark used its sealed package and had recorded 1,360
+   successful turns as of November 20, 20:38 UTC, after completing
+   the 65-turn soak. At 20:40 UTC the reserve guard stopped the owned
+   instance. The benchmark has no completed fork timing, and its turn
+   loop starts at one on a fresh launch. See the journal for
+   `vs-verify-p4-native-clone-source.service` and the run's memory samples.
    GitHub still shows no Actions run for fork commit `61862f2`.
    Host `363c3b6cf` requires a verified participant for development
    build inputs, adopted repository reads, and template exchanges.

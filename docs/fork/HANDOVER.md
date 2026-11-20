@@ -2245,7 +2245,18 @@ pushes them.
    reproduces the failure in `dolt-remotes-large-pack`. Fork `4cb52cb`
    passed all 14 focused native Rust tests, the large-pack end-to-end
    scenario, and the existing remotes durability scenario. The installed
-   rerun uses the rebuilt Linux candidate.
+   rerun exported a 3,712,207-byte pack and 6,278 files from its source
+   workspace with the rebuilt Linux candidate. First open of the
+   destination then exposed a circular wait: seed installation called
+   the public mutation entry that waits for semantic readiness. Host
+   `80f977d4c` takes the same publication lease directly during bootstrap.
+   All 20 focused publication and startup tests passed, including seed
+   installation while readiness is pending. The resumed installed test
+   is owned by `vs-verify-installed-after-seed-readiness.service`.
+   GitHub accepted the celld fork update at `23c4855`. The artifact
+   workflow dispatch was rejected because Actions is disabled on
+   `panticonic/celld`. Four-platform artifacts for E19 and the matching
+   host pin remain pending.
    The local merged host `29eead0fa` and Base `404f345` passed
    the host type checks, the authority catalog check, 24 host tests,
    four portable type configurations, and 223 focused template tests.

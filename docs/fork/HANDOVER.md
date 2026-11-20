@@ -2270,10 +2270,27 @@ pushes them.
    its celld discovery and relay are disabled. The workspace administrator
    binds sharing locally, and Bob remains a publisher in the group.
    The protected project-file publication reached authority checking
-   before the three-minute eval deadline. Its retry is running with a
-   longer eval deadline and the original saved revision under
-   `vs-verify-seed-pair-extended-publication.service`. The peer publication
-   and exact retry are still pending.
+   before the three-minute eval deadline. The longer run passed review
+   and published the saved project-file revision on the destination.
+   Host `f3b5cc909` distinguished an HTTP 403 on the native staging-grant
+   request and passed 12 focused checks. Host `351560f93` routes the signed
+   Chronolog directory request through the loopback history ingress, with
+   separate native token and proof verification at the gateway. All 96
+   focused egress and ingress tests passed. The installed retry advanced
+   the original workspace to the exact signed revision and read back the
+   exact project-file bytes. Retrying returned the same receipt. The test
+   shut down normally after peaking at 7.29 GiB with zero hard-limit hits
+   or OOM events. See `p5-p6-installed-shared-history-evidence.log`.
+   The separate epoch-1 test host `aa1993329` compiled with app version
+   `1.0.0` and was retained with the production snapshot script. The
+   installed epoch-0 host rejected an incompatible minimum app version,
+   then reached the publication review once the candidate specified
+   `1.0.0`. The review still tried to interpret the new manifest to
+   compute client trust. Host `ea781f163` requires fresh critical
+   confirmation of the exact source diff and lets the compatible target
+   host load the new manifest and trust configuration. All 78 focused
+   publication checks passed. The live retry of that saved candidate is
+   queued after the peer run as `vs-verify-installed-epoch-critical-review.service`.
    GitHub accepted the celld fork update at `23c4855`. The artifact
    workflow dispatch was rejected because Actions is disabled on
    `panticonic/celld`. Four-platform artifacts for E19 and the matching

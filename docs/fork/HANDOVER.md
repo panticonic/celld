@@ -2475,8 +2475,7 @@ pushes them.
    test verifies rollback before retirement. A separate restart test on
    the storage fixture loses the fork reply and advances shared history.
    Three repeat requests still recover the original fork and one grant.
-   All 14 focused Base tests passed. The installed check is queued with
-   Host `4b2e6731d` and Base `26055fe`. See
+   All 14 focused Base tests passed. See
    `p5-participant-reservation-before.log` and
    `p5-participant-reservation-after.log`.
    A separate E19 Linux process-loss run bundled exact Host `4b2e6731d`
@@ -2488,6 +2487,17 @@ pushes them.
    grant. The fixture uses a local adapter around the native fork call.
    See `p5-participant-reservation-native/evidence.log` in the private
    state directory. The build and process driver are in the same directory.
+   Base `9323953` reclaims all grants for an exact participant transition
+   when recovery acknowledges its applied publication. A regression test
+   first reproduced two grants surviving acknowledgement. All 15 focused
+   Base tests passed after the fix. The E19 Linux fixture also killed the
+   runtime after the native push advanced main and before the push reply.
+   On reopen it recovered the approved event from the actual main hash
+   with no second push, reclaimed both temporary grants, and preserved the
+   participant's regular grant. The fixture uses a local carrier. See
+   `p5-publication-grant-native/evidence.log` and
+   `p5-publication-grant-after.log`. The installed upgrade is queued
+   against Host `4b2e6731d` and Base `9323953`.
    The native E19 concurrency scenario publishes from two independent
    work cells at once. Before approval, each read grant refuses push.
    Exactly one concurrent push succeeds. The other cell resolves one

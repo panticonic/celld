@@ -2545,6 +2545,15 @@ pushes them.
    normal restart. All 89 focused Host tests passed. The queued installed
    run uses Host `b78252080` and Base `04ccc83` and checks that startup
    selected the native root. See `p5-native-fresh-root-host-final.log`.
+   The representative fresh-history size check used full file placement
+   metadata from 135 repositories and 5,135 files. The E19 Linux fixture
+   staged the first native commit in 1.08 seconds and verified every
+   placement. It exported 3,773,680 and 3,877,908 bytes for two working
+   copies. Their allocation requests completed in 724 and 654 ms, and
+   saving different contents in each copy left shared history unchanged.
+   These timings include the local allocation request and use a local
+   adapter for the physical fork. See
+   `p5-native-fresh-size/evidence.log`.
    The native E19 concurrency scenario publishes from two independent
    work cells at once. Before approval, each read grant refuses push.
    Exactly one concurrent push succeeds. The other cell resolves one

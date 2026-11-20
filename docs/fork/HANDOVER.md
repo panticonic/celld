@@ -2253,6 +2253,11 @@ pushes them.
    nodes, read the exact owner rows, and reopened both groups normally.
    The installed Vibestudio pair uses the SQL programs encoded by this
    same package. See `chronolog-88716db-workspace-native.log`.
+   The two-node replay fixture also passed using that exact archive and
+   runtime. Both nodes discarded the excluded SQL tail after the signed
+   control change, agreed on the retained rows, and preserved distinct
+   row owners after a normal restart. The older read view stayed pinned.
+   See `chronolog-88716db-replay-native.log`.
    Host `f64f4d2b2` stages the Chronolog package in application release
    builds. Once the owner publishes the Chronolog release run, set
    `CHRONOLOG_RELEASE_RUN`, `CHRONOLOG_RELEASE_SOURCE`, and
@@ -2789,7 +2794,13 @@ pushes them.
    Alice resolved the conflicting file and published the two-parent
    merge through review. The independent observer read the resolution
    and both clean changes byte for byte at the resulting protected
-   revision. The settings check is still running. See
+   revision. The separate settings publication reached the production
+   build gate, which failed typechecking the system-test runner.
+   Its materialized dependencies are missing relative imports into
+   sibling skill and extension directories, including imports of type
+   declarations. The runner builds from the complete checkout.
+   See `p5-installed-native-merge-origin-workspace-config.log`.
+   The participant merge remains independently verified. See
    `p5-installed-native-merge-origin-resume-evidence.log` and the
    `p5-installed-native-merge-origin-race-*` logs.
    After that test, `vs-verify-p5-p6-installed-pair-current-chronolog.service`

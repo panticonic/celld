@@ -2354,6 +2354,19 @@ pushes them.
    exercises save and publication from an exact fixture pin. The template
    extension's remote source workflow was tested separately in its focused
    suite.
+   Host `676d51652` and Base `79ec699` seal the old history freeze only
+   after validating the installed receipt and attaching participant
+   history. A sealed reopen verifies the exact receipt and freeze
+   generation without rebuilding the old replay plan. A replaced freeze
+   cannot be sealed with an older receipt, and the sealed source cannot
+   resume writes. All 26 focused host and 69 Base tests passed. The
+   installed test saves a private copy on the older runtime, migrates it,
+   and reopens it again using the seal. It is queued under
+   `vs-verify-installed-history-seal.service`.
+   The model-free 10,000-turn benchmark is queued serially under
+   `vs-verify-main-fork-benchmark3.service`. It starts after the installed
+   seal check passes and requires 18 GiB available on the host before it
+   admits its 12 GiB fixture. It uses one test lane and zero swap.
    GitHub accepted the celld fork update at `23c4855`. The artifact
    workflow dispatch was rejected because Actions is disabled on
    `panticonic/celld`. Four-platform artifacts for E19 and the matching
@@ -2400,8 +2413,8 @@ pushes them.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
      Current local merge candidates are Host `integration/gad-participant-main`
-     (`98ef0788f`) and Base `integration/gad-participant-base-main`
-     (`028d4eb`). Both include the signed-receipt retries and initial
+     (`676d51652`) and Base `integration/gad-participant-base-main`
+     (`79ec699`). Both include the signed-receipt retries and initial
      shared history workflow above. The Host
      merge retains one console-history filter and
      pagination implementation and the read-only legacy workspace importer.

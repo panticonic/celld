@@ -3048,6 +3048,17 @@ pushes them.
    these commits with System-testing `fc948a9` and Google Workspace
    `769f815`, whose fixtures now use envelope coordinates. The Base
    and companion suites and installation run are still pending.
+   Base `60941af` caches retained placement roots in local Dolt
+   tables, using commit diffs for direct branch advances and rebuilding
+   after a branch leaves the retained set or a cache row is missing.
+   The index serves garbage collection. File authorization still checks
+   the admitted history directly. The exact Linux runtime verified that
+   the physical fork starts with empty local index tables, preserves
+   prior live hashes, retains private changes only in that copy, drops
+   roots unique to a retired branch, and restores a missing cached
+   root. See `p5-content-root-index/evidence.log`. The queued installation
+   selects `60941af`. Stable state-to-commit indexing remains open.
+   GitHub still shows no Actions run for fork commit `61862f2`.
    Host `363c3b6cf` requires a verified participant for development
    build inputs, adopted repository reads, and template exchanges.
    Both directions of a reviewed exchange bind the participant's exact

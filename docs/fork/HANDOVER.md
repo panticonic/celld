@@ -486,6 +486,18 @@ completed-request p95 was 42.61–43.29 ms and 50.14–50.77 ms respectively.
 A separate syscall trace confirmed successful disk syncs during both cases.
 The trace and the uninstrumented request samples are in
 `p5-native-checkout-profile/` in the private state directory.
+The E19 Linux candidate measured 29.10 ms native p95 while quiet and
+40.29 ms after a local write on the same 10,000-row fixture with the
+long fork benchmark running. The earlier optimized `a6dce5d` Linux
+artifact measured 31.61 ms and 41.14 ms under the concurrent load.
+Both exceeded the 20 ms target. A separate E19 trace recorded 114 and
+232 successful sync calls. The live reference comparison means this
+run does not isolate an E19 regression. The queued
+`vs-verify-e19-release-checkout.service` verifies the exact Ubuntu 22.04
+artifact's commit and digest, then runs the latency check and sync trace
+after the benchmark and installed checks finish. See
+`e19-current.json`, `e19-sync.json` and
+`loaded-reference-a6dce5d.json` in the same directory.
 
 An independent replay of the same template-sized workspace exported
 4,067,212 bytes and forked in 219 ms. It verified one committed event and

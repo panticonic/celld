@@ -2913,9 +2913,13 @@ pushes them.
    binds cloned runtimes to the exact participant revision already
    retained by the admitted fork. It composes that revision once and
    uses its content and semantic identity for each cloned runtime.
-   All 213 focused tests passed. The next short case
-   `st_30d2bc058fa6476da4315e4e771901a4` is running on the sealed release
-   with `56af4331e`. The 10,000-turn run follows a passing short case.
+   All 213 focused tests passed. The short case
+   `st_30d2bc058fa6476da4315e4e771901a4` passed on the sealed release
+   with `56af4331e` in 313 seconds. It verified 65 durable model-free turns,
+   compaction on the normal schedule, and a normal conversation fork.
+   The 10,000-turn run `st_78043a02fcc448f990cce69d3f0a0e4d` started on
+   that same release. See `p4-native-clone-source-soak-result.log` and
+   `p4-native-clone-source-benchmark-start.log`.
    See `p4-native-published-channel-results-inspect.json`,
    `p4-clone-native-source-check.log`,
    `p4-channel-stored-result-check2.log` and

@@ -2378,6 +2378,17 @@ pushes them.
    queued in `vs-verify-staged-legacy-retention.service` after the benchmark
    releases its workspace and 15 GiB of host memory is available. See
    `p5-retired-legacy-retention-disk.log`.
+   Staged Host `6342a9acd` and Base `1927e04` preserve the original
+   template initialization receipt in canonical participant history. The
+   native store binds the receipt to the frozen replay, checks that the
+   initialization event belongs to that history, and refuses replacement.
+   On restart the host verifies the exact original template pin using the
+   canonical receipt. It reads the old source once to copy the receipt, or
+   when paired with an older Base. All 75 focused Host tests and the
+   projected Base receipt test passed. The installed check is queued in
+   `vs-verify-staged-root-initialization.service` after the retention
+   check. Evidence is in `p5-native-root-initialization-host-final.log` and
+   `p5-native-root-initialization-base-test3.log`.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired

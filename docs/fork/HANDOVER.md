@@ -2719,6 +2719,14 @@ pushes them.
    checks in memory. Its paired disk run is queued. See
    `e19-checkout-main-pointer-probe/paired-disk-results.log` and
    `e19-checkout-main-pointer-probe/paired-bidirectional-tmpfs.log`.
+   The bidirectional disk run reduced p95 toward the alternate branch
+   from 14.14–14.89 ms to 7.28–7.31 ms and kept the return to main at
+   7.21–7.27 ms. The probe verified normal rollback and confirmed that a
+   successful switch followed by rollback must also restore Dolt's
+   connection-local branch selection. Celld `61862f2` implements that
+   transaction and restores the selected branch on error. All 20
+   non-ignored Dolt cell tests passed. The Ubuntu 22.04 artifact is
+   building, with the real runtime profile queued behind it.
    The first full installed retry passed the Host compilation check and
    stopped at the missing `node-pty` host dependency. The repository's
    repair command rebuilt it. The current Host passed 38 artifact
@@ -2815,7 +2823,11 @@ pushes them.
    declare the missing compiler inputs in the package graph. The exact
    installed-source closure check selected the owners of all 37
    cross-project type imports. The isolated compile and a fresh settings
-   publication remain to verify.
+   publication remained to verify. The fresh installed retry completed
+   all 28 checks and reached a different set of build failures, including
+   mobile compilation, a missing runtime type export, and authority
+   declarations. The protected ref stayed at its earlier event. See
+   `p5-native-settings-type-dependencies-workspace-config.log`.
    The participant merge remains independently verified. See
    `p5-installed-native-merge-origin-resume-evidence.log` and the
    `p5-installed-native-merge-origin-race-*` logs.
@@ -2850,6 +2862,14 @@ pushes them.
    its invocation, result marker, and turn number. The focused checks
    passed all 17 tests. See `p4-native-durable-receipts-soak-detail.json`
    and `p5-p4-publication-types-and-native-receipts-check.log`.
+   The installed retry found the first turn and rejected the return value
+   it received. The retained channel event contains the result's digest.
+   The verified blob has the expected marker, turn number, and storage
+   sample. The upload is private to the writer's task grant, while
+   replay hydrates the value under the reader's authority. The channel
+   needs durable ownership of the values its own committed events carry.
+   See `p4-native-durable-channel-receipts-inspect.json` and
+   `p4-native-durable-channel-receipts-soak-detail.json`.
    The next installed fixture uses the same updated template candidate
    for both settings publication and the benchmark. The settings check
    starts with a private save and draft, publishes through review, and
@@ -2864,10 +2884,15 @@ pushes them.
    filesystem and workspace orchestration tests passed. Base
    `f03b389` removes conversation recall's use of the old context
    graph. The caller's own channel and the host-attested native
-   causes now determine which messages can be recalled. Its focused
-   privacy and recall tests are queued. Both commits are in separate
+   causes now determine which messages can be recalled. All 11 focused
+   privacy and recall tests passed. Both commits are in separate
    local candidates while the sealed settings and benchmark fixture
    runs on its original revisions.
+   Host `83c1d2694` also removes the old runtime fork adapter. Implicit
+   panels, context clones, subagents, and development context forks use
+   the verified caller's participant revision. A retained runtime fork
+   keeps the original selected revision across repeated reservations.
+   All 213 focused runtime and workspace orchestration tests passed.
    The completed checkout measurements above leave the 20 ms gate open.
    Four-platform verification and the matching Host pin remain pending.
    The local merged host `29eead0fa` and Base `404f345` passed

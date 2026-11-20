@@ -2651,6 +2651,13 @@ pushes them.
    See `p5-e19-linux-x64-build.log` and the service journal.
    The hosted workflow again returned HTTP 422 for this exact remote
    commit. See `p5-e19-hosted-artifacts-current.log`.
+   The first checkout profile on that executable recorded p95 of
+   13.44 ms when quiet and 20.21 ms after a local write, with 10,000
+   retained local rows. The separate syscall trace recorded successful
+   disk syncs in both phases. The write phase exceeded the 20 ms gate by
+   0.21 ms. An isolated repeat is queued after the installed fixtures
+   and before the benchmark. The first result remains in
+   `p5-native-checkout-profile/jammy-checkout-gate.json`.
    The first full installed retry passed the Host compilation check and
    stopped at the missing `node-pty` host dependency. The repository's
    repair command rebuilt it. The current Host passed 38 artifact
@@ -2659,10 +2666,9 @@ pushes them.
    `p5-installer-pty-failure.log`, `p5-current-host-artifact-contracts.log`,
    and `p5-current-host-workflows.log`.
    Host `13062f4bf` updates the Dolt and provenance plans to use the normal
-   participant release gate. The checkout profile and installed participant
-   test run once the Ubuntu 22.04 artifact is available. The installed test
-   uses that artifact with Host `13062f4bf`, Base `23a33cf`, and
-   System-testing `d19b0b0`.
+   participant release gate. The installed participant test now prepares
+   Host `13062f4bf`, Base `23a33cf`, and System-testing `d19b0b0` to run
+   against the verified Ubuntu 22.04 binary.
    After that test, `vs-verify-p5-p6-current-installed-pair.service` uses
    the same prepared release and current Chronolog package for a fresh
    two-workspace installation. It verifies separate signed identities,

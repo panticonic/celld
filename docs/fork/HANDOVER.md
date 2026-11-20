@@ -2314,9 +2314,11 @@ pushes them.
    release at the exact integration commit. The retained app reached
    workspace reconciliation. The managed test launcher then failed on
    its local model discovery probe before running the history assertion.
-   The ordinary workspace server reopen is queued under
-   `vs-verify-epoch-normal-workspace.service`, with the same saved approval,
-   retained app and release inputs.
+   The ordinary workspace server reopened the same previously approved
+   workspace on epoch 1. The original signed session read the exact
+   published event and manifest bytes, the retained package's server
+   entry ran, and shutdown completed. See
+   `p5-installed-epoch-normal-ready-evidence.log`.
    All four host type configurations passed on `16088a5da`. The first-time
    migration fixture used ordinary startup on `b5742d1` to save a private
    copy, then restarted the same workspace on E19. The owner reopened the
@@ -2327,10 +2329,12 @@ pushes them.
    snapshot and verified 5,135 files across 135 repositories. The native
    export was 4,278,036 bytes and the participant fork took 386 ms in this
    run. See `p5-e19-actual-replay-materialization.log`.
-   The installed replay parity check is queued under
-   `vs-verify-installed-legacy-parity.service`. It saves two private events
-   through the legacy service and compares the exact file identity, bytes
-   and blame for both events and the original published event after replay.
+   The installed replay parity check passed for the original published
+   event and two private events saved through the legacy service. Exact
+   file identity, bytes and full-file blame matched after replay. The
+   owner retained the later private working revision, the second copy
+   could not read it, and shared history stayed unchanged. Both starts
+   stopped normally. See `p5-installed-legacy-parity-evidence.log`.
    Reviewed template updates still need a native publication path for
    their installation receipt. The template extension sends the receipt
    with `vcs.push`, which the participant publisher currently refuses.

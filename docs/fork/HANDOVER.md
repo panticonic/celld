@@ -3028,9 +3028,17 @@ pushes them.
    modules without importing the old workspace implementation. The
    source audit compared all 15 moved operation bodies and found no
    changes to their logic. The latest queued release selects Host
-   `84c85a79b` and Base `d1b5d96` and includes the native participant
-   and content-preparation suites. Removal of the legacy fixture-only
-   storage implementation remains open.
+   `84c85a79b` and Base `c5e9070`. The Base commit deletes the
+   retired planner, storage, and radix implementation, along with tests
+   specific to those persistence tables. It retains the shared file and
+   repository placement rules and moves transcript cases onto the
+   active schema. A host-side smoke test ran the compiled Base edit
+   planner and inspected and paged exact transcript rows in SQLite,
+   including the check for a cross-channel link
+   (`p5-retired-planner-source-smoke.log`). The queued native installation
+   verifies that a writer can query and follow their private edit while
+   a second participant who knows its exact ID cannot. GAD's private
+   log hash chain is separate and remains to be removed.
    Host `363c3b6cf` requires a verified participant for development
    build inputs, adopted repository reads, and template exchanges.
    Both directions of a reviewed exchange bind the participant's exact

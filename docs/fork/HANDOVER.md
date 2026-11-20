@@ -2717,7 +2717,21 @@ pushes them.
    It exercises saves, review, conflict resolution, and merged bytes.
    The settings check recognizes the review for the exact
    `meta/vibestudio.yml` change with an empty additional-grant selection.
-   After that test, `vs-verify-p5-p6-current-installed-pair-after-review.service` uses
+   The installed race published one of two independent saves, refused
+   the stale publication, then published the resolved two-parent merge.
+   The independent observer failed to read the file adopted from the
+   other parent. On the retained observer database, SQLite chose an
+   unconstrained `dolt_commit_ancestors` scan rooted at local refs.
+   Base `7c6d40c` binds the exact fetched revision before scanning its
+   parents. The old query reproduced the missing merge on that database.
+   The fixed query selected the parent that supplied the file and its
+   exact content origin on all three retained copies. See
+   `p5-installed-native-merge-origin-observer-failure.log` and
+   `p5-installed-merge-origin/lineage-fixed.log`.
+   `vs-verify-native-install-merge-origin.service` builds the fixed Base
+   with Host `13062f4bf` and System-testing `911fdd5` and runs the same
+   signed workflow on a fresh installation.
+   After that test, `vs-verify-p5-p6-installed-pair-merge-origin.service` uses
    the same prepared release and current Chronolog package for a fresh
    two-workspace installation. It verifies separate signed identities,
    shared group writes, the protected revision and exact published file

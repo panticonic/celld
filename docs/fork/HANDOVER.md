@@ -2447,9 +2447,19 @@ pushes them.
    progress marker commit together. After interruption the host resumes
    that revision, then indexes the additions through the latest protected
    head. All 88 focused Host and 44 projected Base tests passed, including
-   interruption and atomic rollback. The installed check uses this paired
-   head. Native conversation visibility for recall remains open. See
+   interruption and atomic rollback. See
    `p5-native-commit-backfill-host.log` and `p5-native-commit-backfill-base.log`.
+   Host `b5af4d250` and Base `f917e3d` scope conversation recall to the
+   verified caller's own channel and exact invocation evidence in their
+   working revision and the protected shared revision. The existing RPC
+   carries the host's authenticated scope. Message matching uses exact
+   log, head, and message coordinates before ranking. The native test
+   succeeds with the legacy command visibility table removed. This pair
+   passed 63 Host orchestration tests, 177 Host RPC tests, and 14 projected
+   Base tests. The installed build is queued against this pair. It still
+   needs a real agent recall check across two independent participant copies.
+   See `p5-native-recall-host.log`, `p5-native-recall-rpc.log`, and
+   `p5-native-recall-base.log`.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired
@@ -2457,10 +2467,11 @@ pushes them.
    and zero swap. It checked for 18 GiB available before launch. The
    supervisor logs and sampler use the `p4-main-fork-benchmark3-` prefix
    in the private state directory.
-   At 13:25 CET, the benchmark's durable mission records contained 420
+   At 14:13 CET, the benchmark's durable mission records contained 1,012
    successful model-free turns and one executing turn. The runner remains
-   active with a 24-hour case budget. Fork timing requires the completed
-   validator result. See `p4-main-fork-benchmark3-durable-progress.json`.
+   active with a 24-hour case budget. Its memory peaked at 5.91 GiB with
+   zero recorded memory kills. Fork timing requires the completed validator
+   result. See `p4-main-fork-benchmark3-durable-progress.json`.
    GitHub accepted the celld fork update at `23c4855`. The artifact
    workflow dispatch still returns HTTP 422, `Actions has been disabled
    for this repository`, even though the repository permissions report

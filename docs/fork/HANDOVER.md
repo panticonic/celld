@@ -2343,11 +2343,17 @@ pushes them.
    refused an omitted or changed installation, published the exact
    metadata-only event, read back the receipt and replayed the same
    publication. All 46 focused host and seven template workflow tests
-   passed, as did the four host type configurations. See
-   `p5-native-template-publication-evidence.log`. The paired release and
-   ordinary installed check are running under
-   `vs-prepare-template-publication-release.service` and
-   `vs-verify-installed-template-publication.service`.
+   passed, as did the four host and four Base type configurations. Base
+   `028d4eb` handles the message payload variants found by the combined type
+   check. The paired release built and the installed Linux check saved and
+   published through the authenticated shell. It read the new receipt at
+   the exact event, confirmed the original receipt was unchanged, and
+   returned the same result on retry. Both fixtures stopped normally. See
+   `p5-native-template-publication-evidence.log` and
+   `p5-installed-template-publication-evidence.log`. The installed check
+   exercises save and publication from an exact fixture pin. The template
+   extension's remote source workflow was tested separately in its focused
+   suite.
    GitHub accepted the celld fork update at `23c4855`. The artifact
    workflow dispatch was rejected because Actions is disabled on
    `panticonic/celld`. Four-platform artifacts for E19 and the matching
@@ -2394,8 +2400,8 @@ pushes them.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
      Current local merge candidates are Host `integration/gad-participant-main`
-     (`c763ed04d`) and Base `integration/gad-participant-base-main`
-     (`05ecc1b`). Both include the signed-receipt retries and initial
+     (`98ef0788f`) and Base `integration/gad-participant-base-main`
+     (`028d4eb`). Both include the signed-receipt retries and initial
      shared history workflow above. The Host
      merge retains one console-history filter and
      pagination implementation and the read-only legacy workspace importer.

@@ -2800,6 +2800,11 @@ pushes them.
    sibling skill and extension directories, including imports of type
    declarations. The runner builds from the complete checkout.
    See `p5-installed-native-merge-origin-workspace-config.log`.
+   Base `fbf33e6` and the System-testing branch ending at `7b93b97`
+   declare the missing compiler inputs in the package graph. The exact
+   installed-source closure check selected the owners of all 37
+   cross-project type imports. The isolated compile and a fresh settings
+   publication remain to verify.
    The participant merge remains independently verified. See
    `p5-installed-native-merge-origin-resume-evidence.log` and the
    `p5-installed-native-merge-origin-race-*` logs.
@@ -2809,11 +2814,23 @@ pushes them.
    It verifies separate signed identities,
    shared group writes, the protected revision and exact published file
    bytes in both workspaces. Results go to
-   `p5-p6-current-installed-pair-evidence.log`. The pair and durable
-   benchmark supervisors are queued in that order. Each waits for the
-   preceding fixture to retire and for 22 GiB of available memory and
-   low memory pressure. The benchmark uses the prepared release receipt
-   for those exact Host, template, and Chronolog package revisions.
+   `p5-p6-current-installed-pair-evidence.log`. The first run installed
+   the signed seed on the second workspace and stopped when its command
+   line review could not parse the approval JSON. The resume reopened the
+   same archived seed, verified its persisted receipt and let the managed
+   doctor complete the creation review. The signed group checks continued
+   from that workspace. The test launcher also accepts the review body on
+   standard input.
+   The durable benchmark used the exact receipt for the same Host,
+   template, and updated Chronolog package revisions. Its short case
+   launched the first model-free agent turn, found its durable
+   completion, and failed the separate trajectory lookup. The retained
+   run record contains the matching invocation and the result blob
+   reference directly in the durable channel page. System-testing
+   `7b93b97` reads that result from the exact channel receipt and checks
+   its invocation, result marker, and turn number. The focused checks
+   are queued before another installed run. See
+   `p4-native-durable-receipts-soak-detail.json`.
    The completed checkout measurements above leave the 20 ms gate open.
    Four-platform verification and the matching Host pin remain pending.
    The local merged host `29eead0fa` and Base `404f345` passed

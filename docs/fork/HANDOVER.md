@@ -2565,6 +2565,11 @@ pushes them.
    tests passed. See
    `p5-native-context-binding-host.log` and
    `p5-native-context-binding-base-final.log`.
+   Host `2e3e713c3` and Base `23a33cf` remove the uncalled history replay
+   driver, worker methods, and staging code. Runtime context listing reads
+   native registrations and excludes retired contexts. All 121 focused Base
+   tests passed, including a context-list check after reopening. See
+   `p5-native-remove-history-replay-base.log`.
    The representative fresh-history size check used full file placement
    metadata from 135 repositories and 5,135 files. The E19 Linux fixture
    staged the first native commit in 1.08 seconds and verified every
@@ -2658,7 +2663,7 @@ pushes them.
      to remove.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
-     The native installed check uses Host `34006ed5d`, Base `b18a030`,
+     The native installed check uses Host `2e3e713c3`, Base `23a33cf`,
      and System-testing `571618b`. Preparation type-checks all three before
      building the workspace release.
      Their integrated baselines are Host `integration/gad-participant-main`

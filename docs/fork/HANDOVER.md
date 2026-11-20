@@ -3191,6 +3191,17 @@ pushes them.
    are under `cutover-release-verification/`. It runs the celld E2E
    suite, Testkit, the managed system tests, and the Vibestudio smoke,
    transport, and browser integration suites without overlapping them.
+   The baseline sweep passed 51 celld E2E scenarios and 24 Testkit
+   tests. Celld also recorded the known R2 ETag failure and skipped two
+   scenarios that need separate live model providers. Four model-free
+   managed cases passed. Four model-driven orchestration cases and the
+   first model-driven sample attempts exposed the same startup defect
+   before model execution, so the sample was cancelled. Host
+   `182eda130` keys authenticated task copies by the admitted owner
+   context. All 43 focused ownership and host orchestration tests passed.
+   `vs-verify-cutover-owner-context-tests.service` is rebuilding the
+   corrected candidate for the managed and host E2E reruns. Evidence
+   is under `cutover-release-verification/owner-context-rerun/`.
    It now repeats the private saved and draft reopen checks, the signed
    publication race, and the reviewed two-parent merge after a normal
    restart, using the existing model-free fixtures. The earlier

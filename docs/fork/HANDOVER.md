@@ -3102,13 +3102,13 @@ pushes them.
    both origins. A physical fork starts with an empty index, and
    a normal reopen retains correct results. See
    `p5-workspace-commit-index/evidence.log`.
-   The queued installation uses Host `fd66aa59d` merged from main
-   `5ca222112`, Base `0e5f782`, and the verified Chronolog `f7351ce`
+   The queued installation uses Host `81726bc42` merged from main
+   `5ca222112`, Base `9829c21`, and the verified Chronolog `f7351ce`
    package. It pins the following template revisions.
 
    | Template | Main | Release candidate |
    | --- | --- | --- |
-   | Base | `36906d0` | `0e5f782` |
+   | Base | `36906d0` | `9829c21` |
    | Examples | `52be2b0` | `c3455fe` |
    | Google Workspace | `726cf99` | `2b85797` |
    | News | `b53effc` | `a8a47b0` |
@@ -3140,6 +3140,15 @@ pushes them.
    The updated preparation waits for 20 GiB available, caps the build
    at 9 GiB and its registry at 512 MiB, and retains the 10 GiB
    machine-memory stop guard.
+   The next preparation passed the Host checks and reached the Base
+   type check. Base `9829c21` fixes a shadowed function in native text
+   revert and updates the tests for the current envelope coordinates.
+   Host `81726bc42` exposes installed Natlang module mounts in the
+   temporary TypeScript projection. A focused probe resolved all three
+   previously missing type modules and skipped uninstalled companions.
+   The complete Base check is queued on those exact commits. See
+   `p5-native-root-bootstrap-release-prepare-0e5f782.log` and
+   `p5-natlang-types-probe.log`.
    The queue repeats the contract checks and runs Host and Base type checks
    before packaging. See `p5-native-root-bootstrap-current-templates.tsv`
    for the full revisions.

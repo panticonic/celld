@@ -2412,6 +2412,13 @@ pushes them.
    passed. Full Host type checks and paired release preparation are queued
    with this head. The normal installed template exchange itself remains to
    be exercised. See `p5-native-template-exchange-host-final.log`.
+   Host `7b96d7178` prepares development builds from a single revision of
+   the caller's participant copy across Host, Base, Personal, and System.
+   It refuses mixed revisions before creating a run root. All 85 focused
+   tests passed, including one projection read for a set of repositories.
+   The same queued paired build and full Host type checks use this newer
+   head. Installed development build verification remains pending. See
+   `p5-participant-development-build-tests.log`.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired

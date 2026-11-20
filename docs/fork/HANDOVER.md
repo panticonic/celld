@@ -2711,6 +2711,12 @@ pushes them.
    restored the same local registry. The resumed participant and pair
    launchers now keep their registry up until the managed workspace
    scopes have retired. See `p5-native-cleanup-registry-refusal.log`.
+   The old supervisor retired after reporting a build-cleanup error.
+   The resumed test reopened the same workspace and verified the same
+   protected main before starting the two-participant publication check.
+   It exercises saves, review, conflict resolution, and merged bytes.
+   The settings check recognizes the review for the exact
+   `meta/vibestudio.yml` change with an empty additional-grant selection.
    After that test, `vs-verify-p5-p6-current-installed-pair-after-review.service` uses
    the same prepared release and current Chronolog package for a fresh
    two-workspace installation. It verifies separate signed identities,

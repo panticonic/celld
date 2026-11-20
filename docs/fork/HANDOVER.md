@@ -2309,8 +2309,14 @@ pushes them.
    scaffold preparation. Host `c763ed04d` keeps the protected-source choice
    on the bootstrap instance for the full startup. All 27 focused tests
    passed, including repeated preparation. Its epoch-1 build `5f726f46d`
-   is rebuilding its own release and will reopen the unchanged publication
-   under `vs-verify-epoch-repeat-bootstrap.service`.
+   has its own prepared release. The test launcher refused the earlier
+   hub build before opening the retained child. The retry rebuilt the hub
+   release at the exact integration commit. The retained app reached
+   workspace reconciliation. The managed test launcher then failed on
+   its local model discovery probe before running the history assertion.
+   The ordinary workspace server reopen is queued under
+   `vs-verify-epoch-normal-workspace.service`, with the same saved approval,
+   retained app and release inputs.
    All four host type configurations passed on `16088a5da`. The first-time
    migration fixture used ordinary startup on `b5742d1` to save a private
    copy, then restarted the same workspace on E19. The owner reopened the
@@ -2321,6 +2327,13 @@ pushes them.
    snapshot and verified 5,135 files across 135 repositories. The native
    export was 4,278,036 bytes and the participant fork took 386 ms in this
    run. See `p5-e19-actual-replay-materialization.log`.
+   The installed replay parity check is queued under
+   `vs-verify-installed-legacy-parity.service`. It saves two private events
+   through the legacy service and compares the exact file identity, bytes
+   and blame for both events and the original published event after replay.
+   Reviewed template updates still need a native publication path for
+   their installation receipt. The template extension sends the receipt
+   with `vcs.push`, which the participant publisher currently refuses.
    GitHub accepted the celld fork update at `23c4855`. The artifact
    workflow dispatch was rejected because Actions is disabled on
    `panticonic/celld`. Four-platform artifacts for E19 and the matching

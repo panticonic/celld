@@ -2952,8 +2952,8 @@ pushes them.
    for fresh workspaces, with no migration step. The 31 focused Host
    tests, runtime client manifest check, and lockfile check passed.
    Host `d63af2bd4` and Base `902241e` also remove the obsolete
-   context-fork RPC and its handler. The matching fresh installation
-   is queued behind the benchmark in `vs-verify-native-root-bootstrap.service`.
+   context-fork RPC and its handler. The fresh installation is queued
+   behind the benchmark in `vs-verify-native-root-bootstrap.service`.
    See `p5-native-root-host-check.log`.
    Host `f8b77922b` stops conversation and subagent forks from also
    creating a source directory in the old store. The native participant
@@ -3002,6 +3002,14 @@ pushes them.
    returns the originating invocation coordinate. Direct transcript node
    inspection and neighbors still need native implementations. See
    `p5-native-public-vcs-check2.log` and `p5-native-public-vcs-check3.log`.
+   Host `363c3b6cf` requires a verified participant for development
+   build inputs, adopted repository reads, and template exchanges.
+   Both directions of a reviewed exchange bind the participant's exact
+   working copy, and imports register their file bytes to that participant.
+   All 30 focused tests passed. The queued fresh installation now uses
+   this Host and Base `993acc3`, so it also covers the preceding cleanup.
+   The native editor's dormant checkpoint adapter still has a legacy
+   save and import path. See `p5-native-development-access-check.log`.
    Host `83c1d2694` also removes the old runtime fork adapter. Implicit
    panels, context clones, subagents, and development context forks use
    the verified caller's participant revision. A retained runtime fork

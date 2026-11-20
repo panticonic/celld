@@ -249,7 +249,16 @@ The source launcher matched the release prepared from Host `e52812f61`,
 Base `0fcaf2b`, and celld `b78e4d0`. The owned runner joins and retires
 the benchmark and registry after a terminal result. The memory sampler
 and outcome use the prefix `p4-current-fork-benchmark2-` in the private
-state directory. The fork latency result is pending.
+state directory. This run ended on November 20. Memory pressure preceded
+a missed node-lease renewal, and the first celld process stopped itself
+when its authority expired. The kernel then killed its replacement at
+the scope's 10 GiB limit. Its anonymous RSS was about 8.6 GiB at that
+point, after the scope's file cache had been reclaimed. The run has no
+terminal benchmark result, and
+the separate 65-turn result remains the verified functional evidence.
+The prepared-release and installed pair checks were relaunched serially
+as `vs-verify-combined-installed-workspace.service` once the benchmark
+instance and registry had stopped.
 The isolated P5 worktrees
 are `base-gad-participants` and `gad-participant-admission`. The first
 participant fork and conflict-merge probe passes against the real runtime.
@@ -2216,8 +2225,8 @@ pushes them.
    archive and a fixture GitHub response. See
    `chronolog-release-staging-host.log` and
    `chronolog-release-staging-ci-probe.log`.
-   The installed pair check is queued after the 10,000-turn benchmark and
-   matching Host `57f501437` and Base `05ecc1b` build. It approves creation
+   The installed pair check runs after the matching Host `57f501437`
+   and Base `05ecc1b` build. It approves creation
    of the seeded workspace, verifies distinct accounts and nodes, and
    compares the exact published file bytes and retry response on the two
    workspaces. On the combined host, all 15 focused startup, history

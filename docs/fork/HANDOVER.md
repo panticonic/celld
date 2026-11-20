@@ -2655,9 +2655,11 @@ pushes them.
    13.44 ms when quiet and 20.21 ms after a local write, with 10,000
    retained local rows. The separate syscall trace recorded successful
    disk syncs in both phases. The write phase exceeded the 20 ms gate by
-   0.21 ms. An isolated repeat is queued after the installed fixtures
-   and before the benchmark. The first result remains in
-   `p5-native-checkout-profile/jammy-checkout-gate.json`.
+   0.21 ms. A repeat without the installed fixture running recorded
+   18.84 and 24.73 ms, respectively. Both trials saw host disk pressure.
+   The release gate remains open. See
+   `p5-native-checkout-profile/jammy-checkout-gate.json` and
+   `jammy-repeat-checkout-gate.json` in the same directory.
    The first full installed retry passed the Host compilation check and
    stopped at the missing `node-pty` host dependency. The repository's
    repair command rebuilt it. The current Host passed 38 artifact
@@ -2666,10 +2668,14 @@ pushes them.
    `p5-installer-pty-failure.log`, `p5-current-host-artifact-contracts.log`,
    and `p5-current-host-workflows.log`.
    Host `13062f4bf` updates the Dolt and provenance plans to use the normal
-   participant release gate. The installed participant test now prepares
-   Host `13062f4bf`, Base `23a33cf`, and System-testing `d19b0b0` to run
+   participant release gate. Release preparation then passed all four
+   Host type configurations and stopped at the Base type check.
+   Base `95c3fde` fixes the idle import, strict record accesses, and
+   the oversized journal fixture, which now uses a valid profiling
+   receipt. See `p5-installer-base-types-failure.log`. The retry prepares
+   Host `13062f4bf`, Base `95c3fde`, and System-testing `d19b0b0` to run
    against the verified Ubuntu 22.04 binary.
-   After that test, `vs-verify-p5-p6-current-installed-pair.service` uses
+   After that test, `vs-verify-p5-p6-current-installed-pair-base.service` uses
    the same prepared release and current Chronolog package for a fresh
    two-workspace installation. It verifies separate signed identities,
    shared group writes, the protected revision and exact published file

@@ -2819,8 +2819,16 @@ pushes them.
    line review could not parse the approval JSON. The resume reopened the
    same archived seed, verified its persisted receipt and let the managed
    doctor complete the creation review. The signed group checks continued
-   from that workspace. The test launcher also accepts the review body on
-   standard input.
+   from that workspace. Both signed participants wrote from their own
+   nodes and read the resulting rows. An update to another member's row
+   was rejected. The seeded workspace then published a file revision
+   through review. The original workspace's protected main matched the
+   signed group tip and resolved the exact revised file bytes. The
+   installed pair passed and shut down normally on Host `13062f4bf`,
+   Base `bd30de6`, System-testing `911fdd5`, and the sealed Chronolog
+   `f38b9d5` package. See `p5-p6-current-installed-pair-evidence.log`,
+   `p5-p6-current-installed-pair-observe-remote-head.log`, and
+   `p5-p6-current-installed-pair-final-stop.log`.
    The durable benchmark used the exact receipt for the same Host,
    template, and updated Chronolog package revisions. Its short case
    launched the first model-free agent turn, found its durable
@@ -2831,6 +2839,14 @@ pushes them.
    its invocation, result marker, and turn number. The focused checks
    are queued before another installed run. See
    `p4-native-durable-receipts-soak-detail.json`.
+   The next installed fixture uses the same updated template candidate
+   for both settings publication and the benchmark. The settings check
+   starts with a private save and draft, publishes through review, and
+   verifies that the participant can still read both exact revisions.
+   The benchmark retains each case's run ID before waiting, so the
+   first failure can be inspected while its managed fixture is still
+   running. The supervisors stage these checks serially with the same
+   22 GiB start threshold and 10 GiB machine reserve.
    The completed checkout measurements above leave the 20 ms gate open.
    Four-platform verification and the matching Host pin remain pending.
    The local merged host `29eead0fa` and Base `404f345` passed

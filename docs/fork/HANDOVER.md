@@ -2749,6 +2749,13 @@ pushes them.
    `vs-verify-native-install-fetched-ancestry.service` builds both fixes
    with Host `13062f4bf` and System-testing `911fdd5` and runs the same
    signed workflow on a fresh installation.
+   That installation passed the private commit, draft, normal restart,
+   and independent-reader checks again. During the first publication
+   review celld exited with its node-lease watchdog code after a renewal
+   stalled. The test client received an incomplete HTTP response and
+   the review ended without advancing protected main. The same machine
+   later logged global out-of-memory kills and rebooted. No heavy
+   verification scopes remained active after the reboot.
    After that test, `vs-verify-p5-p6-installed-pair-current-chronolog.service`
    uses the same Host and template revisions to prepare a release with
    the updated Chronolog package for a fresh two-workspace installation.

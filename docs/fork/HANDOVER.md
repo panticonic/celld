@@ -6,6 +6,15 @@ work lives, what is done and how it was verified, and what is left, in order.
 The detailed per-stream handoffs it points to are authoritative for their own
 details; this file is authoritative for the overall order and the rules.
 
+**Current release status, 2026-11-20.** Section 5 records the latest
+release candidates and gates. The 65-turn soak passed, and the active
+10,000-turn benchmark had recorded 1,312 successful turns at 20:34 UTC.
+The current fresh-install and two-workspace checks are queued in order
+after that run. Celld `61862f2` has a verified Ubuntu x64 build. Its
+Linux ARM64, macOS ARM64 and Windows x64 builds and the matching
+Vibestudio artifact pins are pending. GitHub has no workflow run for that
+commit.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in
@@ -3098,8 +3107,15 @@ pushes them.
    publication race, and the reviewed two-parent merge after a normal
    restart, using the existing model-free fixtures. The earlier
    installed evidence is independent of this pending rerun.
+   After that check, `vs-verify-p6-native-root-shared-history.service`
+   uses the same prepared release to install two fresh workspaces.
+   It checks independently signed group writes, cross-owner write
+   refusal, and publication of the exact reviewed bytes to the other
+   workspace's protected main. The check encodes its SQL with the
+   verified Chronolog package and records its result in
+   `p6-native-root-shared-history-evidence.log`.
    The running P4 benchmark retains its sealed package and had recorded
-   1,286 successful turns as of November 20, 20:32 UTC, after completing
+   1,312 successful turns as of November 20, 20:34 UTC, after completing
    the 65-turn soak. See `p4-native-clone-source-durable-progress.json`.
    GitHub still shows no Actions run for fork commit `61862f2`.
    Host `363c3b6cf` requires a verified participant for development

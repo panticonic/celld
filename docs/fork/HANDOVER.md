@@ -2232,6 +2232,20 @@ pushes them.
    workspaces. On the combined host, all 15 focused startup, history
    migration and retained-host selection tests passed. The live two-host
    and version handoff results are pending.
+   System-testing `5296454` removes a duplicate mission-edit permission
+   in the merged runner manifest. The release parser rejects the earlier
+   manifest and accepts the corrected one, and the combined release built.
+   Its first startup test found that the hub opened distinct newly
+   registered workspaces when it restarted. Host `9ff82bded` leaves these
+   registrations unopened until first route and provides the native error
+   reason on export. All 83 focused hub and startup tests passed.
+   The next installed attempt reported SQLite's “string or blob too big”
+   for the ordinary workspace's complete history pack. E19 scopes the
+   SQLite length override to native pack operations. The earlier release
+   reproduces the failure in `dolt-remotes-large-pack`. Fork `4cb52cb`
+   passed all 14 focused native Rust tests, the large-pack end-to-end
+   scenario, and the existing remotes durability scenario. The installed
+   rerun uses the rebuilt Linux candidate.
    The local merged host `29eead0fa` and Base `404f345` passed
    the host type checks, the authority catalog check, 24 host tests,
    four portable type configurations, and 223 focused template tests.

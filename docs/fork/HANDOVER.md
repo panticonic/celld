@@ -2834,6 +2834,14 @@ pushes them.
    mobile compilation, a missing runtime type export, and authority
    declarations. The protected ref stayed at its earlier event. See
    `p5-native-settings-type-dependencies-workspace-config.log`.
+   Host `924d067f3` compares candidate service bindings with the
+   currently protected metadata using exact provider manifests. This
+   avoids rebuilding unchanged consumers for an ordinary workspace
+   setting. Changed and removed providers still trigger their consumer
+   checks, and new worker classes still require schema verification.
+   All 44 focused build-scope and publication tests passed. The installed
+   settings check is running on that Host revision and the current
+   Ubuntu runtime.
    The participant merge remains independently verified. See
    `p5-installed-native-merge-origin-resume-evidence.log` and the
    `p5-installed-native-merge-origin-race-*` logs.
@@ -2876,6 +2884,19 @@ pushes them.
    needs durable ownership of the values its own committed events carry.
    See `p4-native-durable-channel-receipts-inspect.json` and
    `p4-native-durable-channel-receipts-soak-detail.json`.
+   Base `65c2cb4` writes the result bytes in the same chunked channel
+   record as their event. Replicas and forks can hydrate those bytes
+   through the channel's own replay. Workspace-level observation still
+   receives the compact envelope, and unrelated blob uploads keep their
+   existing access checks. All 170 focused channel tests passed,
+   covering exact forked bytes and atomic publish failure. The installed
+   retry verified 20 turns before the 21st mission settled ahead of its
+   channel delivery. Both the start and completion were present in the
+   retained channel. System-testing `5845c28` joins that exact delivered
+   invocation before reading the durable replay window. The focused
+   check and fresh 65-turn and 10,000-turn cases are queued. See
+   `p4-channel-stored-result-check2.log` and
+   `p4-native-owned-channel-results-soak-detail.json`.
    The next installed fixture uses the same updated template candidate
    for both settings publication and the benchmark. The settings check
    starts with a private save and draft, publishes through review, and
@@ -2901,6 +2922,9 @@ pushes them.
    All 213 focused runtime and workspace orchestration tests passed.
    Four-platform verification and the matching Host pin remain pending
    for the runtime with the verified checkout change.
+   The verified runtime commit `61862f2` fast-forwarded
+   `panticonic/unified-fork`. GitHub did not create a workflow run
+   for that exact push. The three other platform artifacts remain pending.
    The local merged host `29eead0fa` and Base `404f345` passed
    the host type checks, the authority catalog check, 24 host tests,
    four portable type configurations, and 223 focused template tests.

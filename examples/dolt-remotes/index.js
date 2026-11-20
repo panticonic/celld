@@ -85,6 +85,15 @@ export class Graph {
           return Response.json({ notes: this.notes() });
         case "commit":
           return Response.json({ hash: dolt.commit({ message: q("message", "work"), author: AUTHOR, date: DATE }) });
+        case "add-payload-batch":
+          this.sql.exec("CREATE TABLE IF NOT EXISTS payloads (id INTEGER PRIMARY KEY, body BLOB NOT NULL)");
+          this.sql.exec(
+            "WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM rows WHERE n<48) " +
+              "INSERT INTO payloads(body) SELECT randomblob(65536) FROM rows",
+          );
+          return Response.json({ hash: dolt.commit({ message: "payload batch", author: AUTHOR, date: DATE }) });
+        case "payload-size":
+          return Response.json(this.sql.exec("SELECT sum(length(body)) AS bytes FROM payloads").one());
         case "branch":
           dolt.branch.create(q("name"), { from: q("from") ?? undefined });
           return Response.json({ branches: dolt.branch.list().map((b) => b.name) });

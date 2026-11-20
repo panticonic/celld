@@ -32,6 +32,7 @@ has not been run yet.
 | Windows port (compile and cross-link; CI workflow for a real Windows run) | merged | `docs/fork/windows.md` |
 | Fork polish: cell-owned P2P streams and `closed`, Ed25519 PKCS#8 v0, configurable node lease, far-future alarms (E5), per-class secrets (G3), e2e scenarios for every fork example | done (branch `feature/fork-polish`) | §3b.10-11, `docs/services/p2p.md`, `docs/fork/class-secrets.md`, `docs/README.md` (node lease) |
 | Dolt remotes between cells (F7): grants, fetch, pull, push over packs, on one node and across nodes of a fleet (patch 0004) | done (branch `feature/dolt-remotes`) | §3b.13, `docs/services/dolt-remotes.md` |
+| Multi-megabyte Dolt packs (E19) | implemented | §3b.21, `dolt-remotes-large-pack` |
 | Vibestudio compatibility audit | done (Vibestudio branch `audit/celld-compat`, `docs/celld-compat-audit.md`) | fork bugs A1 and A2 fixed |
 | Vibestudio runtime cutover | partial, paused (Vibestudio branch `feat/celld-runtime`, `HANDOFF-celld-runtime.md`) | |
 | Dolt runtime for the Vibestudio redesign: merge resolver (F1), commit in a transaction (F2), class-declared local tables (F4), checkout independent of local state (F5), history reads (F6) | done (branch `feature/dolt-runtime-f1-f6`) | §3b.12, `docs/services/dolt-cells.md` |
@@ -1049,6 +1050,14 @@ User-facing contract: `docs/services/dolt-cells.md`. Decisions that refine §3:
     exact module layout and uses the existing compiled-module cache.
     Only the Python bundle's lexical shim tries this helper before the
     ordinary Wasm constructor. The global V8 policy is unchanged.
+
+21. **Aggregate pack length is separate from SQL value length (E19).**
+    A native pack is a single BLOB containing a set of committed chunks.
+    For the fixed build and install statements, the storage lane uses
+    the existing remote message budget in SQLite. A scoped guard restores
+    the old connection limit on both success and failure. The regression
+    fetches and pushes separate multi-megabyte revisions and verifies the
+    retrieved sizes on both cells.
 
 ## 4. Determinism: fixes over the earlier plans
 

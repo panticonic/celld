@@ -621,6 +621,45 @@ fn local_haves(connection: &Connection) -> anyhow::Result<Vec<String>> {
     Ok(lines(&text))
 }
 
+/// Pack blobs can contain many ordinary SQL values. Use the wire budget only
+/// for these fixed native statements, and restore the cell's SQL limit before
+/// any other statement can run on the connection.
+fn pack_query<T: rusqlite::types::FromSql>(
+    connection: &Connection,
+    sql: &'static str,
+    input: impl rusqlite::Params,
+) -> rusqlite::Result<T> {
+    struct PackLengthLimit<'a> {
+        connection: &'a Connection,
+        previous: i32,
+    }
+
+    impl Drop for PackLengthLimit<'_> {
+        fn drop(&mut self) {
+            // SAFETY: the guard borrows the live connection.
+            unsafe {
+                rusqlite::ffi::sqlite3_limit(
+                    self.connection.handle(),
+                    rusqlite::ffi::SQLITE_LIMIT_LENGTH,
+                    self.previous,
+                );
+            }
+        }
+    }
+
+    // SAFETY: the handle belongs to the borrowed connection. This operation
+    // and its fixed statement run synchronously on the cell's storage lane.
+    let previous = unsafe {
+        rusqlite::ffi::sqlite3_limit(
+            connection.handle(),
+            rusqlite::ffi::SQLITE_LIMIT_LENGTH,
+            MAX_MESSAGE as i32,
+        )
+    };
+    let _limit = PackLengthLimit { connection, previous };
+    connection.query_row(sql, input, |row| row.get(0))
+}
+
 /// Build the request for `args.op` (`refs`, `fetch` or `push`) to the remote
 /// `args.name`. A push also takes, as `input`, the remote's answer to `refs`:
 /// the pack is built against the tips it names.
@@ -670,8 +709,7 @@ fn request(connection: &Connection, args: &Value, input: &[u8]) -> anyhow::Resul
                 .optional()?
                 .ok_or_else(|| anyhow!("no branch {from:?} to push"))?;
             let spec = if from == to { from.clone() } else { format!("{from}={to}") };
-            let pack: Vec<u8> = connection
-                .query_row("SELECT dolt_pack_build(?1, ?2)", params![spec, haves.join("\n")], |row| row.get(0))
+            let pack: Vec<u8> = pack_query(connection, "SELECT dolt_pack_build(?1, ?2)", params![spec, haves.join("\n")])
                 .map_err(|error| anyhow!("{}", crate::dolt_cell::sqlite_message(&error)))?;
             frame_request(
                 OP_PUSH,
@@ -703,8 +741,7 @@ fn apply(connection: &Connection, args: &Value, input: &[u8]) -> anyhow::Result<
             Ok(json)
         }
         "fetch" => {
-            let text: String = connection
-                .query_row("SELECT dolt_pack_fetch(?1, ?2)", params![remote.name, bytes], |row| row.get(0))
+            let text: String = pack_query(connection, "SELECT dolt_pack_fetch(?1, ?2)", params![remote.name, bytes])
                 .map_err(|error| {
                     anyhow!(
                         "{}",
@@ -848,10 +885,10 @@ fn serve_fetch(connection: &Connection, grant: &Grant, request: &Value) -> Resul
             ));
         }
     }
-    let pack: Vec<u8> = connection.query_row(
+    let pack: Vec<u8> = pack_query(
+        connection,
         "SELECT dolt_pack_build(?1, ?2)",
         params![chosen.join("\n"), haves.join("\n")],
-        |row| row.get(0),
     )?;
     if pack.len() > MAX_MESSAGE {
         return Err(Refusal::new("ERR_DOLT_REMOTE_FAILED", "the pack is too large for one message"));
@@ -894,8 +931,7 @@ fn serve_push(
             &["add".to_string(), remote.clone(), "celld:pushed".to_string()],
         )?;
     }
-    let fetched: String = connection
-        .query_row("SELECT dolt_pack_fetch(?1, ?2)", params![remote, pack], |row| row.get(0))
+    let fetched: String = pack_query(connection, "SELECT dolt_pack_fetch(?1, ?2)", params![remote, pack])
         .map_err(|error| Refusal::new("ERR_DOLT_REMOTE_FAILED", crate::dolt_cell::sqlite_message(&error)))?;
     let landed = lines(&fetched)
         .into_iter()
@@ -1081,6 +1117,47 @@ mod tests {
         assert_eq!(tracked, json!([{ "name": "origin/main", "hash": tip }]));
         // Fetching again finds nothing new.
         assert_eq!(fetch(&holder, &source).unwrap()["branches"]["main"], json!(tip));
+    }
+
+    #[test]
+    fn packs_can_exceed_the_cell_sql_value_limit() {
+        let (_dir, source, holder) = pair();
+        const CELL_LIMIT: i32 = 2_200_000;
+        let set_limit = |connection: &Connection, limit| {
+            // SAFETY: the test connections are live and used on this thread.
+            unsafe { rusqlite::ffi::sqlite3_limit(connection.handle(), rusqlite::ffi::SQLITE_LIMIT_LENGTH, limit) }
+        };
+        set_limit(&source, CELL_LIMIT);
+        set_limit(&holder, CELL_LIMIT);
+        let access = grant(&source, json!({ "fetch": true, "push": ["main"] }));
+        add_remote(&holder, access["token"].as_str().unwrap());
+
+        let write_batch = |connection: &Connection, offset| {
+            connection.execute(
+                "WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM rows WHERE n<48) \
+                 INSERT INTO notes SELECT n+?1, randomblob(65536) FROM rows",
+                [offset],
+            ).unwrap();
+        };
+        write_batch(&source, 100);
+        let source_tip = commit(&source, "a multi-megabyte published history");
+
+        let ordinary_sql = source.query_row(
+            "SELECT dolt_pack_build('main', '')", [], |row| row.get::<_, Vec<u8>>(0),
+        );
+        assert!(ordinary_sql.is_err(), "the ordinary SQLite value limit still applies");
+        let fetched = fetch(&holder, &source).unwrap();
+        assert_eq!(fetched["branches"]["main"], json!(source_tip));
+        assert!(fetched["bytes"].as_u64().unwrap() > CELL_LIMIT as u64);
+
+        crate::dolt_cell::call(&holder, "dolt_merge", &["origin/main".to_string()]).unwrap();
+        write_batch(&holder, 200);
+        let holder_tip = commit(&holder, "a multi-megabyte participant update");
+        push(&holder, &source, "main", None).unwrap();
+        assert_eq!(head(&source, "HEAD"), holder_tip);
+        assert!(pack_query::<Vec<u8>>(&source, "SELECT dolt_pack_build('no-such-ref', '')", []).is_err());
+        assert_eq!(set_limit(&source, -1), CELL_LIMIT);
+        assert_eq!(set_limit(&holder, -1), CELL_LIMIT);
     }
 
     #[test]

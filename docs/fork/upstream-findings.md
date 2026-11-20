@@ -131,6 +131,15 @@ restored all 96 rows from the bucket after the local state was removed.
 Peak anonymous memory during publication fell from 399 MiB to 178 MiB
 in the same test scope.
 
+**E19. Dolt packs inherited the ordinary SQL value limit.** An installed
+Vibestudio workspace could not export its published history even though
+each stored value was within the limit. The native pack statements passed
+the whole transfer through SQLite as one BLOB, which exceeded 2,200,000
+bytes. The runtime now applies the existing wire length budget during
+those statements and restores the connection limit before returning.
+The native regression covers a multi-megabyte fetch and push in both
+directions.
+
 **E14 detail.** The E6 rule gives a block from a continuation whose event has
 ended to the event whose turn runs it: that event is the block's driver
 (`op_with_input_gate_context`), takes the gate (`op_gate_acquire`) and polls the

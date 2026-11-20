@@ -184,7 +184,9 @@ export class Graph {
   `dolt_pack_build`, `dolt_pack_fetch`): every chunk is hashed against its
   address, the whole commit graph is checked before a tracking ref is installed,
   and a damaged or incomplete pack installs nothing. A pack carries only the
-  chunks the receiver's commits do not cover.
+  chunks the receiver's commits do not cover. The fixed native pack
+  statements use the wire length budget for the aggregate BLOB. The
+  connection's regular SQL value limit applies again when they return.
 - **A fork is a new identity.** `env.NS.fork`, `restore` and `celld cell import`
   clear the remotes, the grants and every remote-tracking branch of the image: a
   fork does not inherit its source's authority. Set the remote up again after

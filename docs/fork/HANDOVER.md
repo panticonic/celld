@@ -3146,6 +3146,11 @@ pushes them.
    Host `81726bc42` exposes installed Natlang module mounts in the
    temporary TypeScript projection. A focused probe resolved all three
    previously missing type modules and skipped uninstalled companions.
+   TypeScript compiled the three affected source files through those
+   mounts. The official paired test runner passed all 11 participant
+   history and trajectory evidence tests on the same release revisions.
+   See `p5-mounted-type-module-compiler.log` and
+   `p5-current-release-focused-pair.log`.
    The complete Base check is queued on those exact commits. See
    `p5-native-root-bootstrap-release-prepare-0e5f782.log` and
    `p5-natlang-types-probe.log`.

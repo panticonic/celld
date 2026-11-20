@@ -2654,11 +2654,18 @@ pushes them.
    See `p5-installer-pty-failure.log` and the
    `vs-p5-repair-host-terminal.service` journal.
    Host `13062f4bf` updates the Dolt and provenance plans to use the normal
-   participant release gate. The checkout profile, installed test, and
-   durable benchmark now run in order once the Ubuntu 22.04 artifact is
-   available. The installed test uses that artifact with Host `13062f4bf`,
-   Base `23a33cf`, and System-testing `d19b0b0`. Four-platform verification
-   and the matching Host pin remain pending.
+   participant release gate. The checkout profile and installed participant
+   test run once the Ubuntu 22.04 artifact is available. The installed test
+   uses that artifact with Host `13062f4bf`, Base `23a33cf`, and
+   System-testing `d19b0b0`.
+   After that test, `vs-verify-p5-p6-current-installed-pair.service` uses
+   the same prepared release and current Chronolog package for a fresh
+   two-workspace installation. It verifies separate signed identities,
+   shared group writes, the protected revision and exact published file
+   bytes in both workspaces. Results go to
+   `p5-p6-current-installed-pair-evidence.log`. The durable benchmark
+   waits for the pair fixture to release the test registry and memory.
+   Four-platform verification and the matching Host pin remain pending.
    The local merged host `29eead0fa` and Base `404f345` passed
    the host type checks, the authority catalog check, 24 host tests,
    four portable type configurations, and 223 focused template tests.

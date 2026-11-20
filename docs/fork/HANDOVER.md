@@ -2839,9 +2839,21 @@ pushes them.
    avoids rebuilding unchanged consumers for an ordinary workspace
    setting. Changed and removed providers still trigger their consumer
    checks, and new worker classes still require schema verification.
-   All 44 focused build-scope and publication tests passed. The installed
-   settings check is running on that Host revision and the current
-   Ubuntu runtime.
+   All 44 focused build-scope and publication tests passed. On that Host
+   revision and the current Ubuntu runtime, the installed call changed
+   `defaultRepo` to `meta`, advanced protected main, and kept the
+   participant's working revision. After shutdown the retained recall
+   index linked the exact published event
+   `workspace-event:d904265053a7af5363a627b73a2be08ab8d3e18f2708fa04cae8e0accbd665a8`
+   to Dolt revision `98b72f105cf7d10cd8c5d162d81e0a0fe89dcb39`.
+   A read-only retry reopened that exact workspace, verified `meta` from
+   the live configuration API, and recalled the same event and revision.
+   The same retry reopened the participant's exact working copy and
+   verified both saved and draft bytes. See
+   `p5-native-scoped-settings-workspace-config.log`,
+   `p5-native-scoped-settings-retained-proof.json`, and
+   `p5-native-scoped-settings-retained-rpc.log`. The fixture stopped
+   normally.
    The participant merge remains independently verified. See
    `p5-installed-native-merge-origin-resume-evidence.log` and the
    `p5-installed-native-merge-origin-race-*` logs.
@@ -2893,15 +2905,24 @@ pushes them.
    retry verified 20 turns before the 21st mission settled ahead of its
    channel delivery. Both the start and completion were present in the
    retained channel. System-testing `5845c28` joins that exact delivered
-   invocation before reading the durable replay window. The focused
-   check and fresh 65-turn and 10,000-turn cases are queued. See
+   invocation before reading the durable replay window. All 17 focused
+   tests passed. The next installed run verified all 65 distinct turn
+   receipts with zero model calls. The normal conversation fork then
+   tried to build `workers/pubsub-channel` from the old context store,
+   where the fresh native fork's files were absent. Host `56af4331e`
+   binds cloned runtimes to the exact participant revision already
+   retained by the admitted fork. It composes that revision once and
+   uses its content and semantic identity for each cloned runtime.
+   All 213 focused tests passed. The next short case
+   `st_30d2bc058fa6476da4315e4e771901a4` is running on the sealed release
+   with `56af4331e`. The 10,000-turn run follows a passing short case.
+   See `p4-native-published-channel-results-inspect.json`,
+   `p4-clone-native-source-check.log`,
    `p4-channel-stored-result-check2.log` and
    `p4-native-owned-channel-results-soak-detail.json`.
-   The next installed fixture uses the same updated template candidate
-   for both settings publication and the benchmark. The settings check
-   starts with a private save and draft, publishes through review, and
-   verifies that the participant can still read both exact revisions.
-   The benchmark retains each case's run ID before waiting, so the
+   The first 65-turn attempt used Host `924d067f3`, Base `65c2cb4`, System-testing
+   `5845c28`, Chronolog `f38b9d5`, and Ubuntu runtime `61862f2`. It retains
+   each case's run ID before waiting, so the
    first failure can be inspected while its managed fixture is still
    running. The supervisors stage these checks serially with the same
    22 GiB start threshold and 10 GiB machine reserve.
@@ -2915,6 +2936,21 @@ pushes them.
    privacy and recall tests passed. Both commits are in separate
    local candidates while the sealed settings and benchmark fixture
    runs on its original revisions.
+   Host `a537fca57` removes the unused legacy bootstrap client and makes
+   mirror and caller-scoped content reads require verified participant
+   history. Mirror callers wait for the native attachment during startup.
+   All 101 focused orchestration, source dispatch, and mirror tests passed.
+   See `p5-native-content-only-check.log`.
+   Host `cc0e91e57` and Base `4d35e67` remove the retired workspace
+   initializer and its six RPC methods. The canonical Dolt owner
+   validates the exact prepared root directly. The old initialization
+   table and freeze/replay flags are gone. The Base schema version is 67
+   for fresh workspaces, with no migration step. The 31 focused Host
+   tests, runtime client manifest check, and lockfile check passed.
+   Host `d63af2bd4` and Base `902241e` also remove the obsolete
+   context-fork RPC and its handler. The matching fresh installation
+   is queued behind the benchmark in `vs-verify-native-root-bootstrap.service`.
+   See `p5-native-root-host-check.log`.
    Host `83c1d2694` also removes the old runtime fork adapter. Implicit
    panels, context clones, subagents, and development context forks use
    the verified caller's participant revision. A retained runtime fork

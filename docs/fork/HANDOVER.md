@@ -2684,6 +2684,14 @@ pushes them.
    checkout sequence in one SQL transaction saved sync calls in a traced
    run but did not improve the interleaved timing samples. The production
    checkout is unchanged. See `e19-checkout-transaction-probe/interleaved.log`.
+   The same E19 binary was measured again after the reboot, with no other
+   project scopes active. The run recorded 15.21 ms p95 when quiet and
+   22.89 ms after a local write. Post-write p95 was 23.17 ms for checkout
+   to the alternate branch and 12.20 ms for checkout to main. The trace
+   observed disk syncs and the host saw I/O pressure during the trial.
+   The 20 ms gate remains open. See
+   `p5-native-checkout-profile/jammy-isolated-checkout-gate.json` and
+   `jammy-isolated-checkout-latency.json` in the same directory.
    The first full installed retry passed the Host compilation check and
    stopped at the missing `node-pty` host dependency. The repository's
    repair command rebuilt it. The current Host passed 38 artifact

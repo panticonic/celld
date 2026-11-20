@@ -2456,10 +2456,19 @@ pushes them.
    log, head, and message coordinates before ranking. The native test
    succeeds with the legacy command visibility table removed. This pair
    passed 63 Host orchestration tests, 177 Host RPC tests, and 14 projected
-   Base tests. The installed build is queued against this pair. It still
-   needs a real agent recall check across two independent participant copies.
+   Base tests. Conversation recall still needs a real agent check across
+   two independent participant copies.
    See `p5-native-recall-host.log`, `p5-native-recall-rpc.log`, and
    `p5-native-recall-base.log`.
+   Host `4b2e6731d` and Base `ab47bc7` retire the legacy commit recall
+   projection atomically with the first complete native backfill. An index
+   completed by the prior release retires old rows on its next read. An
+   interrupted initial backfill preserves legacy published recall until it
+   completes. All 15 Host history tests and 83 projected Base tests passed,
+   including rollback and recovery after removal of the old commit tables.
+   The queued installed upgrade uses this pair. See
+   `p5-native-commit-projection-host.log` and
+   `p5-native-commit-projection-base.log`.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired

@@ -2419,6 +2419,14 @@ pushes them.
    The same queued paired build and full Host type checks use this newer
    head. Installed development build verification remains pending. See
    `p5-participant-development-build-tests.log`.
+   Host `5d269d118` reads settings previews from protected main and authors
+   settings changes in a temporary native participant copy. The protected
+   publication gate still uses the authenticated initiating caller. The
+   focused run passed 72 tests, and all 11 writer tests passed again after
+   the final source-read adjustment. The queued installed restart also
+   exercises the signed settings route and checks that it advances main
+   while preserving the caller's private revision. See
+   `p5-native-workspace-config-final.log`.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired

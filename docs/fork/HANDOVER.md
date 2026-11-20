@@ -2335,9 +2335,19 @@ pushes them.
    owner retained the later private working revision, the second copy
    could not read it, and shared history stayed unchanged. Both starts
    stopped normally. See `p5-installed-legacy-parity-evidence.log`.
-   Reviewed template updates still need a native publication path for
-   their installation receipt. The template extension sends the receipt
-   with `vcs.push`, which the participant publisher currently refuses.
+   Base `79deb2a` saves the reviewed template installation in the same
+   native commit as the participant revision. Host `98ef0788f` checks that
+   the exact candidate carries that installation before review and passes
+   the claim through the approved native publish. The receiver checks the
+   saved event again before advancing shared history. The native fixture
+   refused an omitted or changed installation, published the exact
+   metadata-only event, read back the receipt and replayed the same
+   publication. All 46 focused host and seven template workflow tests
+   passed, as did the four host type configurations. See
+   `p5-native-template-publication-evidence.log`. The paired release and
+   ordinary installed check are running under
+   `vs-prepare-template-publication-release.service` and
+   `vs-verify-installed-template-publication.service`.
    GitHub accepted the celld fork update at `23c4855`. The artifact
    workflow dispatch was rejected because Actions is disabled on
    `panticonic/celld`. Four-platform artifacts for E19 and the matching

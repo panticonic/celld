@@ -3016,6 +3016,14 @@ pushes them.
    fixture driver. The queued fresh installation uses this Host and Base
    `993acc3`. See `p5-native-editor-participant-check.log` and
    `p5-native-editor-participant-check2.log`.
+   Host `e3b039462` makes unauthored runtime builds track protected main.
+   A replacement for a private runtime requires the verified owner and
+   resolves that owner's current copy. The exact restore action keeps the
+   already sealed executable. Runtime preparation refuses an unresolved
+   context selector, and all 273 focused tests passed across two runs.
+   The generic build graph still exposes its old context lookup internally.
+   See `p5-native-runtime-selector-check.log` and
+   `p5-native-runtime-selector-check2.log`.
    Host `83c1d2694` also removes the old runtime fork adapter. Implicit
    panels, context clones, subagents, and development context forks use
    the verified caller's participant revision. A retained runtime fork

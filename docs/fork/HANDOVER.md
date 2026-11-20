@@ -3102,22 +3102,32 @@ pushes them.
    both origins. A physical fork starts with an empty index, and
    a normal reopen retains correct results. See
    `p5-workspace-commit-index/evidence.log`.
-   The queued installation uses Host `a23423db4`, Base `298eae9`,
-   and the verified Chronolog `f7351ce` package. The release also includes
-   the following verified template merge trees against current main.
+   The queued installation uses Host `aab9f8635` merged from main
+   `5ca222112`, Base `0e5f782`, and the verified Chronolog `f7351ce`
+   package. It pins the following template revisions.
 
    | Template | Main | Release candidate |
    | --- | --- | --- |
+   | Base | `36906d0` | `0e5f782` |
    | Examples | `52be2b0` | `c3455fe` |
    | Google Workspace | `726cf99` | `2b85797` |
    | News | `b53effc` | `a8a47b0` |
-   | Personal | `d73c01c` | `b827ad7` |
+   | Personal | `d73c01c` | `953b4db` |
+   | Spectrolite | `07bcdd6` | `07bcdd6` |
    | System | `c96c839` | `976e318` |
    | System-testing | `42d5c31` | `316f83f` |
 
-   The queue checks the pinned template trees and runs Host and Base type
-   checks before packaging. See
-   `p5-native-root-bootstrap-current-templates.tsv` for the full revisions.
+   The merged pair passed runtime documentation and authority checks.
+   It has 188 unique Natlang service names, 192 reviewed capability
+   classifications, and 385 checked RPC methods across 16 Base Durable
+   Object packages. Base's generated runtime and VCS references match the
+   release contracts. The Personal fixture declares ordinary test authority.
+   The 29 workflow tests also passed. See
+   `p5-merged-release-final-contract-check.log` and
+   `p5-merged-release-contract-check.log`.
+   The queue repeats the contract checks and runs Host and Base type checks
+   before packaging. See `p5-native-root-bootstrap-current-templates.tsv`
+   for the full revisions.
    It now repeats the private saved and draft reopen checks, the signed
    publication race, and the reviewed two-parent merge after a normal
    restart, using the existing model-free fixtures. The earlier
@@ -3143,9 +3153,8 @@ pushes them.
    and inspection will be recorded under `p4-current-release-fork-benchmark`.
    Host documentation commit `345b70b63` applies the owner's fresh-start
    and normal-restart guidance directly to the provenance acceptance
-   matrix and records how the two local Dolt indexes work. The queued
-   installation remains pinned to the same application code in
-   `a23423db4`. The later commit changes only the two design documents.
+   matrix and records how the two local Dolt indexes work. The current
+   merged Host candidate includes those changes.
    GitHub still shows no Actions run for fork commit `61862f2`.
    Host `363c3b6cf` requires a verified participant for development
    build inputs, adopted repository reads, and template exchanges.

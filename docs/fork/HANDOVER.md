@@ -2260,8 +2260,20 @@ pushes them.
    from first graph discovery and exclude the provisional host-build
    inventory from imported unit admission. The 20 focused host checks
    include reopening the seed and reading the exact manifest from the
-   discovered path. The installed restart with these changes is owned
-   by `vs-verify-imported-graph-reopen.service`.
+   discovered path. The installed restart ran under
+   `vs-verify-imported-graph-reopen.service`.
+   The installed restart preserved the seed and recorded 43 admissions
+   through the creation review. Two signed accounts on separate nodes
+   joined the same Chronolog group, wrote from both sides, rejected
+   Bob's attempt to modify Alice's row, and read the same owner rows.
+   The fixture uses the coordinator's original loopback port because
+   its celld discovery and relay are disabled. The workspace administrator
+   binds sharing locally, and Bob remains a publisher in the group.
+   The protected project-file publication reached authority checking
+   before the three-minute eval deadline. Its retry is running with a
+   longer eval deadline and the original saved revision under
+   `vs-verify-seed-pair-extended-publication.service`. The peer publication
+   and exact retry are still pending.
    GitHub accepted the celld fork update at `23c4855`. The artifact
    workflow dispatch was rejected because Actions is disabled on
    `panticonic/celld`. Four-platform artifacts for E19 and the matching

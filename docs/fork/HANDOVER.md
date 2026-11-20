@@ -2640,6 +2640,14 @@ pushes them.
    These timings include the local allocation request and use a local
    adapter for the physical fork. See
    `p5-native-fresh-size/evidence.log`.
+   The same 135-repository, 5,135-file fixture passed on Base `298eae9`
+   with Ubuntu x64 runtime `61862f2`. The fresh projection matched every
+   input placement. Repeat allocation returned the same copy for each
+   participant, and the trace recorded exactly two physical exports.
+   The participants' independent edits left protected main unchanged.
+   Staging took 653 ms. The two allocations took 334 and 397 ms and
+   transferred 3,827,714 and 3,934,428 bytes. See
+   `p5-native-fresh-size-current-release/evidence.log`.
    The native E19 concurrency scenario publishes from two independent
    work cells at once. Before approval, each read grant refuses push.
    Exactly one concurrent push succeeds. The other cell resolves one
@@ -2648,6 +2656,10 @@ pushes them.
    the idempotent repeat. It passed alongside the remote-operation restart
    scenario on the E19 Linux candidate. This verifies the runtime part of
    the gate. See `p5-e19-participant-push-repeat.log`.
+   The concurrent publication check and authenticated two-node Dolt carrier
+   also passed on the exact Ubuntu x64 runtime `61862f2`.
+   See `p5-native-publication-61862f2.log` and
+   `p5-native-dolt-p2p-61862f2.log`.
    The installed upgrade now ends with the approval-service race in
    `check_installed_participant_race.py`. Two authenticated participants
    save distinct revisions from the same shared event and submit both

@@ -3110,7 +3110,7 @@ pushes them.
    | --- | --- | --- |
    | Base | `36906d0` | `7d4535f` |
    | Examples | `52be2b0` | `c3455fe` |
-   | Google Workspace | `726cf99` | `2b85797` |
+   | Google Workspace | `726cf99` | `8472240` |
    | News | `b53effc` | `a8a47b0` |
    | Personal | `d73c01c` | `953b4db` |
    | Spectrolite | `07bcdd6` | `07bcdd6` |
@@ -3161,9 +3161,15 @@ pushes them.
    probe remain available in
    `p5-native-root-bootstrap-release-prepare-0e5f782.log` and
    `p5-natlang-types-probe.log`.
-   The queue repeats the contract checks and runs Host and Base type checks
-   before packaging. See `p5-native-root-bootstrap-current-templates.tsv`
-   for the full revisions.
+   Preparation passed the contract and type checks, 159 Base tests and
+   three System-testing fixture tests. Two Gmail fixtures still expected
+   a temperature field that the Codex API omits. Google Workspace
+   `8472240` corrects those assertions, and all 56 Gmail tests passed.
+   The only change to that candidate is the test file. The retry retains
+   those verified results and runs the remaining tests and packaging.
+   See `p5-native-root-bootstrap-release-prepare-before-gmail-fixture-fix.log`,
+   `p5-gmail-native-fixture.log`, and
+   `p5-native-root-bootstrap-current-templates.tsv`.
    It now repeats the private saved and draft reopen checks, the signed
    publication race, and the reviewed two-parent merge after a normal
    restart, using the existing model-free fixtures. The earlier

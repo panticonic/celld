@@ -2764,6 +2764,13 @@ pushes them.
    the review ended without advancing protected main. The same machine
    later logged global out-of-memory kills and rebooted. No heavy
    verification scopes remained active after the reboot.
+   The sealed release and persistent workspace are retained.
+   `vs-verify-native-install-after-reboot.service` waits for 22 GiB of
+   available machine memory and low memory pressure. It reopens the
+   same workspace, checks protected main against the recorded receipt,
+   and verifies any retained private seed bytes before submitting a
+   new review. It stops only its own workspace scope if available
+   machine memory falls below 10 GiB during the test.
    After that test, `vs-verify-p5-p6-installed-pair-current-chronolog.service`
    uses the same Host and template revisions to prepare a release with
    the updated Chronolog package for a fresh two-workspace installation.

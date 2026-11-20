@@ -3012,6 +3012,18 @@ pushes them.
    now selects these commits and runs the focused Base transcript and
    build suites after the long benchmark. It also checks the installed
    path from a private edit to its recorded invocation and transcript.
+   Host `84c85a79b` removes the unused legacy history transport and
+   requires the canonical Dolt publication authority for each ref update.
+   Base `61e4fb7` removes the legacy workspace history receiver and stops
+   creating its tables in fresh schema 68. Transcript search reads only
+   the log messages linked to admitted Dolt commands. Invocation
+   diagnostics report their recorded events, and workspace commands
+   and their causes are inspected through VCS. All 94 focused Host checks,
+   the generated API checks, and the exact transcript search SQL passed.
+   The scheduled install selects this Host and Base pair and includes
+   template storage, search, reporting, and release-pair build tests.
+   The remaining implementation includes retiring old planner and store
+   modules that are still linked through shared operations.
    Host `363c3b6cf` requires a verified participant for development
    build inputs, adopted repository reads, and template exchanges.
    Both directions of a reviewed exchange bind the participant's exact

@@ -2705,6 +2705,12 @@ pushes them.
    that the interrupted review left protected main fixed, runs the
    participant publication and merge exercise first, then finishes the
    settings check with time for the cold build.
+   The first stop command also hit its fixture deadline while the
+   workspace still owned a package install. Its registry had shut down,
+   and the install logged connection refusals. The cleanup supervisor
+   restored the same local registry. The resumed participant and pair
+   launchers now keep their registry up until the managed workspace
+   scopes have retired. See `p5-native-cleanup-registry-refusal.log`.
    After that test, `vs-verify-p5-p6-current-installed-pair-after-review.service` uses
    the same prepared release and current Chronolog package for a fresh
    two-workspace installation. It verifies separate signed identities,

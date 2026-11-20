@@ -2582,6 +2582,12 @@ pushes them.
    publication carries the original approving caller, rejects invalid prepared
    edits before writing, and preserves a publication error if cleanup also
    fails. All 20 focused tests passed. See `p5-native-config-writer-host.log`.
+   Base `a57fd11` reads commit recall from the protected Dolt publication
+   index. Rebuilding conversation projections preserves the published
+   documents and their index marker. The 21 focused recall and
+   participant-history tests passed. This change is in
+   `base-native-commit-recall-only` while the existing installed build
+   checks its pinned inputs. See `p5-native-commit-recall-only-focused.log`.
    The representative fresh-history size check used full file placement
    metadata from 135 repositories and 5,135 files. The E19 Linux fixture
    staged the first native commit in 1.08 seconds and verified every

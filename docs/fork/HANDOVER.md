@@ -2248,6 +2248,11 @@ pushes them.
    `c2a71f8d45efb2820231db8dd26aed137af0c15d689c7d7df84505fb202d79e0`.
    See `chronolog-current-main-88716db-check.log`,
    `chronolog-88716db-package.log`, and `chronolog-88716db-host-package.json`.
+   The exact archive also installed on two isolated Ubuntu 22.04 celld
+   nodes. Separate signed participants joined two groups, wrote on both
+   nodes, read the exact owner rows, and reopened both groups normally.
+   The installed Vibestudio pair uses the SQL programs encoded by this
+   same package. See `chronolog-88716db-workspace-native.log`.
    Host `f64f4d2b2` stages the Chronolog package in application release
    builds. Once the owner publishes the Chronolog release run, set
    `CHRONOLOG_RELEASE_RUN`, `CHRONOLOG_RELEASE_SOURCE`, and

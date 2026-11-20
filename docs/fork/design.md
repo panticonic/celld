@@ -41,7 +41,7 @@ has not been run yet.
 | Swap does not wait for residency holds; per-call CPU limit on a facet stub (requests from the Dolt redesign, P0) | done (branch `feature/swap-holds-cpu`) | §3b.16, `docs/services/residency.md` ("Generation swaps"), `docs/services/dynamic-workers.md` ("Limits of one call") |
 | A call ended by its CPU limit keeps the object's pending I/O and rolls back the transaction it interrupted (E12, E13; found by the Dolt redesign's kernel) | done (branch `fix/cpu-limit-wedge`) | §3b.17, `docs/fork/upstream-findings.md`, `docs/services/dynamic-workers.md` ("Limits of one call") |
 | A continuation's block is driven by an event that still drives the object's I/O: one polling ops handed on its way out, one its CPU limit ended (E14; the agents' persistent `transaction()` refusal) | done (branch `fix/retired-input-gate`) | §3b.18, `docs/fork/upstream-findings.md`, `docs/services/durable-objects.md` |
-| Vibestudio Dolt redesign | P0–P3 done, P4 mostly done (S6b held), P5 and P6 not started (Vibestudio branch `feat/dolt-p0`, `HANDOFF-dolt-redesign.md`, `docs/dolt-redesign.md`); Q1–Q5 answered | `docs/fork/HANDOVER.md` |
+| Vibestudio Dolt redesign | P0–P3 done. P4 S6b merged, with the final long-run benchmark pending. P5 uses fresh Dolt workspaces and independent participant copies. The installed release gate covers normal saves, restart, approved publication and merge. P6 is ported locally to current Chronolog main. | `docs/fork/HANDOVER.md` |
 
 ### Single-track backlog (from 2026-11-13, in order)
 

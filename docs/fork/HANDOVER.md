@@ -1319,8 +1319,9 @@ On November 20 the owner removed backward compatibility and additional
 migration work from release scope. The release checks target a fresh
 workspace on the current runtime and a restart on that same runtime.
 Existing workspace data and earlier migration evidence are retained.
-Normal working-copy, publication and merge behavior takes priority over
-additional crash injection and lost-reply testing.
+The release gate covers private saves, normal restart, reviewed publication
+and merging between participants. Forced server crashes and lost replies are
+optional follow-up coverage.
 
 **Goal.** One runtime, a fork of celld, that exceeds what both
 `~/vibestudio` and `~/chronolog-db` need. It replaces Vibestudio's bundled
@@ -2639,12 +2640,25 @@ pushes them.
    Actions enabled and the workflow reports active. The working E19 Linux
    candidate needs glibc 2.39. A smoke run on the release's Ubuntu 22.04
    baseline rejected it, while the previous pinned Linux artifact started.
-   An Ubuntu 22.04 build from exact fork revision `23c4855` is queued as
-   `vs-build-e19-linux-x64.service` after the benchmark and installed
-   checks. It verifies the binary on the same baseline and checks its
-   platform and digest before writing the artifact. Four-platform
-   verification and the matching host pin remain pending. See
+   The first Ubuntu 22.04 build stopped when the DoltLite build script tried
+   to fetch into the read-only source checkout. The checksum-verified
+   DoltLite 0.51.11 source is now staged in the writable build directory.
+   The retry, `vs-build-e19-linux-x64-retry.service`, builds exact fork
+   revision `23c4855`, verifies startup on Ubuntu 22.04 and records the
+   platform and binary digest. See `p5-e19-linux-x64-readonly-failure.log`,
+   `p5-e19-linux-x64-doltlite-fetch.log`, and
    `p5-e19-jammy-artifact-compatibility.log`.
+   The first full installed retry passed the Host compilation check and
+   stopped at the missing `node-pty` host dependency. The repository's
+   repair command rebuilt it and verified all native host contracts.
+   See `p5-installer-pty-failure.log` and the
+   `vs-p5-repair-host-terminal.service` journal.
+   Host `13062f4bf` updates the Dolt and provenance plans to use the normal
+   participant release gate. The checkout profile, installed test, and
+   durable benchmark now run in order once the Ubuntu 22.04 artifact is
+   available. The installed test uses that artifact with Host `13062f4bf`,
+   Base `23a33cf`, and System-testing `d19b0b0`. Four-platform verification
+   and the matching Host pin remain pending.
    The local merged host `29eead0fa` and Base `404f345` passed
    the host type checks, the authority catalog check, 24 host tests,
    four portable type configurations, and 223 focused template tests.

@@ -3006,10 +3006,16 @@ pushes them.
    build inputs, adopted repository reads, and template exchanges.
    Both directions of a reviewed exchange bind the participant's exact
    working copy, and imports register their file bytes to that participant.
-   All 30 focused tests passed. The queued fresh installation now uses
-   this Host and Base `993acc3`, so it also covers the preceding cleanup.
-   The native editor's dormant checkpoint adapter still has a legacy
-   save and import path. See `p5-native-development-access-check.log`.
+   All 30 focused tests passed. See `p5-native-development-access-check.log`.
+   Host `0b9d0e64a` additionally saves editor bases and imports checkpoints
+   through the verified participant's native history. It binds editor
+   reopen and checkpoint to the same participant and records captured
+   files as private uploads. Older editor markers require a fresh session.
+   All 87 focused Host checks passed across two runs. The product system
+   editor driver still reports unavailable, so the editor tests use a
+   fixture driver. The queued fresh installation uses this Host and Base
+   `993acc3`. See `p5-native-editor-participant-check.log` and
+   `p5-native-editor-participant-check2.log`.
    Host `83c1d2694` also removes the old runtime fork adapter. Implicit
    panels, context clones, subagents, and development context forks use
    the verified caller's participant revision. A retained runtime fork

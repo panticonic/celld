@@ -2725,13 +2725,17 @@ pushes them.
    Base `7c6d40c` binds the exact fetched revision before scanning its
    parents. The old query reproduced the missing merge on that database.
    The fixed query selected the parent that supplied the file and its
-   exact content origin on all three retained copies. See
+   exact content origin for all three files on all three retained copies.
+   The original-save lookup had the same issue for a save outside the
+   observer's local refs. Base `bd30de6` corrects it. On the retained
+   observer database, it finds both participants' original saves. See
    `p5-installed-native-merge-origin-observer-failure.log` and
-   `p5-installed-merge-origin/lineage-fixed.log`.
-   `vs-verify-native-install-merge-origin.service` builds the fixed Base
+   `p5-installed-merge-origin/all-merged-file-origins.log` and
+   `p5-installed-merge-origin/first-save-attribution.log`.
+   `vs-verify-native-install-fetched-ancestry.service` builds both fixes
    with Host `13062f4bf` and System-testing `911fdd5` and runs the same
    signed workflow on a fresh installation.
-   After that test, `vs-verify-p5-p6-installed-pair-merge-origin.service` uses
+   After that test, `vs-verify-p5-p6-installed-pair-fetched-ancestry.service` uses
    the same prepared release and current Chronolog package for a fresh
    two-workspace installation. It verifies separate signed identities,
    shared group writes, the protected revision and exact published file

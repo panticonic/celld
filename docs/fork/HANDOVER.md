@@ -2397,9 +2397,17 @@ pushes them.
    supervisor logs and sampler use the `p4-main-fork-benchmark3-` prefix
    in the private state directory.
    GitHub accepted the celld fork update at `23c4855`. The artifact
-   workflow dispatch was rejected because Actions is disabled on
-   `panticonic/celld`. Four-platform artifacts for E19 and the matching
-   host pin remain pending.
+   workflow dispatch still returns HTTP 422, `Actions has been disabled
+   for this repository`, even though the repository permissions report
+   Actions enabled and the workflow reports active. The working E19 Linux
+   candidate needs glibc 2.39. A smoke run on the release's Ubuntu 22.04
+   baseline rejected it, while the previous pinned Linux artifact started.
+   An Ubuntu 22.04 build from exact fork revision `23c4855` is queued as
+   `vs-build-e19-linux-x64.service` after the benchmark and installed
+   checks. It verifies the binary on the same baseline and checks its
+   platform and digest before writing the artifact. Four-platform
+   verification and the matching host pin remain pending. See
+   `p5-e19-jammy-artifact-compatibility.log`.
    The local merged host `29eead0fa` and Base `404f345` passed
    the host type checks, the authority catalog check, 24 host tests,
    four portable type configurations, and 223 focused template tests.

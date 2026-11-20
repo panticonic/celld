@@ -3013,17 +3013,26 @@ pushes them.
    files as private uploads. Older editor markers require a fresh session.
    All 87 focused Host checks passed across two runs. The product system
    editor driver still reports unavailable, so the editor tests use a
-   fixture driver. The queued fresh installation uses this Host and Base
-   `993acc3`. See `p5-native-editor-participant-check.log` and
+   fixture driver. See `p5-native-editor-participant-check.log` and
    `p5-native-editor-participant-check2.log`.
    Host `e3b039462` makes unauthored runtime builds track protected main.
    A replacement for a private runtime requires the verified owner and
    resolves that owner's current copy. The exact restore action keeps the
    already sealed executable. Runtime preparation refuses an unresolved
    context selector, and all 273 focused tests passed across two runs.
-   The generic build graph still exposes its old context lookup internally.
    See `p5-native-runtime-selector-check.log` and
    `p5-native-runtime-selector-check2.log`.
+   Host `0380e3a2c` and Base `80fc0db` remove the old context content
+   lookup and its workspace RPC. Private build and worker discovery
+   inputs enter the engine with the exact revision resolved for the
+   verified caller. Protected main remains the default for public
+   builds. The client and API documentation generation checks passed.
+   The focused Host checks passed 252 cases, with 77 cases rerun after
+   the final edits. See `p5-exact-build-state-tests.log`,
+   `p5-exact-workspace-source-tests.log`, and
+   `p5-exact-workspace-source-final.log`. The queued fresh installation
+   now selects these commits. The two changed Base exact-pair build
+   suites still require the release-pair run.
    Host `83c1d2694` also removes the old runtime fork adapter. Implicit
    panels, context clones, subagents, and development context forks use
    the verified caller's participant revision. A retained runtime fork

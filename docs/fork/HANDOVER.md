@@ -2960,9 +2960,15 @@ pushes them.
    fork chooses the revision and managed filesystem access materializes
    it on demand. All 159 runtime-service tests passed. This is a later
    candidate than the active benchmark and queued fresh installation.
-   The separately exposed `workspace.ensureContextFolder` RPC still
-   uses the old source projection. The installed shell extension only
-   consumes its scratch path. See `p5-native-runtime-folder-demand-check.log`.
+   See `p5-native-runtime-folder-demand-check.log`. Host `3fde24439`
+   now provisions only writable scratch through
+   `workspace.ensureContextFolder`. The shell extension already uses
+   that path for terminal confinement, and Base `fc145af` checks the
+   scratch-only response in its fixtures. The unused desktop folder
+   adapter and the host's old source provisioning hook are removed.
+   All 126 focused Host tests and the agent API reference check passed.
+   The paired shell case remains to verify on a fresh installation.
+   See `p5-native-terminal-scratch-check.log`.
    Host `83c1d2694` also removes the old runtime fork adapter. Implicit
    panels, context clones, subagents, and development context forks use
    the verified caller's participant revision. A retained runtime fork

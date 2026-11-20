@@ -3030,9 +3030,12 @@ pushes them.
    The focused Host checks passed 252 cases, with 77 cases rerun after
    the final edits. See `p5-exact-build-state-tests.log`,
    `p5-exact-workspace-source-tests.log`, and
-   `p5-exact-workspace-source-final.log`. The queued fresh installation
-   now selects these commits. The two changed Base exact-pair build
-   suites still require the release-pair run.
+   `p5-exact-workspace-source-final.log`. Host `c0bca1a11` also removes
+   the cache of old working heads and retains the retired-context
+   fence. All 43 workspace orchestration checks passed again
+   (`p5-native-retirement-check.log`). The queued fresh installation
+   selects `c0bca1a11` and Base `80fc0db`. The two changed Base exact-pair
+   build suites still require the release-pair run.
    Host `83c1d2694` also removes the old runtime fork adapter. Implicit
    panels, context clones, subagents, and development context forks use
    the verified caller's participant revision. A retained runtime fork

@@ -2555,9 +2555,16 @@ pushes them.
    Host `c03d41647` deletes the unused legacy activation path and requires
    attached native history and a protected main before startup completes.
    The 77 focused tests passed, along with a targeted check of the new
-   activation guard. The installed check is queued for this Host revision
-   with Base `04ccc83`. See `p5-native-activation-cleanup.log` and
+   activation guard. See `p5-native-activation-cleanup.log` and
    `p5-native-activation-guard.log`.
+   Host `2fd629be5` attaches native history without replay ownership or
+   retired-source records. Base `9168c9d` binds participants to their existing
+   Dolt branch and starts a new branch from shared main. The Base working-copy
+   test reopens a private commit, verifies isolation, and merges and publishes
+   through the approved shared-history path. All 90 focused Host and 15 Base
+   tests passed. The installed check is queued for this pair. See
+   `p5-native-context-binding-host.log` and
+   `p5-native-context-binding-base-final.log`.
    The representative fresh-history size check used full file placement
    metadata from 135 repositories and 5,135 files. The E19 Linux fixture
    staged the first native commit in 1.08 seconds and verified every
@@ -2649,7 +2656,7 @@ pushes them.
      to remove.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
-     The native installed check uses Host `c03d41647` and Base `04ccc83`.
+     The native installed check uses Host `2fd629be5` and Base `9168c9d`.
      Their integrated baselines are Host `integration/gad-participant-main`
      (`676d51652`) and Base `integration/gad-participant-base-main`
      (`79ec699`). The baselines include the signed-receipt retries and

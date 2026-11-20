@@ -2576,6 +2576,11 @@ pushes them.
    admission, exact publication approval, and rejection before attachment.
    All 64 focused Host tests and the authority ledger check passed. See
    `p5-native-vcs-mutations-host.log`.
+   Host `262de1521` uses the isolated native copy for workspace settings
+   and reads no-op previews from protected main. Tests verify that settings
+   publication carries the original approving caller, rejects invalid prepared
+   edits before writing, and preserves a publication error if cleanup also
+   fails. All 20 focused tests passed. See `p5-native-config-writer-host.log`.
    The representative fresh-history size check used full file placement
    metadata from 135 repositories and 5,135 files. The E19 Linux fixture
    staged the first native commit in 1.08 seconds and verified every
@@ -2669,7 +2674,7 @@ pushes them.
      to remove.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
-     The native installed check uses Host `1f323560b`, Base `23a33cf`,
+     The native installed check uses Host `262de1521`, Base `23a33cf`,
      and System-testing `571618b`. Preparation type-checks all three before
      building the workspace release.
      Their integrated baselines are Host `integration/gad-participant-main`

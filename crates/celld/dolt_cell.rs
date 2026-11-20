@@ -37,9 +37,9 @@
 //!   because the next checkout to that branch carries the live one over it.
 //! - DoltLite opens every connection on `main`, so the active branch is a
 //!   pointer, `_cf_DOLT.branch` in `main`'s working set, which every open reads
-//!   first (crash-safe: [`checkout`] flips it only after the target holds the
-//!   live local tables, so a crash before the flip reopens on the old branch,
-//!   whose copy is still current, and a crash after it opens the new one).
+//!   first. A checkout commits the pointer with the carried local tables
+//!   when one side is `main`. A checkout between other branches flips the
+//!   pointer after the target holds the live local tables.
 //! - A fork starts with empty local tables ([`fork_image`]): the declared
 //!   patterns are read back from `dolt_ignore`, and the identity-bound
 //!   `_cf_ALARM`, `_cf_WAKE` and `_cf_METADATA` are emptied too.
@@ -50,7 +50,7 @@
 //! are ordinary tables to its SQL.
 
 use anyhow::{anyhow, bail, Context};
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::{json, Value};
 
 /// The branch every Dolt cell is created on, and where the active-branch
@@ -1123,29 +1123,47 @@ fn switch(connection: &Connection, branch: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn carry_local_tables(connection: &Connection, target: &str, local: &[String]) -> anyhow::Result<()> {
+    call(connection, "dolt_checkout", &["--carry-ignored".to_string(), target.to_string()])
+        .with_context(|| format!("check out {target:?}"))?;
+    // The rules are rows of a versioned table the target may lack.
+    ensure_ignore_rules(connection, local)
+}
+
 /// Check out `target`, carrying the local tables (celld's `_cf_*` and the
-/// class's declared patterns) along. See the module documentation for the
-/// carry and the crash argument.
-///
-/// 1. `--carry-ignored` moves the live local tables onto `target` by catalog
-///    entry; the cost does not depend on their size.
-/// 2. The active-branch pointer flips on `main`: a plain switch to `main`
-///    (whose own local tables are stale and never read), the pointer write, a
-///    plain switch back. Landing on `main` carries the pointer with the
-///    tables, so it is one write.
+/// class's declared patterns) by catalog entry.
 pub(crate) fn checkout(connection: &Connection, target: &str, local: &[String]) -> anyhow::Result<()> {
     let source = active_branch(connection)?;
     if source == target {
         return Ok(());
     }
-    call(connection, "dolt_checkout", &["--carry-ignored".to_string(), target.to_string()])
-        .with_context(|| format!("check out {target:?}"))?;
-    // The rules are rows of a versioned table the target may lack.
-    ensure_ignore_rules(connection, local)?;
-    if target == HOME_BRANCH {
-        return set_pointer(connection, HOME_BRANCH);
+    if source == HOME_BRANCH || target == HOME_BRANCH {
+        let transaction = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;
+        let result = (|| -> anyhow::Result<()> {
+            if source == HOME_BRANCH {
+                set_pointer(&transaction, target)?;
+            }
+            carry_local_tables(&transaction, target, local)?;
+            if target == HOME_BRANCH {
+                set_pointer(&transaction, HOME_BRANCH)?;
+            }
+            Ok(transaction.commit()?)
+        })();
+        if let Err(error) = result {
+            // SQLite rolls back the data, while Dolt's selected branch
+            // belongs to the connection. Restore it before the next read.
+            if !matches!(active_branch(connection), Ok(branch) if branch == source) {
+                if let Err(restore) = switch(connection, &source) {
+                    return Err(error.context(format!("restore checkout source {source:?}: {restore:#}")));
+                }
+            }
+            return Err(error);
+        }
+        return Ok(());
     }
-    // Flip the pointer on `main`: the commit point of the checkout.
+    carry_local_tables(connection, target, local)?;
+    // Between two other branches, update the pointer on main once the
+    // destination holds the live local tables.
     switch(connection, HOME_BRANCH)?;
     let flipped = ensure_ignore_rules(connection, local).and_then(|()| set_pointer(connection, target));
     switch(connection, target)?;
@@ -1380,6 +1398,24 @@ mod tests {
             connection.query_row("SELECT count(*) FROM facts", [], |row| row.get::<_, i64>(0)).unwrap(),
             2,
         );
+    }
+
+    #[test]
+    fn missing_checkout_target_preserves_the_active_branch_and_local_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, c) = cell(dir.path());
+        c.execute("INSERT INTO _cf_KV(scope,k,v) VALUES ('s','k','local')", []).unwrap();
+
+        assert!(checkout(&c, "missing", &[]).is_err());
+        assert!(c.is_autocommit());
+        assert_eq!(active_branch(&c).unwrap(), HOME_BRANCH);
+        drop(c);
+
+        let reopened = open_connection(&path, celld_ltx::Engine::Dolt, None).unwrap();
+        attach_active_branch(&reopened).unwrap();
+        assert_eq!(active_branch(&reopened).unwrap(), HOME_BRANCH);
+        let value: String = reopened.query_row("SELECT v FROM _cf_KV", [], |row| row.get(0)).unwrap();
+        assert_eq!(value, "local");
     }
 
     #[test]

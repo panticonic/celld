@@ -2606,9 +2606,8 @@ pushes them.
    recorded merge decision, and the exact bytes from an independent
    observer. Both winner orders passed the driver simulation, recorded in
    `p5-installed-participant-race-driver-check.log`. The actual installed
-   fresh and normal-restart run is queued behind the benchmark. The
-   benchmark owns the loopback package registry. Packaging and the
-   installed fixture are bounded heavy jobs and use dedicated checkouts.
+   fresh and normal-restart run uses dedicated checkouts. Packaging
+   waits for the loopback package registry and sufficient memory.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired
@@ -2621,6 +2620,19 @@ pushes them.
    active with a 24-hour case budget. Its memory peaked at 5.91 GiB with
    zero recorded memory kills. Fork timing requires the completed validator
    result. See `p4-main-fork-benchmark3-durable-progress.json`.
+   The benchmark's last durable turn was 1,963. That mission succeeded and
+   its channel completion matched the canonical trajectory event and stored
+   eval result, while the benchmark stopped advancing in observation. The
+   test was cancelled through its normal command and the owned instance
+   stopped. The accumulated results and memory samples are retained.
+   System-testing `d19b0b0` verifies each mission's exact invocation against
+   paged channel history and the canonical stored result. It rejects missing
+   or foreign evidence instead of waiting on the live message view. All 17
+   focused tests passed. The corrected benchmark is queued after the native
+   installed and Linux artifact checks and will run the 65-turn soak before
+   the 10,000-turn case. See `p4-main-fork-benchmark3-before-cancel.json`,
+   `p4-main-fork-benchmark3-result.log`, and
+   `p4-native-durable-receipts-final.log`.
    GitHub accepted the celld fork update at `23c4855`. The artifact
    workflow dispatch still returns HTTP 422, `Actions has been disabled
    for this repository`, even though the repository permissions report
@@ -2675,7 +2687,7 @@ pushes them.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
      The native installed check uses Host `262de1521`, Base `23a33cf`,
-     and System-testing `571618b`. Preparation type-checks all three before
+     and System-testing `d19b0b0`. Preparation type-checks all three before
      building the workspace release.
      Their integrated baselines are Host `integration/gad-participant-main`
      (`676d51652`) and Base `integration/gad-participant-base-main`

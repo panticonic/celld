@@ -2955,6 +2955,14 @@ pushes them.
    context-fork RPC and its handler. The matching fresh installation
    is queued behind the benchmark in `vs-verify-native-root-bootstrap.service`.
    See `p5-native-root-host-check.log`.
+   Host `f8b77922b` stops conversation and subagent forks from also
+   creating a source directory in the old store. The native participant
+   fork chooses the revision and managed filesystem access materializes
+   it on demand. All 159 runtime-service tests passed. This is a later
+   candidate than the active benchmark and queued fresh installation.
+   The separately exposed `workspace.ensureContextFolder` RPC still
+   uses the old source projection. The installed shell extension only
+   consumes its scratch path. See `p5-native-runtime-folder-demand-check.log`.
    Host `83c1d2694` also removes the old runtime fork adapter. Implicit
    panels, context clones, subagents, and development context forks use
    the verified caller's participant revision. A retained runtime fork

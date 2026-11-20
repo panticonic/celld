@@ -3170,6 +3170,12 @@ pushes them.
    See `p5-native-root-bootstrap-release-prepare-before-gmail-fixture-fix.log`,
    `p5-gmail-native-fixture.log`, and
    `p5-native-root-bootstrap-current-templates.tsv`.
+   A separate run on the exact candidate passed the 10 trajectory,
+   workspace search, and problem-reporting tests. Its build fixture hit
+   the diagnostic run's smaller Node heap and the combined run timed out
+   during the scaffold suite. The full preparation queue still runs
+   both build suites with its release memory settings. See
+   `p5-final-release-pair-tests.log`.
    It now repeats the private saved and draft reopen checks, the signed
    publication race, and the reviewed two-parent merge after a normal
    restart, using the existing model-free fixtures. The earlier

@@ -2258,6 +2258,20 @@ pushes them.
    control change, agreed on the retained rows, and preserved distinct
    row owners after a normal restart. The older read view stayed pinned.
    See `chronolog-88716db-replay-native.log`.
+   Chronolog main advanced to `1e4e840` with push discovery and
+   ordinary replication independent of hosted discovery. The local port
+   merged that revision at `f7351ce`. Lint, type checking, and all 94
+   focused peer-session tests passed. The host verified the clean archive
+   SHA-256 `d626497023d3a2c1a78b8b6d5066ba582faf6afe74b8cacf23297284a7debd75`
+   and manifest fingerprint
+   `8a93d55d66ddfa419d09a847ee8fc38a27b0f68e622f0cb2a041e4aae224d35b`.
+   The exact archive passed both native two-node checks on runtime
+   `61862f2`. Signed participants wrote and reopened two workspace groups,
+   and SQL replay preserved both owners, refused cross-owner writes, and
+   converged after the signed generation change. See
+   `p6-chronolog-1e4e840-check.log`, `chronolog-1e4e840-host-package.json`,
+   `chronolog-1e4e840-workspace-native.log`, and
+   `chronolog-1e4e840-replay-native.log`.
    Host `f64f4d2b2` stages the Chronolog package in application release
    builds. Once the owner publishes the Chronolog release run, set
    `CHRONOLOG_RELEASE_RUN`, `CHRONOLOG_RELEASE_SOURCE`, and
@@ -3064,11 +3078,15 @@ pushes them.
    both origins. A physical fork starts with an empty index, and
    a normal reopen retains correct results. See
    `p5-workspace-commit-index/evidence.log`.
-   The queued installation uses this exact Host and Base pair.
+   The queued installation uses this exact Host and Base pair and
+   the verified Chronolog `f7351ce` package.
    It now repeats the private saved and draft reopen checks, the signed
    publication race, and the reviewed two-parent merge after a normal
    restart, using the existing model-free fixtures. The earlier
    installed evidence is independent of this pending rerun.
+   The running P4 benchmark retains its sealed package and had recorded
+   1,264 successful turns as of November 20, 20:30 UTC, after completing
+   the 65-turn soak. See `p4-native-clone-source-durable-progress.json`.
    GitHub still shows no Actions run for fork commit `61862f2`.
    Host `363c3b6cf` requires a verified participant for development
    build inputs, adopted repository reads, and template exchanges.

@@ -2993,6 +2993,15 @@ pushes them.
    it is running. All 113 focused Host tests passed. Installed verification
    of the combined candidate remains. See
    `p5-native-caller-build-source-check.log`.
+   Host `574facebc` and Base `993acc3` remove the public VCS fallback
+   to the old store and its reference visibility RPC. Public reads and
+   writes wait for native history. An extension relay with a verified
+   signed reader uses that reader's working copy for the authorized read.
+   The 115 focused Host checks passed and the final 35 VCS tests passed
+   after strengthening the relay assertions. The native workspace graph
+   returns the originating invocation coordinate. Direct transcript node
+   inspection and neighbors still need native implementations. See
+   `p5-native-public-vcs-check2.log` and `p5-native-public-vcs-check3.log`.
    Host `83c1d2694` also removes the old runtime fork adapter. Implicit
    panels, context clones, subagents, and development context forks use
    the verified caller's participant revision. A retained runtime fork

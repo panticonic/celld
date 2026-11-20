@@ -2479,6 +2479,15 @@ pushes them.
    Host `4b2e6731d` and Base `26055fe`. See
    `p5-participant-reservation-before.log` and
    `p5-participant-reservation-after.log`.
+   A separate E19 Linux process-loss run bundled exact Host `4b2e6731d`
+   and Base `26055fe`. It killed the runtime with SIGKILL after the native
+   storage fork finished and before the reservation reply. After restart
+   it advanced shared main and retried the reservation three times at once.
+   The same physical working copy kept the exact original commit and event
+   rows, while the canonical store held one active allocation and one
+   grant. The fixture uses a local adapter around the native fork call.
+   See `p5-participant-reservation-native/evidence.log` in the private
+   state directory. The build and process driver are in the same directory.
    The native E19 concurrency scenario publishes from two independent
    work cells at once. Before approval, each read grant refuses push.
    Exactly one concurrent push succeeds. The other cell resolves one

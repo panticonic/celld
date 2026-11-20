@@ -2643,16 +2643,21 @@ pushes them.
    The first Ubuntu 22.04 build stopped when the DoltLite build script tried
    to fetch into the read-only source checkout. The checksum-verified
    DoltLite 0.51.11 source is now staged in the writable build directory.
-   The retry, `vs-build-e19-linux-x64-retry.service`, builds exact fork
-   revision `23c4855`, verifies startup on Ubuntu 22.04 and records the
-   platform and binary digest. See `p5-e19-linux-x64-readonly-failure.log`,
-   `p5-e19-linux-x64-doltlite-fetch.log`, and
-   `p5-e19-jammy-artifact-compatibility.log`.
+   The retry, `vs-build-e19-linux-x64-retry.service`, built exact fork
+   revision `23c4855` and ran `celld --version` on Ubuntu 22.04. The
+   binary's maximum glibc requirement is 2.34. The Linux x64 payload and
+   manifest are in `p5-e19-local-artifacts/celld-linux-x64`, with SHA-256
+   `f5a09643715e0d4e799fac628e3e88394264866e03f17a87ef60f596b777802b`.
+   See `p5-e19-linux-x64-build.log` and the service journal.
+   The hosted workflow again returned HTTP 422 for this exact remote
+   commit. See `p5-e19-hosted-artifacts-current.log`.
    The first full installed retry passed the Host compilation check and
    stopped at the missing `node-pty` host dependency. The repository's
-   repair command rebuilt it and verified all native host contracts.
-   See `p5-installer-pty-failure.log` and the
-   `vs-p5-repair-host-terminal.service` journal.
+   repair command rebuilt it. The current Host passed 38 artifact
+   contracts, the executable and import smoke checks, three native host
+   contracts, and all 29 workflow checks. See
+   `p5-installer-pty-failure.log`, `p5-current-host-artifact-contracts.log`,
+   and `p5-current-host-workflows.log`.
    Host `13062f4bf` updates the Dolt and provenance plans to use the normal
    participant release gate. The checkout profile and installed participant
    test run once the Ubuntu 22.04 artifact is available. The installed test

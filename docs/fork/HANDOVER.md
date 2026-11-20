@@ -2299,9 +2299,13 @@ pushes them.
    second scaffold check still interpreted the old manifest. Host
    `370b4c4eb` keeps the scaffold receipt and source presence checks while
    using protected configuration for an already published workspace. All
-   56 focused bootstrap and loader tests passed. The installed reopen
-   uses the exact persisted publication and the replacement epoch-1 build
-   `1cf59049e` under `vs-verify-approved-protected-bootstrap.service`.
+   56 focused bootstrap and loader tests passed. The replacement epoch-1
+   build `1cf59049e` reached dependency preparation, which rejected the
+   surrounding hub's epoch-0 release resources. Host `cbdb73278` binds
+   retained children to their own packaged workspace resources and exact
+   template pins. All 82 focused hub and snapshot tests passed. The fixture
+   now prepares a separate epoch-1 release and retries the exact previously
+   approved publication under `vs-verify-epoch-own-release.service`.
    All four host type configurations passed on `16088a5da`. The first-time
    migration fixture used ordinary startup on `b5742d1` to save a private
    copy, then restarted the same workspace on E19. The owner reopened the
@@ -2358,7 +2362,7 @@ pushes them.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
      Current local merge candidates are Host `integration/gad-participant-main`
-     (`370b4c4eb`) and Base `integration/gad-participant-base-main`
+     (`cbdb73278`) and Base `integration/gad-participant-base-main`
      (`05ecc1b`). Both include the signed-receipt retries and initial
      shared history workflow above. The Host
      merge retains one console-history filter and

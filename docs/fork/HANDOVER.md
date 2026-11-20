@@ -2439,10 +2439,17 @@ pushes them.
    reopen. Legacy commit recall rebuilds its index from published ancestry
    and removes older entries for private saved commits. The 73 focused
    Host tests and 43 projected Base tests passed. The installed settings
-   publication now also checks recall of that exact native commit. A
-   backfill of older native commits and native conversation visibility
-   for recall remain open. See `p5-native-commit-recall-host.log` and
+   publication now also checks recall of that exact native commit. See
+   `p5-native-commit-recall-host.log` and
    `p5-native-commit-recall-base-final.log`.
+   Host `e17cef443` and Base `e8de701` backfill older native commits in
+   pages bound to an immutable protected revision. Each page and its
+   progress marker commit together. After interruption the host resumes
+   that revision, then indexes the additions through the latest protected
+   head. All 88 focused Host and 44 projected Base tests passed, including
+   interruption and atomic rollback. The installed check uses this paired
+   head. Native conversation visibility for recall remains open. See
+   `p5-native-commit-backfill-host.log` and `p5-native-commit-backfill-base.log`.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired

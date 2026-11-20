@@ -2689,7 +2689,10 @@ pushes them.
    `p5-installer-base-types-failure.log` and
    `p5-installer-invocation-payload-types-failure.log`. The retry prepares
    Host `13062f4bf`, Base `a57fd11`, and System-testing `911fdd5` to run
-   against the verified Ubuntu 22.04 binary.
+   against the verified Ubuntu 22.04 binary. Those exact sources passed
+   their Host and userland type configurations and all 17 benchmark tests.
+   The workspace package is building in `p5-root-initialization-release-prepare.scope`.
+   See `p5-native-current-main-release-prepare.log`.
    After that test, `vs-verify-p5-p6-current-installed-pair-candidate.service` uses
    the same prepared release and current Chronolog package for a fresh
    two-workspace installation. It verifies separate signed identities,

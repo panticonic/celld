@@ -3215,10 +3215,16 @@ pushes them.
    `8424cf1` makes the three private fixture cases start in a seeded
    independent copy, checks the protected head before querying its
    ancestors during cleanup, and corrects two filesystem test assumptions.
+   The retained directory-removal trajectory passed the corrected validator
+   without another model call. Host `e249573ff` runs the image extension
+   smoke and headless panel integration from the published host build
+   generation. Both fixtures previously looked for a retired loose
+   `dist/server.mjs` path and could silently skip.
    `vs-verify-cutover-agent-lifetime-tests.service` queues a fresh package,
    the failed sample cases, the four model-free regressions and five
-   further model-free integration and provenance checks, and the focused
-   fixture tests. These runs remain pending.
+   further model-free integration and provenance checks, the two corrected
+   integration entry points, and the focused fixture tests. These runs
+   remain pending.
    It now repeats the private saved and draft reopen checks, the signed
    publication race, and the reviewed two-parent merge after a normal
    restart, using the existing model-free fixtures. The earlier

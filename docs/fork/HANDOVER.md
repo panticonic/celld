@@ -2360,13 +2360,20 @@ pushes them.
    generation without rebuilding the old replay plan. A replaced freeze
    cannot be sealed with an older receipt, and the sealed source cannot
    resume writes. All 26 focused host and 69 Base tests passed. The
-   installed test saves a private copy on the older runtime, migrates it,
-   and reopens it again using the seal. It is queued under
-   `vs-verify-installed-history-seal.service`.
-   The model-free 10,000-turn benchmark is queued serially under
-   `vs-verify-main-fork-benchmark3.service`. It starts after the installed
-   seal check passes and requires 18 GiB available on the host before it
-   admits its 12 GiB fixture. It uses one test lane and zero swap.
+   installed test saved a private copy on the older runtime, migrated it,
+   and reopened it on a third start using the sealed record. The owner
+   read the exact revision and bytes again, and shared history stayed
+   unchanged. All three starts stopped normally. The four host and four
+   Base type configurations passed, and the exact paired release built.
+   See `p5-installed-history-seal-evidence.log`. The legacy source still
+   serves retained data and its other runtime duties.
+   The model-free 10,000-turn benchmark started as
+   `st_9e007686d40145a6827546df05aedd9e` under
+   `vs-verify-main-fork-benchmark3.service`. It runs the exact paired
+   release and E19 Linux candidate with one lane, a 12 GiB memory cap
+   and zero swap. It checked for 18 GiB available before launch. The
+   supervisor logs and sampler use the `p4-main-fork-benchmark3-` prefix
+   in the private state directory.
    GitHub accepted the celld fork update at `23c4855`. The artifact
    workflow dispatch was rejected because Actions is disabled on
    `panticonic/celld`. Four-platform artifacts for E19 and the matching

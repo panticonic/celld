@@ -3102,7 +3102,7 @@ pushes them.
    both origins. A physical fork starts with an empty index, and
    a normal reopen retains correct results. See
    `p5-workspace-commit-index/evidence.log`.
-   The queued installation uses Host `aab9f8635` merged from main
+   The queued installation uses Host `fd66aa59d` merged from main
    `5ca222112`, Base `0e5f782`, and the verified Chronolog `f7351ce`
    package. It pins the following template revisions.
 
@@ -3130,6 +3130,16 @@ pushes them.
    Two additional tests built native subprocess artifacts from that
    revision and verified self-contained launch and binary data across the
    supervisor and disk worker. See `p5-merged-release-native-operations-source.log`.
+   The queued preparation built infrastructure and reached the full Host
+   type check. It caught mismatches in the workspace search result and
+   trajectory provenance interface. Host `fd66aa59d` fixes those errors
+   and their test fixtures. All four Host type-check projects and 46
+   VCS and publication tests passed on that checkout. See
+   `p5-native-host-types-and-vcs.log` and the archived first preparation
+   log `p5-native-root-bootstrap-release-prepare-aab9f8635.log`.
+   The updated preparation waits for 20 GiB available, caps the build
+   at 9 GiB and its registry at 512 MiB, and retains the 10 GiB
+   machine-memory stop guard.
    The queue repeats the contract checks and runs Host and Base type checks
    before packaging. See `p5-native-root-bootstrap-current-templates.tsv`
    for the full revisions.

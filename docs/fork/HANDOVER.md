@@ -2686,9 +2686,14 @@ pushes them.
      to remove.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
-     The native installed check uses Host `262de1521`, Base `23a33cf`,
-     and System-testing `d19b0b0`. Preparation type-checks all three before
-     building the workspace release.
+     The native installed check uses Host `1db9b4a2c`, Base `23a33cf`,
+     and System-testing `d19b0b0`. The first full Host check caught two
+     publication timestamp fixtures and one missing website authority field.
+     The corrected fixtures passed all 219 focused tests. The full check
+     restarts under `vs-verify-native-install-retry.service` after the
+     running Linux artifact build and its checkout profile. See
+     `p5-native-current-main-release-prepare-first.log` and
+     `p5-native-host-release-fixtures.log`.
      Their integrated baselines are Host `integration/gad-participant-main`
      (`676d51652`) and Base `integration/gad-participant-base-main`
      (`79ec699`). The baselines include the signed-receipt retries and

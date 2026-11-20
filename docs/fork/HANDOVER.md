@@ -2434,6 +2434,15 @@ pushes them.
    Base tests passed. The full Base type checks are queued with the paired
    release. Restricted memory recall still calculates visibility from the
    legacy workspace history. See `p5-trajectory-evidence-base-final.log`.
+   Host `b10352e0c` and Base `793f33b` index the exact native commit at
+   each protected publication and retry the current protected commit on
+   reopen. Legacy commit recall rebuilds its index from published ancestry
+   and removes older entries for private saved commits. The 73 focused
+   Host tests and 43 projected Base tests passed. The installed settings
+   publication now also checks recall of that exact native commit. A
+   backfill of older native commits and native conversation visibility
+   for recall remain open. See `p5-native-commit-recall-host.log` and
+   `p5-native-commit-recall-base-final.log`.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired

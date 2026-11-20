@@ -3223,6 +3223,18 @@ pushes them.
    smoke and headless panel integration from the published host build
    generation. Both fixtures previously looked for a retired loose
    `dist/server.mjs` path and could silently skip.
+   The baseline image-extension smoke and all 12 Iroh E2E cases passed.
+   The terminal smoke found the CLI's unstaged ownership reaper.
+   Host `bbb3da7a7` stages and checks the reaper files beside the CLI.
+   Host `435ed7b6e` routes the headless panel fixture's hosted execution
+   requests to the recorded entity, and its focused integration rerun
+   passed. The browser baseline passed three startup cases and failed two
+   workflow cases before being interrupted. Its logs showed the desktop
+   template lookup tried to open a participant before any work context
+   existed. Host `161c49cde` and Base `6e17323` instead read the exact
+   published event from canonical Dolt history for that trusted client.
+   All 52 focused Host service and history tests passed. The browser
+   suite will rerun in full on those revisions.
    `vs-verify-cutover-agent-lifetime-tests.service` queues a fresh package,
    nine fresh runs for the sample cases still failing, four model-free regressions and five
    further model-free integration and provenance checks, the two corrected

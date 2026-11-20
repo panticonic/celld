@@ -2562,7 +2562,7 @@ pushes them.
    Dolt branch and starts a new branch from shared main. The Base working-copy
    test reopens a private commit, verifies isolation, and merges and publishes
    through the approved shared-history path. All 90 focused Host and 15 Base
-   tests passed. The installed check is queued for this pair. See
+   tests passed. See
    `p5-native-context-binding-host.log` and
    `p5-native-context-binding-base-final.log`.
    The representative fresh-history size check used full file placement
@@ -2591,8 +2591,8 @@ pushes them.
    observer. Both winner orders passed the driver simulation, recorded in
    `p5-installed-participant-race-driver-check.log`. The actual installed
    fresh and normal-restart run is queued behind the benchmark. The
-   benchmark owns the loopback package registry and the Host integration
-   checkout. Packaging and the installed fixture are bounded heavy jobs.
+   benchmark owns the loopback package registry. Packaging and the
+   installed fixture are bounded heavy jobs and use dedicated checkouts.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired
@@ -2658,7 +2658,9 @@ pushes them.
      to remove.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
-     The native installed check uses Host `2fd629be5` and Base `9168c9d`.
+     The native installed check uses Host `c2b8b3324`, Base `b18a030`,
+     and System-testing `571618b`. Preparation type-checks all three before
+     building the workspace release.
      Their integrated baselines are Host `integration/gad-participant-main`
      (`676d51652`) and Base `integration/gad-participant-base-main`
      (`79ec699`). The baselines include the signed-receipt retries and
@@ -2706,9 +2708,13 @@ pushes them.
      `p5-native-current-host-merge.log`.
      Base `b18a030` ports main's native observation checks to EvalKernel.
      All 39 journal tests passed. See `p5-native-context-current-base-journal.log`.
-     System-testing `f657e13` needs its new runner calls wired to the current
-     dynamic-code APIs. The queued installed test keeps its earlier exact
-     Host and Base inputs.
+     System-testing `571618b` merges `f657e13` and `5296454`. Ordinary
+     suites, retained triage, and native evidence probes all use the
+     dynamic-code execution API. All 32 focused runner, open-goal, and
+     compaction tests passed with the current Host schemas and merged
+     Base. See `p5-native-current-system-merge-schemas.log`. Packaging and
+     the installed fresh/reopen/publication check remain queued for this
+     exact set of commits.
      Pi `c6d518177` is a fast-forward from `2f530d750`. The five staged
      archives passed fresh SHA-256, npm SHA-512, package identity, contents,
      and dependency checks. See `pi-native-release-package-owner-verification.log`.

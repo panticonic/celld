@@ -2295,15 +2295,23 @@ pushes them.
    scaffold before reaching the protected manifest. Host `16088a5da`
    supplies the protected launch configuration before resolving an
    existing workspace. All 31 focused loader and creation tests passed.
-   Its epoch-1 test build `9021bd265` was retained. Reopening the already
-   published fixture with matching release inputs is queued under
-   `vs-verify-published-config-epoch-release.service`.
+   The epoch-1 test build `9021bd265` reached template bootstrap, where a
+   second scaffold check still interpreted the old manifest. Host
+   `370b4c4eb` keeps the scaffold receipt and source presence checks while
+   using protected configuration for an already published workspace. All
+   56 focused bootstrap and loader tests passed. The installed reopen
+   uses the exact persisted publication and the replacement epoch-1 build
+   `1cf59049e` under `vs-verify-approved-protected-bootstrap.service`.
    All four host type configurations passed on `16088a5da`. The first-time
-   migration fixture is queued after the version handoff and native replay
-   checks as `vs-verify-first-installed-legacy-transition.service`. It uses
-   the ordinary startup path to save a private copy on a pre-scoped runtime,
-   then upgrades the same fixture and checks the original owner's copy,
-   the second participant's access, and the shared main event.
+   migration fixture used ordinary startup on `b5742d1` to save a private
+   copy, then restarted the same workspace on E19. The owner reopened the
+   exact context and original file bytes, the second participant could not
+   access them, and the shared main event stayed the same. Both starts
+   stopped normally. See `p5-installed-legacy-transition-evidence.log`.
+   The exact E19 Linux candidate independently replayed the saved real
+   snapshot and verified 5,135 files across 135 repositories. The native
+   export was 4,278,036 bytes and the participant fork took 386 ms in this
+   run. See `p5-e19-actual-replay-materialization.log`.
    GitHub accepted the celld fork update at `23c4855`. The artifact
    workflow dispatch was rejected because Actions is disabled on
    `panticonic/celld`. Four-platform artifacts for E19 and the matching
@@ -2331,8 +2339,8 @@ pushes them.
    `native-gad-d1cc92b-ci-linux.log` and
    `native-gad-seed-protected-ci-linux.log`. The matching companion releases
    are still local candidates.
-   Needs §4.1 item 3, the cross-workspace P2P carrier, and Chronolog step 6
-   below.
+   The cross-workspace carrier passed on installed Linux with the local
+   E19 candidate. The four-platform artifact and pin gate remains.
    - A Chronolog node per workspace node and the `chronolog` host service.
    - Key custody, invite and join, and agent writes through approval (Q4).
    - Chronolog authority for pushes into a shared GAD `main`.
@@ -2350,7 +2358,7 @@ pushes them.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
      Current local merge candidates are Host `integration/gad-participant-main`
-     (`57f501437`) and Base `integration/gad-participant-base-main`
+     (`370b4c4eb`) and Base `integration/gad-participant-base-main`
      (`05ecc1b`). Both include the signed-receipt retries and initial
      shared history workflow above. The Host
      merge retains one console-history filter and

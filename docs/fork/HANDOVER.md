@@ -2532,6 +2532,15 @@ pushes them.
    migration observations record their original runs. See
    `p5-retirement-storage-bootstrap-after.log` and
    `verify-staged-native-participants.sh`.
+   Base `04ccc83` stages fresh template placements and installation
+   provenance in a single native Dolt revision. Staging leaves shared
+   main at its initial head. Installation requires the exact staged
+   revision and input digest. The E19 Linux fixture verified the template
+   file placement, rejection of a changed input or event, publication
+   into main, and a normal restart. See
+   `p5-native-fresh-root/final-evidence.log`. Host startup still needs to
+   use this path through its protected publication gate before advancing
+   the queued installed candidate.
    The native E19 concurrency scenario publishes from two independent
    work cells at once. Before approval, each read grant refuses push.
    Exactly one concurrent push succeeds. The other cell resolves one

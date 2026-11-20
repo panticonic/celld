@@ -2524,8 +2524,8 @@ pushes them.
    Production bootstrap in Host `238eb1890` now connects native workspace
    retirement to the runtime's storage reclamation queue. The host passes
    the exact retired copy to that queue after canonical archival succeeds.
-   All 74 focused Host tests passed. The queued native installed check uses
-   Host `238eb1890` and Base `9323953`. It provisions a fresh E19 workspace,
+   All 74 focused Host tests passed. The native installed check provisions
+   a fresh E19 workspace,
    saves private bytes, restarts E19, verifies the owner's copy and
    independent reader, then runs publication and configuration checks.
    It replaces the queued legacy retention and upgrade checks. Earlier
@@ -2538,9 +2538,13 @@ pushes them.
    revision and input digest. The E19 Linux fixture verified the template
    file placement, rejection of a changed input or event, publication
    into main, and a normal restart. See
-   `p5-native-fresh-root/final-evidence.log`. Host startup still needs to
-   use this path through its protected publication gate before advancing
-   the queued installed candidate.
+   `p5-native-fresh-root/final-evidence.log`. Host `b78252080` now uses
+   that path for fresh template workspaces. It compares the staged files
+   with the prepared template, admits the exact root through the existing
+   protected creation gate and reopens native history directly after a
+   normal restart. All 89 focused Host tests passed. The queued installed
+   run uses Host `b78252080` and Base `04ccc83` and checks that startup
+   selected the native root. See `p5-native-fresh-root-host-final.log`.
    The native E19 concurrency scenario publishes from two independent
    work cells at once. Before approval, each read grant refuses push.
    Exactly one concurrent push succeeds. The other cell resolves one
@@ -2623,7 +2627,7 @@ pushes them.
      to remove.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
-     The native installed check uses Host `238eb1890` and Base `9323953`.
+     The native installed check uses Host `b78252080` and Base `04ccc83`.
      Their integrated baselines are Host `integration/gad-participant-main`
      (`676d51652`) and Base `integration/gad-participant-base-main`
      (`79ec699`). The baselines include the signed-receipt retries and

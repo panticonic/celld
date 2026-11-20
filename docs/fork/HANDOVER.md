@@ -3240,10 +3240,11 @@ pushes them.
    further model-free integration and provenance checks, the two corrected
    integration entry points, and the focused fixture tests. These runs
    remain pending.
-   It now repeats the private saved and draft reopen checks, the signed
-   publication race, and the reviewed two-parent merge after a normal
-   restart, using the existing model-free fixtures. The earlier
-   installed evidence is independent of this pending rerun.
+   The fresh-install retry passed the direct CLI provenance and private
+   visibility checks, the saved and draft reopen checks after a normal
+   restart, and the signed publication race followed by a reviewed
+   two-parent merge. Evidence is in
+   `p5-native-root-bootstrap-retry-publication-evidence.log`.
    After that check, `vs-verify-p6-native-root-shared-history.service`
    uses the same prepared release to install two fresh workspaces.
    It checks independently signed group writes, cross-owner write

@@ -3176,6 +3176,21 @@ pushes them.
    during the scaffold suite. The full preparation queue still runs
    both build suites with its release memory settings. See
    `p5-final-release-pair-tests.log`.
+   Release preparation then completed for Host `81726bc42`, Base
+   `7d4535f` and the pinned companions. The two build suites passed
+   22 tests with the release memory settings. The first fresh
+   installation passed doctor and loaded the exact protected workspace
+   source. Its fixture expected a synthetic agent invocation behind a
+   direct CLI edit. The follow-up fixture verifies that the direct command
+   points to its exact private work unit. Agent invocation evidence is
+   exercised in the separate system-test run. The fresh-install and
+   two-workspace checks are queued to repeat after that run.
+   The requested test sweep is managed by
+   `vs-verify-cutover-release-tests.service`. Its pinned inputs, eight
+   deterministic cases, 30 model-driven cases, and retained run receipts
+   are under `cutover-release-verification/`. It runs the celld E2E
+   suite, Testkit, the managed system tests, and the Vibestudio smoke,
+   transport, and browser integration suites without overlapping them.
    It now repeats the private saved and draft reopen checks, the signed
    publication race, and the reviewed two-parent merge after a normal
    restart, using the existing model-free fixtures. The earlier

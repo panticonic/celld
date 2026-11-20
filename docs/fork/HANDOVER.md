@@ -3037,8 +3037,17 @@ pushes them.
    including the check for a cross-channel link
    (`p5-retired-planner-source-smoke.log`). The queued native installation
    verifies that a writer can query and follow their private edit while
-   a second participant who knows its exact ID cannot. GAD's private
-   log hash chain is separate and remains to be removed.
+   a second participant who knows its exact ID cannot.
+   Host `a23423db4` and Base `893bd00` remove GAD's private log hash
+   chain and its wire fields. Appends compare the expected sequence
+   and envelope ID, fork receipts retain the parent's exact envelope,
+   and fresh schema 69 checks sequence gaps, fork boundaries and
+   head pointers. All 52 focused Host checks passed. A fresh Base
+   database passed the direct append, fork and integrity smoke
+   (`p5-log-coordinate-base-smoke.log`). The queued release selects
+   these commits with System-testing `fc948a9` and Google Workspace
+   `769f815`, whose fixtures now use envelope coordinates. The Base
+   and companion suites and installation run are still pending.
    Host `363c3b6cf` requires a verified participant for development
    build inputs, adopted repository reads, and template exchanges.
    Both directions of a reviewed exchange bind the participant's exact

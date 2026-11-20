@@ -2396,8 +2396,13 @@ pushes them.
    The original read shape and the recovery path for older Base builds
    remain supported. All 77 focused Host tests and two Base tests passed.
    The same queued installed restart now covers both the canonical seal
-   and the original template receipt using this newer pair. See
+   and the original template receipt. See
    `p5-native-replay-seal-host-final.log` and `p5-native-replay-seal-base.log`.
+   The queued Host head `c2c7e7f1f` also requires a template exchange to
+   match the requested working revision before preparing file changes.
+   Both directions now reject a stale revision without materializing or
+   changing either side. All 15 focused exchange and development service
+   tests passed. See `p5-template-exchange-exact-head.log`.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired
@@ -2405,6 +2410,10 @@ pushes them.
    and zero swap. It checked for 18 GiB available before launch. The
    supervisor logs and sampler use the `p4-main-fork-benchmark3-` prefix
    in the private state directory.
+   At 13:25 CET, the benchmark's durable mission records contained 420
+   successful model-free turns and one executing turn. The runner remains
+   active with a 24-hour case budget. Fork timing requires the completed
+   validator result. See `p4-main-fork-benchmark3-durable-progress.json`.
    GitHub accepted the celld fork update at `23c4855`. The artifact
    workflow dispatch still returns HTTP 422, `Actions has been disabled
    for this repository`, even though the repository permissions report

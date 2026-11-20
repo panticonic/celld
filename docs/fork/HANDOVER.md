@@ -2466,9 +2466,19 @@ pushes them.
    interrupted initial backfill preserves legacy published recall until it
    completes. All 15 Host history tests and 83 projected Base tests passed,
    including rollback and recovery after removal of the old commit tables.
-   The queued installed upgrade uses this pair. See
+   See
    `p5-native-commit-projection-host.log` and
    `p5-native-commit-projection-base.log`.
+   Base `26055fe` records the participant reservation and its owner in
+   one local transaction. An injected identity write failure previously
+   left a reservation the retirement path could not identify. The new
+   test verifies rollback before retirement. A separate restart test on
+   the storage fixture loses the fork reply and advances shared history.
+   Three repeat requests still recover the original fork and one grant.
+   All 14 focused Base tests passed. The installed check is queued with
+   Host `4b2e6731d` and Base `26055fe`. See
+   `p5-participant-reservation-before.log` and
+   `p5-participant-reservation-after.log`.
    The native E19 concurrency scenario publishes from two independent
    work cells at once. Before approval, each read grant refuses push.
    Exactly one concurrent push succeeds. The other cell resolves one

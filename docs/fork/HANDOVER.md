@@ -2858,6 +2858,16 @@ pushes them.
    first failure can be inspected while its managed fixture is still
    running. The supervisors stage these checks serially with the same
    22 GiB start threshold and 10 GiB machine reserve.
+   Host `22087f52a` removes the managed filesystem route to the old
+   workspace store. Calls wait for native history while it attaches
+   and fail if the participant copy is unavailable. All 134 focused
+   filesystem and workspace orchestration tests passed. Base
+   `f03b389` removes conversation recall's use of the old context
+   graph. The caller's own channel and the host-attested native
+   causes now determine which messages can be recalled. Its focused
+   privacy and recall tests are queued. Both commits are in separate
+   local candidates while the sealed settings and benchmark fixture
+   runs on its original revisions.
    The completed checkout measurements above leave the 20 ms gate open.
    Four-platform verification and the matching Host pin remain pending.
    The local merged host `29eead0fa` and Base `404f345` passed

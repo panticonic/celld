@@ -1751,10 +1751,10 @@ those of `docs/dolt-redesign.md` §10.
 
 ### 4.4 Earlier Chronolog port (`feature/celld-host`)
 
-The current port targets Chronolog main `d014879` and is recorded in §6. The
-evidence below belongs to the older host architecture. Current main has
-already removed the daemon and SSB transport. The current
-`materializer-doltlite` package provides the active native adapter.
+The current port is recorded in §5, item 3. Local port `63194c9` includes
+Chronolog main `d1cc92b` and uses the celld adapter in `peer-session`.
+Current main has removed the old daemon and SSB transport. The evidence
+below belongs to the earlier host architecture.
 
 - Chronolog `f452310` removed its temporary peer-authorization
   debugging route and documented the actual object-owned stream
@@ -2216,8 +2216,13 @@ pushes them.
    archive and a fixture GitHub response. See
    `chronolog-release-staging-host.log` and
    `chronolog-release-staging-ci-probe.log`.
-   The next installed check needs two workspaces on the matching combined
-   release and the normal creation review on the seeded destination.
+   The installed pair check is queued after the 10,000-turn benchmark and
+   matching Host `57f501437` and Base `05ecc1b` build. It approves creation
+   of the seeded workspace, verifies distinct accounts and nodes, and
+   compares the exact published file bytes and retry response on the two
+   workspaces. On the combined host, all 15 focused startup, history
+   migration and retained-host selection tests passed. The live two-host
+   and version handoff results are pending.
    The local merged host `29eead0fa` and Base `404f345` passed
    the host type checks, the authority catalog check, 24 host tests,
    four portable type configurations, and 223 focused template tests.

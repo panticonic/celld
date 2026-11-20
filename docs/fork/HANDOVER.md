@@ -2660,6 +2660,11 @@ pushes them.
    The release gate remains open. See
    `p5-native-checkout-profile/jammy-checkout-gate.json` and
    `jammy-repeat-checkout-gate.json` in the same directory.
+   A small probe linked the exact release's DoltLite library and retained
+   both committed file states and all 10,000 local rows. Wrapping the
+   checkout sequence in one SQL transaction saved sync calls in a traced
+   run but did not improve the interleaved timing samples. The production
+   checkout is unchanged. See `e19-checkout-transaction-probe/interleaved.log`.
    The first full installed retry passed the Host compilation check and
    stopped at the missing `node-pty` host dependency. The repository's
    repair command rebuilt it. The current Host passed 38 artifact
@@ -2672,10 +2677,14 @@ pushes them.
    Host type configurations and stopped at the Base type check.
    Base `95c3fde` fixes the idle import, strict record accesses, and
    the oversized journal fixture, which now uses a valid profiling
-   receipt. See `p5-installer-base-types-failure.log`. The retry prepares
-   Host `13062f4bf`, Base `95c3fde`, and System-testing `d19b0b0` to run
+   receipt. All four Base type configurations then passed. System-testing
+   `b78c5f7` fixes compilation of the benchmark's invocation payload and
+   narrows its receipt reader to the RPC operation it uses. See
+   `p5-installer-base-types-failure.log` and
+   `p5-installer-system-testing-types-failure.log`. The retry prepares
+   Host `13062f4bf`, Base `95c3fde`, and System-testing `b78c5f7` to run
    against the verified Ubuntu 22.04 binary.
-   After that test, `vs-verify-p5-p6-current-installed-pair-base.service` uses
+   After that test, `vs-verify-p5-p6-current-installed-pair-types.service` uses
    the same prepared release and current Chronolog package for a fresh
    two-workspace installation. It verifies separate signed identities,
    shared group writes, the protected revision and exact published file

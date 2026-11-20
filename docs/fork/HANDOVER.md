@@ -2658,7 +2658,7 @@ pushes them.
      to remove.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
-     The native installed check uses Host `c2b8b3324`, Base `b18a030`,
+     The native installed check uses Host `34006ed5d`, Base `b18a030`,
      and System-testing `571618b`. Preparation type-checks all three before
      building the workspace release.
      Their integrated baselines are Host `integration/gad-participant-main`
@@ -2720,8 +2720,16 @@ pushes them.
      and dependency checks. See `pi-native-release-package-owner-verification.log`.
      Publish the five Pi packages in dependency order, then remove the local
      overrides and verify an install from the registry.
-   - Delete the retired `WorkspaceDO` class and its import driver in the
-     release after the one that ships P3 (see the handoff).
+   - Host `34006ed5d` removes the retired SQLite `WorkspaceDO`, the
+     import driver, and the import-only RPCs from the Dolt state class.
+     The deployment catalog now lists only `WorkspaceStateDO` for workspace
+     state. Existing SQLite files remain on disk. The merge also restores
+     the full slot-history record required by the public schema. All 244
+     focused tests passed, including two real E19 Dolt workspace probes.
+     The generated catalog and authority checks passed. See
+     `p5-native-remove-workspace-state-legacy-final.log`,
+     `p5-native-workspace-state-deployment.log` and
+     `p5-native-host-catalog-final.log`.
 6. **Chronolog cleanup** (§4.4 items 1–6). Can be done before P6, which
    uses it.
 7. **The pre-existing failures**, if the owner wants them fixed. They were

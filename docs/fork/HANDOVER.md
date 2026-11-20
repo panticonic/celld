@@ -2698,12 +2698,17 @@ pushes them.
      and retains the existing text extraction. All 15 focused native history
      tests passed from the merged checkout. See
      `p5-native-context-current-base-main.log`.
-     Host `2f2a4c25b` still needs a merge that preserves private filesystem
-     bindings alongside main's deferred extension projection. Main also has
-     changes in the retired EvalDO journal that need to be checked against
-     the Base EvalKernel. System-testing `f657e13` needs its new runner calls
-     wired to the current dynamic-code APIs. The queued installed test
-     keeps its earlier exact Host and Base inputs.
+     Host `c2b8b3324` merges `2f2a4c25b` and `2fd629be5`. A chained
+     extension can resolve its participant's source path before the copy
+     is materialized. An explicit materialization request uses that same
+     private copy and the requested repository scope. All 142 focused
+     filesystem, workspace orchestration and startup tests passed. See
+     `p5-native-current-host-merge.log`.
+     Base `b18a030` ports main's native observation checks to EvalKernel.
+     All 39 journal tests passed. See `p5-native-context-current-base-journal.log`.
+     System-testing `f657e13` needs its new runner calls wired to the current
+     dynamic-code APIs. The queued installed test keeps its earlier exact
+     Host and Base inputs.
      Pi `c6d518177` is a fast-forward from `2f530d750`. The five staged
      archives passed fresh SHA-256, npm SHA-512, package identity, contents,
      and dependency checks. See `pi-native-release-package-owner-verification.log`.

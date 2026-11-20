@@ -2999,9 +2999,19 @@ pushes them.
    signed reader uses that reader's working copy for the authorized read.
    The 115 focused Host checks passed and the final 35 VCS tests passed
    after strengthening the relay assertions. The native workspace graph
-   returns the originating invocation coordinate. Direct transcript node
-   inspection and neighbors still need native implementations. See
+   returns the originating invocation coordinate. See
    `p5-native-public-vcs-check2.log` and `p5-native-public-vcs-check3.log`.
+   Host `3fbcf5e27` connects direct transcript inspection and neighbors
+   to the trajectory owner in Base `8204b73`. A caller can navigate its
+   authorized transcript head. A workspace cause grants access to its
+   exact invocation without granting access to the surrounding transcript.
+   All 68 focused Host and schema checks passed, including isolation of
+   adjacent transcript heads (`p5-native-transcript-host-final.log`).
+   The Base suite's first attempt stopped at the 768 MiB scope limit
+   during infrastructure preparation. The fresh installation supervisor
+   now selects these commits and runs the focused Base transcript and
+   build suites after the long benchmark. It also checks the installed
+   path from a private edit to its recorded invocation and transcript.
    Host `363c3b6cf` requires a verified participant for development
    build inputs, adopted repository reads, and template exchanges.
    Both directions of a reviewed exchange bind the participant's exact
@@ -3033,9 +3043,8 @@ pushes them.
    `p5-exact-workspace-source-final.log`. Host `c0bca1a11` also removes
    the cache of old working heads and retains the retired-context
    fence. All 43 workspace orchestration checks passed again
-   (`p5-native-retirement-check.log`). The queued fresh installation
-   selects `c0bca1a11` and Base `80fc0db`. The two changed Base exact-pair
-   build suites still require the release-pair run.
+   (`p5-native-retirement-check.log`). The build suites are queued
+   in the release-pair run recorded above.
    Host `83c1d2694` also removes the old runtime fork adapter. Implicit
    panels, context clones, subagents, and development context forks use
    the verified caller's participant revision. A retained runtime fork

@@ -2590,7 +2590,9 @@ pushes them.
    recorded merge decision, and the exact bytes from an independent
    observer. Both winner orders passed the driver simulation, recorded in
    `p5-installed-participant-race-driver-check.log`. The actual installed
-   run remains queued behind the benchmark and legacy retention check.
+   fresh and normal-restart run is queued behind the benchmark. The
+   benchmark owns the loopback package registry and the Host integration
+   checkout. Packaging and the installed fixture are bounded heavy jobs.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired
@@ -2690,6 +2692,23 @@ pushes them.
      `870fca2` is a fast-forward from `d014879`. The fresh previews of
      Examples `6712d56`, Google Workspace `1ef1b53`, News `83d29bd`,
      Personal `b4cedbd` and System `9323aaf` also merge cleanly.
+     Refreshed against the locally fetched November 20 main commits. Base
+     `3ba4f77` merges `df5525d` and the native participant candidate
+     `9168c9d`. Its delivery-history binding accepts omitted message blocks
+     and retains the existing text extraction. All 15 focused native history
+     tests passed from the merged checkout. See
+     `p5-native-context-current-base-main.log`.
+     Host `2f2a4c25b` still needs a merge that preserves private filesystem
+     bindings alongside main's deferred extension projection. Main also has
+     changes in the retired EvalDO journal that need to be checked against
+     the Base EvalKernel. System-testing `f657e13` needs its new runner calls
+     wired to the current dynamic-code APIs. The queued installed test
+     keeps its earlier exact Host and Base inputs.
+     Pi `c6d518177` is a fast-forward from `2f530d750`. The five staged
+     archives passed fresh SHA-256, npm SHA-512, package identity, contents,
+     and dependency checks. See `pi-native-release-package-owner-verification.log`.
+     Publish the five Pi packages in dependency order, then remove the local
+     overrides and verify an install from the registry.
    - Delete the retired `WorkspaceDO` class and its import driver in the
      release after the one that ships P3 (see the handoff).
 6. **Chronolog cleanup** (§4.4 items 1–6). Can be done before P6, which

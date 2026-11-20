@@ -2692,6 +2692,12 @@ pushes them.
    The 20 ms gate remains open. See
    `p5-native-checkout-profile/jammy-isolated-checkout-gate.json` and
    `jammy-isolated-checkout-latency.json` in the same directory.
+   A focused DoltLite probe moved the pointer write before the switch
+   from main and grouped both in one transaction. It retained both
+   committed file states, all local rows, and the branch selected on
+   reopen. The control direction also varied substantially across the
+   two runs, so the trial does not establish a production speedup. See
+   `e19-checkout-main-pointer-probe/compare.log`.
    The first full installed retry passed the Host compilation check and
    stopped at the missing `node-pty` host dependency. The repository's
    repair command rebuilt it. The current Host passed 38 artifact

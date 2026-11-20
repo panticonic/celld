@@ -2698,6 +2698,11 @@ pushes them.
    reopen. The control direction also varied substantially across the
    two runs, so the trial does not establish a production speedup. See
    `e19-checkout-main-pointer-probe/compare.log`.
+   A paired trial now alternates the baseline and transaction on two
+   open fixtures. Its memory-backed smoke run verified both file states,
+   all 10,000 local rows, the selected branch on reopen, and rollback
+   when the requested branch does not exist. A durable timing trial
+   remains. See `e19-checkout-main-pointer-probe/paired-tmpfs-correctness.log`.
    The first full installed retry passed the Host compilation check and
    stopped at the missing `node-pty` host dependency. The repository's
    repair command rebuilt it. The current Host passed 38 artifact
@@ -2776,17 +2781,29 @@ pushes them.
    same workspace, checks protected main against the recorded receipt,
    and verifies any retained private seed bytes before submitting a
    new review. It stops only its own workspace scope if available
-   machine memory falls below 10 GiB during the test.
+   machine memory falls below 10 GiB during the test. The resumed
+   run verified the same protected main, recovered the private seed
+   files byte for byte, and approved their publication. Both
+   participants then saved separately from that shared revision.
+   Bob published first and the stale Alice publication was refused.
+   Alice resolved the conflicting file and published the two-parent
+   merge through review. The independent observer read the resolution
+   and both clean changes byte for byte at the resulting protected
+   revision. The settings check is still running. See
+   `p5-installed-native-merge-origin-resume-evidence.log` and the
+   `p5-installed-native-merge-origin-race-*` logs.
    After that test, `vs-verify-p5-p6-installed-pair-current-chronolog.service`
    uses the same Host and template revisions to prepare a release with
    the updated Chronolog package for a fresh two-workspace installation.
    It verifies separate signed identities,
    shared group writes, the protected revision and exact published file
    bytes in both workspaces. Results go to
-   `p5-p6-current-installed-pair-evidence.log`. The checkout profile
-   `vs-profile-e19-checkout-after-current-chronolog.service` measures each
-   branch direction and records disk sync times after the pair fixture
-   retires. The durable benchmark then uses the matching prepared release.
+   `p5-p6-current-installed-pair-evidence.log`. The pair and durable
+   benchmark supervisors are queued in that order. Each waits for the
+   preceding fixture to retire and for 22 GiB of available memory and
+   low memory pressure. The benchmark uses the prepared release receipt
+   for those exact Host, template, and Chronolog package revisions.
+   The completed checkout measurements above leave the 20 ms gate open.
    Four-platform verification and the matching Host pin remain pending.
    The local merged host `29eead0fa` and Base `404f345` passed
    the host type checks, the authority catalog check, 24 host tests,

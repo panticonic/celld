@@ -2585,9 +2585,8 @@ pushes them.
    Base `a57fd11` reads commit recall from the protected Dolt publication
    index. Rebuilding conversation projections preserves the published
    documents and their index marker. The 21 focused recall and
-   participant-history tests passed. This change is in
-   `base-native-commit-recall-only` while the existing installed build
-   checks its pinned inputs. See `p5-native-commit-recall-only-focused.log`.
+   participant-history tests passed. The current Base integration branch
+   includes it. See `p5-native-commit-recall-only-focused.log`.
    The representative fresh-history size check used full file placement
    metadata from 135 repositories and 5,135 files. The E19 Linux fixture
    staged the first native commit in 1.08 seconds and verified every
@@ -2684,13 +2683,14 @@ pushes them.
    Base `95c3fde` fixes the idle import, strict record accesses, and
    the oversized journal fixture, which now uses a valid profiling
    receipt. All four Base type configurations then passed. System-testing
-   `b78c5f7` fixes compilation of the benchmark's invocation payload and
-   narrows its receipt reader to the RPC operation it uses. See
+   `b78c5f7` narrows the receipt reader to the RPC operation it uses.
+   All 17 focused benchmark tests passed. `911fdd5` also checks the
+   invocation payload variant before reading its start fields. See
    `p5-installer-base-types-failure.log` and
-   `p5-installer-system-testing-types-failure.log`. The retry prepares
-   Host `13062f4bf`, Base `95c3fde`, and System-testing `b78c5f7` to run
+   `p5-installer-invocation-payload-types-failure.log`. The retry prepares
+   Host `13062f4bf`, Base `a57fd11`, and System-testing `911fdd5` to run
    against the verified Ubuntu 22.04 binary.
-   After that test, `vs-verify-p5-p6-current-installed-pair-types.service` uses
+   After that test, `vs-verify-p5-p6-current-installed-pair-candidate.service` uses
    the same prepared release and current Chronolog package for a fresh
    two-workspace installation. It verifies separate signed identities,
    shared group writes, the protected revision and exact published file

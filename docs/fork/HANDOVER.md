@@ -2977,6 +2977,15 @@ pushes them.
    the runtime client manifest check passed. The matched Base test and
    fresh installed verification remain. See
    `p5-native-context-lifecycle-check2.log`.
+   Host `d88a7e022` and Base `4ee600b` remove the old content-retention
+   RPC. The sweep reads private and canonical Dolt history at preflight
+   and again before deletion. If a registered participant cannot report
+   its retained content, the sweep stops. Protected main, execution
+   source trees, and explicit blob retentions are still checked by their
+   owning stores. The 77 focused Host checks passed across the two runs,
+   including a native edit holding the content lock until its private
+   draft commits. See `p5-native-content-retention-check.log` and
+   `p5-native-content-retention-check2.log`.
    Host `83c1d2694` also removes the old runtime fork adapter. Implicit
    panels, context clones, subagents, and development context forks use
    the verified caller's participant revision. A retained runtime fork

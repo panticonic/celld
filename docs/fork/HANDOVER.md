@@ -1319,6 +1319,8 @@ On November 20 the owner removed backward compatibility and additional
 migration work from release scope. The release checks target a fresh
 workspace on the current runtime and a restart on that same runtime.
 Existing workspace data and earlier migration evidence are retained.
+Normal working-copy, publication and merge behavior takes priority over
+additional crash injection and lost-reply testing.
 
 **Goal.** One runtime, a fork of celld, that exceeds what both
 `~/vibestudio` and `~/chronolog-db` need. It replaces Vibestudio's bundled
@@ -1349,7 +1351,8 @@ Decisions (dates are when the owner made them; none of these are open):
     work.
   - Q1: a Dolt merge adopts non-conflicting changes; decisions are recorded
     only for conflicts.
-  - Q2: replay GAD's full history into Dolt at migration.
+  - Q2 originally selected full replay. The November 20 release direction
+    supersedes that migration requirement.
   - Q3: an eval heap is held until an explicit end; there is no idle timer.
   - Q4: agents sign Chronolog writes with their user's key after approval.
   - Q5: stores that hold secrets (`BrowserVaultDO`, `WebhookStoreDO`) stay
@@ -1688,7 +1691,7 @@ those of `docs/dolt-redesign.md` §10.
 | P2b General dynamic code    | **Done.**<br>• `hostCode` (`packages/durable/src/codeHost.ts`); the admission service `dynamicCodeService` (`admit`, `release`, `reset`, `dispose`); `EvalKernel` (Base `workers/eval-kernel`); `SessionDO` (Base `workers/session`).<br>• The CLI, panels, the system-test runner, the agent, the website spec and the headless test all pull.<br>• `evalService`, `EvalDO`, `UNSAFE_EVAL`, `resultReceiver`, redelivery, `evalEngine` and `settle` are deleted. The remaining `rg` hits are D5 migration code and deliberate guards. |
 | P3 Durable services         | **Done.** `WorkspaceStateDO` is a Dolt cell, with a replaying import from the retired `WorkspaceDO`; the maintenance journal and `cloneDO` are deleted.                                                                                                                                                                                                                                                                                                                                                                |
 | P4 Agent system             | **Mostly done**, see below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| P5 GAD decentralized        | Fresh default startup and two signed participants passed on managed source `#62`, including private work, reviewed publication, and normal shutdown. The installed cross-epoch handoff and migration-retirement gates remain. |
+| P5 GAD decentralized        | Fresh default startup and two signed participants passed on managed source `#62`, including private work, reviewed publication, and normal shutdown. The current native installed release check and removal of the remaining legacy storage mechanics are open. |
 | P6 Chronolog capability     | Installed group writes passed. The native workspace directory, host ingress, and real GAD cells passed a signed two-node publication with verified file bytes. The two-installed-workspace release test remains. |
 
 **P4 in detail** (slices are in `docs/dolt-redesign.md` §6.8–§6.11):
@@ -1898,22 +1901,25 @@ pushes them.
    - **Gate:** §10, row P4, of the redesign.
 2. **P5, decentralized GAD** (about 20 agent-days, the largest phase). The
    design is `docs/dolt-redesign.md` §5.
-   - A canonical Dolt database plus participant work cells (§5.1); contexts
-     are branches.
+   - Start fresh workspaces in a canonical Dolt database and put each
+     participant in their own work cell. Use Dolt branches for contexts
+     (§5.1). Keep ownership, publication approval and semantic conflict
+     choices in Vibestudio.
    - Integration by F1 merge, `pull` and fast-forward `push` (§5.5).
    - Grants, and approval as grant issuance (§5.6).
-   - Work-cell create and retire as an idempotent, crash-resumable protocol
-     (§5.7).
+   - Verify normal creation and retirement of work cells (§5.7). Existing
+     recovery evidence is retained. Further deliberate process-loss and
+     lost-reply checks are outside the release gate.
    - A derived `commit_index` and `content_roots`.
-   - Replay migration (Q2).
    - Delete the fact-map, radix and frontier machinery, and GAD's private
      hash chain left from S1.
    - **Gate:**
      - the provenance plan's acceptance matrix, re-expressed over commit
        hashes;
      - §5.13, the decentralization gates;
-     - replay equivalence on real workspace snapshots;
-     - the size gate;
+     - a fresh current-release installation, private save, normal restart,
+       independent reader, reviewed publication and integration;
+     - the size gate using a representative fresh workspace;
      - checkout p95 within 20 ms with `fsync` and 10k local rows (the fork
        measured 14–16 ms).
    - Do it in vertical slices, like P4, and never leave two models in force.
@@ -2608,10 +2614,11 @@ pushes them.
      to remove.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
-     Current local merge candidates are Host `integration/gad-participant-main`
+     The native installed check uses Host `238eb1890` and Base `9323953`.
+     Their integrated baselines are Host `integration/gad-participant-main`
      (`676d51652`) and Base `integration/gad-participant-base-main`
-     (`79ec699`). Both include the signed-receipt retries and initial
-     shared history workflow above. The Host
+     (`79ec699`). The baselines include the signed-receipt retries and
+     initial shared history workflow above. The Host
      merge retains one console-history filter and
      pagination implementation and the read-only legacy workspace importer.
      The active Dolt workspace state already contains upstream's slot

@@ -2986,6 +2986,13 @@ pushes them.
    including a native edit holding the content lock until its private
    draft commits. See `p5-native-content-retention-check.log` and
    `p5-native-content-retention-check2.log`.
+   Host `a69a44680` uses participant history for caller-scoped build
+   sources, worker discovery, workspace API docs, and recall. An
+   unavailable history no longer admits private build sources. Direct
+   service authority for a retained runtime comes from the exact build
+   it is running. All 113 focused Host tests passed. Installed verification
+   of the combined candidate remains. See
+   `p5-native-caller-build-source-check.log`.
    Host `83c1d2694` also removes the old runtime fork adapter. Implicit
    panels, context clones, subagents, and development context forks use
    the verified caller's participant revision. A retained runtime fork

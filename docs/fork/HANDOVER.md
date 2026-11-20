@@ -3122,6 +3122,17 @@ pushes them.
    instance. The benchmark has no completed fork timing, and its turn
    loop starts at one on a fresh launch. See the journal for
    `vs-verify-p4-native-clone-source.service` and the run's memory samples.
+   `vs-verify-p4-current-release-fork-benchmark.service` queues a fresh
+   run against the prepared release above, after the installed checks and
+   ARM64 fallback. It reuses the prepared build, runs the 65-turn soak,
+   and gives the model-free 10,000-turn case a 24-hour timeout. The watcher
+   exits if the reserve guard stops its instance. The completed result
+   and inspection will be recorded under `p4-current-release-fork-benchmark`.
+   Host documentation commit `345b70b63` applies the owner's fresh-start
+   and normal-restart guidance directly to the provenance acceptance
+   matrix and records how the two local Dolt indexes work. The queued
+   installation remains pinned to the same application code in
+   `a23423db4`. The later commit changes only the two design documents.
    GitHub still shows no Actions run for fork commit `61862f2`.
    Host `363c3b6cf` requires a verified participant for development
    build inputs, adopted repository reads, and template exchanges.

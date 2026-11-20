@@ -1315,6 +1315,11 @@ Read in this order: §1 (goal and decisions), §2 (rules), §3 (map of repos),
 
 ## 1. Goal and the owner's decisions
 
+On November 20 the owner removed backward compatibility and additional
+migration work from release scope. The release checks target a fresh
+workspace on the current runtime and a restart on that same runtime.
+Existing workspace data and earlier migration evidence are retained.
+
 **Goal.** One runtime, a fork of celld, that exceeds what both
 `~/vibestudio` and `~/chronolog-db` need. It replaces Vibestudio's bundled
 workerd and hosts a Chronolog node, so that Chronolog can be embedded in
@@ -2509,7 +2514,18 @@ pushes them.
    participant's regular grant. The fixture uses a local carrier. See
    `p5-publication-grant-native/evidence.log` and
    `p5-publication-grant-after.log`. The installed upgrade is queued
-   against Host `4b2e6731d` and Base `9323953`.
+   against the current paired release described below.
+   Production bootstrap in Host `238eb1890` now connects native workspace
+   retirement to the runtime's storage reclamation queue. The host passes
+   the exact retired copy to that queue after canonical archival succeeds.
+   All 74 focused Host tests passed. The queued native installed check uses
+   Host `238eb1890` and Base `9323953`. It provisions a fresh E19 workspace,
+   saves private bytes, restarts E19, verifies the owner's copy and
+   independent reader, then runs publication and configuration checks.
+   It replaces the queued legacy retention and upgrade checks. Earlier
+   migration observations record their original runs. See
+   `p5-retirement-storage-bootstrap-after.log` and
+   `verify-staged-native-participants.sh`.
    The native E19 concurrency scenario publishes from two independent
    work cells at once. Before approval, each read grant refuses push.
    Exactly one concurrent push succeeds. The other cell resolves one

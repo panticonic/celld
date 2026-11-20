@@ -2289,8 +2289,21 @@ pushes them.
    compute client trust. Host `ea781f163` requires fresh critical
    confirmation of the exact source diff and lets the compatible target
    host load the new manifest and trust configuration. All 78 focused
-   publication checks passed. The live retry of that saved candidate is
-   queued after the peer run as `vs-verify-installed-epoch-critical-review.service`.
+   publication checks passed. The installed fixture approved and committed
+   the saved candidate, persisted the epoch-1 launch record, and the hub
+   handed off to the retained app. That app rejected the original epoch-0
+   scaffold before reaching the protected manifest. Host `16088a5da`
+   supplies the protected launch configuration before resolving an
+   existing workspace. All 31 focused loader and creation tests passed.
+   Its epoch-1 test build `9021bd265` was retained. Reopening the already
+   published fixture with matching release inputs is queued under
+   `vs-verify-published-config-epoch-release.service`.
+   All four host type configurations passed on `16088a5da`. The first-time
+   migration fixture is queued after the version handoff and native replay
+   checks as `vs-verify-first-installed-legacy-transition.service`. It uses
+   the ordinary startup path to save a private copy on a pre-scoped runtime,
+   then upgrades the same fixture and checks the original owner's copy,
+   the second participant's access, and the shared main event.
    GitHub accepted the celld fork update at `23c4855`. The artifact
    workflow dispatch was rejected because Actions is disabled on
    `panticonic/celld`. Four-platform artifacts for E19 and the matching

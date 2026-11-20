@@ -2389,6 +2389,15 @@ pushes them.
    `vs-verify-staged-root-initialization.service` after the retention
    check. Evidence is in `p5-native-root-initialization-host-final.log` and
    `p5-native-root-initialization-base-test3.log`.
+   Host `f8e79c1e8` and Base `4d12ca3` also move the verified freeze seal
+   into canonical history. The host records it after the legacy source is
+   sealed and the retention list is written. Reopening with that seal
+   verifies the replay receipt and resumes without the legacy freeze RPC.
+   The original read shape and the recovery path for older Base builds
+   remain supported. All 77 focused Host tests and two Base tests passed.
+   The same queued installed restart now covers both the canonical seal
+   and the original template receipt using this newer pair. See
+   `p5-native-replay-seal-host-final.log` and `p5-native-replay-seal-base.log`.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired

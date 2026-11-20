@@ -3202,17 +3202,20 @@ pushes them.
    context. All 43 focused ownership and host orchestration tests passed.
    `vs-verify-cutover-owner-context-tests.service` packaged the corrected
    candidate and started a fresh managed workspace. All four model-free
-   cases and all four affected orchestration cases passed. The 30-case
-   sample runs before the extension and terminal smokes, headless panel
-   integration, Iroh E2E, and the 43-case Playwright suite. Evidence is
+   cases and all four affected orchestration cases passed. All 30 sampled
+   cases finished in `st_222b46911394433cbae7526a4c2bf9a2`, with 20
+   passes, two validation failures, and eight errors. The extension and
+   terminal smokes, headless panel integration, Iroh E2E, and the 43-case
+   Playwright suite follow. Evidence is
    under `cutover-release-verification/owner-context-rerun/`.
    That sample also exposed separate native copy and fixture defects.
    Host `bc24177bc` binds native tool invocations to their authenticated
    agent lifetime, keeps admitted owner contexts separate, and uses
    the authenticated agent's private source for delegated build reads.
    It also resolves the owner of the source when retaining a child
-   context's fork. The focused Host run passed 222 tests. System-testing
-   `8424cf1` makes the three private fixture cases start in a seeded
+   context's fork. The focused Host run passed 222 tests and Host
+   `e3d86ef60` passed the explicit orchestrator-fork regression.
+   System-testing `2dc8b38` gives the seven affected private fixture cases a seeded
    independent copy, checks the protected head before querying its
    ancestors during cleanup, and corrects two filesystem test assumptions.
    The retained directory-removal trajectory passed the corrected validator
@@ -3221,7 +3224,7 @@ pushes them.
    generation. Both fixtures previously looked for a retired loose
    `dist/server.mjs` path and could silently skip.
    `vs-verify-cutover-agent-lifetime-tests.service` queues a fresh package,
-   the failed sample cases, the four model-free regressions and five
+   nine fresh runs for the sample cases still failing, four model-free regressions and five
    further model-free integration and provenance checks, the two corrected
    integration entry points, and the focused fixture tests. These runs
    remain pending.

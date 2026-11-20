@@ -2969,6 +2969,14 @@ pushes them.
    All 126 focused Host tests and the agent API reference check passed.
    The paired shell case remains to verify on a fresh installation.
    See `p5-native-terminal-scratch-check.log`.
+   Host `c12da626f` and Base `15f2694` remove the old context lifecycle
+   RPCs. Runtime registration, enumeration, and retirement now require
+   the attached native history. The focused tests verify that registration
+   waits for attachment, retirement waits for an in-flight registration,
+   and a retired context cannot reopen. All 101 focused Host tests and
+   the runtime client manifest check passed. The matched Base test and
+   fresh installed verification remain. See
+   `p5-native-context-lifecycle-check2.log`.
    Host `83c1d2694` also removes the old runtime fork adapter. Implicit
    panels, context clones, subagents, and development context forks use
    the verified caller's participant revision. A retained runtime fork

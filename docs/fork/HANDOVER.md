@@ -2403,6 +2403,15 @@ pushes them.
    Both directions now reject a stale revision without materializing or
    changing either side. All 15 focused exchange and development service
    tests passed. See `p5-template-exchange-exact-head.log`.
+   Host `78a2d0c25` routes template exchange and adopted-repository reads
+   through the verified caller's participant copy once native history is
+   attached. The plan is bound to the participant, and native import
+   verifies the saved revision and keeps scanned files private. Two
+   participants got different exact source plans, and a participant could
+   neither apply nor replay the other's import. All 99 focused Host tests
+   passed. Full Host type checks and paired release preparation are queued
+   with this head. The normal installed template exchange itself remains to
+   be exercised. See `p5-native-template-exchange-host-final.log`.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired

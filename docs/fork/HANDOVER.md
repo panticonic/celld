@@ -3056,8 +3056,19 @@ pushes them.
    the physical fork starts with empty local index tables, preserves
    prior live hashes, retains private changes only in that copy, drops
    roots unique to a retired branch, and restores a missing cached
-   root. See `p5-content-root-index/evidence.log`. The queued installation
-   selects `60941af`. Stable state-to-commit indexing remains open.
+   root. See `p5-content-root-index/evidence.log`.
+   Base `298eae9` adds a bounded local index of stable state identities
+   at exact Dolt tips. The Linux runtime verified that the same ID
+   could resolve to different origins at two private tips, remained
+   unavailable from shared main, and failed closed after a merge with
+   both origins. A physical fork starts with an empty index, and
+   a normal reopen retains correct results. See
+   `p5-workspace-commit-index/evidence.log`.
+   The queued installation uses this exact Host and Base pair.
+   It now repeats the private saved and draft reopen checks, the signed
+   publication race, and the reviewed two-parent merge after a normal
+   restart, using the existing model-free fixtures. The earlier
+   installed evidence is independent of this pending rerun.
    GitHub still shows no Actions run for fork commit `61862f2`.
    Host `363c3b6cf` requires a verified participant for development
    build inputs, adopted repository reads, and template exchanges.

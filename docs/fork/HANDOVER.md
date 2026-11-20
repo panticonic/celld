@@ -2239,6 +2239,15 @@ pushes them.
    receipt. See `chronolog-current-main-d1cc92b-check.log`,
    `chronolog-d1cc92b-replay-native.log`,
    `chronolog-d1cc92b-workspace-native.log`, and `native-gad-d1cc92b.log`.
+   Chronolog main advanced to `88716db` with reviewed control prefixes
+   and retained publication outcomes. The local port merged it at
+   `f38b9d5`. Full lint and type checking and all 83 focused tests
+   passed. The host loader verified the clean celld package archive
+   SHA-256 `4a4f8887ff71eb53ac9af37453de32de2e1cafb5a68e20d7e9f5678061c8323f`
+   and manifest fingerprint
+   `c2a71f8d45efb2820231db8dd26aed137af0c15d689c7d7df84505fb202d79e0`.
+   See `chronolog-current-main-88716db-check.log`,
+   `chronolog-88716db-package.log`, and `chronolog-88716db-host-package.json`.
    Host `f64f4d2b2` stages the Chronolog package in application release
    builds. Once the owner publishes the Chronolog release run, set
    `CHRONOLOG_RELEASE_RUN`, `CHRONOLOG_RELEASE_SOURCE`, and
@@ -2735,13 +2744,16 @@ pushes them.
    `vs-verify-native-install-fetched-ancestry.service` builds both fixes
    with Host `13062f4bf` and System-testing `911fdd5` and runs the same
    signed workflow on a fresh installation.
-   After that test, `vs-verify-p5-p6-installed-pair-fetched-ancestry.service` uses
-   the same prepared release and current Chronolog package for a fresh
-   two-workspace installation. It verifies separate signed identities,
+   After that test, `vs-verify-p5-p6-installed-pair-current-chronolog.service`
+   uses the same Host and template revisions to prepare a release with
+   the updated Chronolog package for a fresh two-workspace installation.
+   It verifies separate signed identities,
    shared group writes, the protected revision and exact published file
    bytes in both workspaces. Results go to
-   `p5-p6-current-installed-pair-evidence.log`. The durable benchmark
-   waits for the pair fixture to release the test registry and memory.
+   `p5-p6-current-installed-pair-evidence.log`. The checkout profile
+   `vs-profile-e19-checkout-after-current-chronolog.service` measures each
+   branch direction and records disk sync times after the pair fixture
+   retires. The durable benchmark then uses the matching prepared release.
    Four-platform verification and the matching Host pin remain pending.
    The local merged host `29eead0fa` and Base `404f345` passed
    the host type checks, the authority catalog check, 24 host tests,

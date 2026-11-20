@@ -2550,10 +2550,14 @@ pushes them.
    workspace with old saved state and no native owner fails before a
    native history cell is reserved. Existing import code and historical
    data are retained outside the startup path. The 84 focused Host tests
-   and nine runtime bootstrap tests passed. The queued installed check
-   now uses Host `98fc210d5` and Base `04ccc83`. See
-   `p5-native-only-bootstrap.log` and
-   `p5-native-only-runtime-bootstrap.log`.
+   and nine runtime bootstrap tests passed. See `p5-native-only-bootstrap.log`
+   and `p5-native-only-runtime-bootstrap.log`.
+   Host `c03d41647` deletes the unused legacy activation path and requires
+   attached native history and a protected main before startup completes.
+   The 77 focused tests passed, along with a targeted check of the new
+   activation guard. The installed check is queued for this Host revision
+   with Base `04ccc83`. See `p5-native-activation-cleanup.log` and
+   `p5-native-activation-guard.log`.
    The representative fresh-history size check used full file placement
    metadata from 135 repositories and 5,135 files. The E19 Linux fixture
    staged the first native commit in 1.08 seconds and verified every
@@ -2645,7 +2649,7 @@ pushes them.
      to remove.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
-     The native installed check uses Host `98fc210d5` and Base `04ccc83`.
+     The native installed check uses Host `c03d41647` and Base `04ccc83`.
      Their integrated baselines are Host `integration/gad-participant-main`
      (`676d51652`) and Base `integration/gad-participant-base-main`
      (`79ec699`). The baselines include the signed-receipt retries and

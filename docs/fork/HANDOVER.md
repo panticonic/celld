@@ -2727,6 +2727,14 @@ pushes them.
      `870fca2` is a fast-forward from `d014879`. The fresh previews of
      Examples `6712d56`, Google Workspace `1ef1b53`, News `83d29bd`,
      Personal `b4cedbd` and System `9323aaf` also merge cleanly.
+     The November 20 companion release candidates are Examples
+     `d30bd65` (main `a100846`), Google Workspace `9a9c3f2`
+     (main `6c5ec09`), News `a8a47b0` (main `b53effc`), Personal
+     `f25fa29` (main `51a6774`), and System `c02311e` (main
+     `faac2a0`). All five merge trees matched the clean previews. The
+     diff against each main contains only the sealed Pi prerelease pins.
+     The queued installed check validates those exact companion commits
+     before preparing and using the workspace release.
      Refreshed against the locally fetched November 20 main commits. Base
      `3ba4f77` merges `df5525d` and the native participant candidate
      `9168c9d`. Its delivery-history binding accepts omitted message blocks

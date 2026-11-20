@@ -2542,9 +2542,18 @@ pushes them.
    that path for fresh template workspaces. It compares the staged files
    with the prepared template, admits the exact root through the existing
    protected creation gate and reopens native history directly after a
-   normal restart. All 89 focused Host tests passed. The queued installed
-   run uses Host `b78252080` and Base `04ccc83` and checks that startup
-   selected the native root. See `p5-native-fresh-root-host-final.log`.
+   normal restart. All 89 focused Host tests passed. See
+   `p5-native-fresh-root-host-final.log`.
+   Host `98fc210d5` removes automatic imports of old workspace history,
+   panel state and workerd storage from production startup. Fresh and
+   seeded workspaces attach native history before becoming ready. A
+   workspace with old saved state and no native owner fails before a
+   native history cell is reserved. Existing import code and historical
+   data are retained outside the startup path. The 84 focused Host tests
+   and nine runtime bootstrap tests passed. The queued installed check
+   now uses Host `98fc210d5` and Base `04ccc83`. See
+   `p5-native-only-bootstrap.log` and
+   `p5-native-only-runtime-bootstrap.log`.
    The representative fresh-history size check used full file placement
    metadata from 135 repositories and 5,135 files. The E19 Linux fixture
    staged the first native commit in 1.08 seconds and verified every
@@ -2636,7 +2645,7 @@ pushes them.
      to remove.
    - Prepare a merge plan of `feat/dolt-p0` (host) and the template branches
      onto their `main`s for the owner.
-     The native installed check uses Host `b78252080` and Base `04ccc83`.
+     The native installed check uses Host `98fc210d5` and Base `04ccc83`.
      Their integrated baselines are Host `integration/gad-participant-main`
      (`676d51652`) and Base `integration/gad-participant-base-main`
      (`79ec699`). The baselines include the signed-receipt retries and

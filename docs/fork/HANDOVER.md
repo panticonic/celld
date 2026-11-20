@@ -2367,15 +2367,17 @@ pushes them.
    Base type configurations passed, and the exact paired release built.
    See `p5-installed-history-seal-evidence.log`. The legacy source still
    serves retained data and its other runtime duties.
-   Host staging commit `27208ddce` captures the sealed source's content
+   Host staging head `ff105da3d` captures the sealed source's content
    retention list once and binds it to the verified replay receipt. Later
    starts can run content collection and recover publications without
    asking the frozen source for its roots or outbox. The regression test
    reopens without the legacy port, preserves old and current content, and
-   removes an unreferenced blob. All 74 focused tests passed. This commit
-   is staged separately from the running benchmark and still needs a
-   paired release build and installed verification. See
-   `p5-retired-legacy-retention-final.log`.
+   removes an unreferenced blob. The list stays on disk between sweeps,
+   and a missing list stops collection before deletion. All 74 focused
+   tests passed. The paired release build and installed restart check are
+   queued in `vs-verify-staged-legacy-retention.service` after the benchmark
+   releases its workspace and 15 GiB of host memory is available. See
+   `p5-retired-legacy-retention-disk.log`.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired

@@ -3125,6 +3125,11 @@ pushes them.
    The 29 workflow tests also passed. See
    `p5-merged-release-final-contract-check.log` and
    `p5-merged-release-contract-check.log`.
+   Host `aab9f8635` passed 23 focused source tests for private tree
+   materialization, owned runtime jobs, and protected publication.
+   Two additional tests built native subprocess artifacts from that
+   revision and verified self-contained launch and binary data across the
+   supervisor and disk worker. See `p5-merged-release-native-operations-source.log`.
    The queue repeats the contract checks and runs Host and Base type checks
    before packaging. See `p5-native-root-bootstrap-current-templates.tsv`
    for the full revisions.

@@ -2698,7 +2698,14 @@ pushes them.
    could not read either private revision, and protected main stayed
    fixed. See `p5-native-current-main-release-prepare.log` and
    `p5-installed-native-participants-evidence.log`.
-   After that test, `vs-verify-p5-p6-current-installed-pair-candidate.service` uses
+   The separate settings check reached a visible publication review and
+   was still building affected projects when its six-minute fixture
+   deadline elapsed. `vs-verify-native-install-review-resume.service`
+   reuses the same installed release and persistent workspace. It checks
+   that the interrupted review left protected main fixed, runs the
+   participant publication and merge exercise first, then finishes the
+   settings check with time for the cold build.
+   After that test, `vs-verify-p5-p6-current-installed-pair-after-review.service` uses
    the same prepared release and current Chronolog package for a fresh
    two-workspace installation. It verifies separate signed identities,
    shared group writes, the protected revision and exact published file

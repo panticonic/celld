@@ -2469,6 +2469,15 @@ pushes them.
    The queued installed upgrade uses this pair. See
    `p5-native-commit-projection-host.log` and
    `p5-native-commit-projection-base.log`.
+   The native E19 concurrency scenario publishes from two independent
+   work cells at once. Before approval, each read grant refuses push.
+   Exactly one concurrent push succeeds. The other cell resolves one
+   conflict, preserves both clean changes and publishes the merge. The
+   scenario verifies the exact two-step progression of shared history and
+   the idempotent repeat. It passed alongside the remote-operation restart
+   scenario on the E19 Linux candidate. This verifies the runtime part of
+   the gate. The same concurrent conflict through the installed approval
+   service remains open. See `p5-e19-participant-push-repeat.log`.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired

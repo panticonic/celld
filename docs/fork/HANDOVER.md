@@ -2675,6 +2675,11 @@ pushes them.
    See `p5-e19-linux-x64-build.log` and the service journal.
    The hosted workflow again returned HTTP 422 for this exact remote
    commit. See `p5-e19-hosted-artifacts-current.log`.
+   A later read confirmed that the workflow is listed as active and the
+   repository reports Actions enabled. The E19 branch head has no check
+   suites. The workflow file is absent from the fork's default branch,
+   which GitHub requires for manual dispatch. See
+   [GitHub's manual workflow requirements](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
    The first checkout profile on that executable recorded p95 of
    13.44 ms when quiet and 20.21 ms after a local write, with 10,000
    retained local rows. The separate syscall trace recorded successful
@@ -2706,8 +2711,14 @@ pushes them.
    A paired trial now alternates the baseline and transaction on two
    open fixtures. Its memory-backed smoke run verified both file states,
    all 10,000 local rows, the selected branch on reopen, and rollback
-   when the requested branch does not exist. A durable timing trial
-   remains. See `e19-checkout-main-pointer-probe/paired-tmpfs-correctness.log`.
+   when the requested branch does not exist. In three same-disk trials,
+   grouping checkout from main reduced p95 for that direction from
+   15.46–17.12 ms to 7.66–10.10 ms. The return direction moved from
+   7.76–8.78 ms to 16.28–17.91 ms. The probe now also groups checkout
+   back to main with the pointer update, and passes the same smoke
+   checks in memory. Its paired disk run is queued. See
+   `e19-checkout-main-pointer-probe/paired-disk-results.log` and
+   `e19-checkout-main-pointer-probe/paired-bidirectional-tmpfs.log`.
    The first full installed retry passed the Host compilation check and
    stopped at the missing `node-pty` host dependency. The repository's
    repair command rebuilt it. The current Host passed 38 artifact
@@ -2837,8 +2848,8 @@ pushes them.
    reference directly in the durable channel page. System-testing
    `7b93b97` reads that result from the exact channel receipt and checks
    its invocation, result marker, and turn number. The focused checks
-   are queued before another installed run. See
-   `p4-native-durable-receipts-soak-detail.json`.
+   passed all 17 tests. See `p4-native-durable-receipts-soak-detail.json`
+   and `p5-p4-publication-types-and-native-receipts-check.log`.
    The next installed fixture uses the same updated template candidate
    for both settings publication and the benchmark. The settings check
    starts with a private save and draft, publishes through review, and

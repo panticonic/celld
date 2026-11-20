@@ -15,7 +15,8 @@ Celld `61862f2` has a verified Ubuntu x64 build. Its
 Linux ARM64, macOS ARM64 and Windows x64 builds and the matching
 Vibestudio artifact pins are pending. GitHub has no workflow run for that
 commit. The Ubuntu 22.04 Linux ARM64 toolchain probe passed and a local
-build is queued after the installation checks.
+build is queued after the installation checks. A Windows x64 release
+linker probe passed and a cross-build is queued after the benchmark.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
@@ -3196,6 +3197,12 @@ pushes them.
    libraries under QEMU. See
    `p5-transaction-checkout-linux-arm64-toolchain.log` and
    `p5-transaction-checkout-linux-arm64-build.log`.
+   The Windows x64 cross-build `vs-build-celld-release-windows-x64.service`
+   uses the same fork commit. Rust 1.94.1 linked a release-profile
+   AMD64 Windows executable with the cached Microsoft SDK. The queue
+   retains the exe architecture and digest as cross-build evidence.
+   Execution on Windows remains a separate release check. See
+   `p5-transaction-checkout-windows-x64-toolchain.log`.
    The local merged host `29eead0fa` and Base `404f345` passed
    the host type checks, the authority catalog check, 24 host tests,
    four portable type configurations, and 223 focused template tests.

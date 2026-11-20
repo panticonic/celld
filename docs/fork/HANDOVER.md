@@ -3186,8 +3186,9 @@ pushes them.
    exercised in the separate system-test run. The fresh-install and
    two-workspace checks are queued to repeat after that run.
    The requested test sweep is managed by
-   `vs-verify-cutover-release-tests.service`. Its pinned inputs, eight
-   deterministic cases, 30 model-driven cases, and retained run receipts
+   `vs-verify-cutover-release-tests.service`. Its pinned inputs, four
+   model-free cases, four model-driven orchestration cases, a 30-case
+   model-driven sample, and retained run receipts
    are under `cutover-release-verification/`. It runs the celld E2E
    suite, Testkit, the managed system tests, and the Vibestudio smoke,
    transport, and browser integration suites without overlapping them.
@@ -3199,9 +3200,25 @@ pushes them.
    before model execution, so the sample was cancelled. Host
    `182eda130` keys authenticated task copies by the admitted owner
    context. All 43 focused ownership and host orchestration tests passed.
-   `vs-verify-cutover-owner-context-tests.service` is rebuilding the
-   corrected candidate for the managed and host E2E reruns. Evidence
-   is under `cutover-release-verification/owner-context-rerun/`.
+   `vs-verify-cutover-owner-context-tests.service` packaged the corrected
+   candidate and started a fresh managed workspace. All four model-free
+   cases and all four affected orchestration cases passed. The 30-case
+   sample runs before the extension and terminal smokes, headless panel
+   integration, Iroh E2E, and the 43-case Playwright suite. Evidence is
+   under `cutover-release-verification/owner-context-rerun/`.
+   That sample also exposed separate native copy and fixture defects.
+   Host `bc24177bc` binds native tool invocations to their authenticated
+   agent lifetime, keeps admitted owner contexts separate, and uses
+   the authenticated agent's private source for delegated build reads.
+   It also resolves the owner of the source when retaining a child
+   context's fork. The focused Host run passed 222 tests. System-testing
+   `8424cf1` makes the three private fixture cases start in a seeded
+   independent copy, checks the protected head before querying its
+   ancestors during cleanup, and corrects two filesystem test assumptions.
+   `vs-verify-cutover-agent-lifetime-tests.service` queues a fresh package,
+   the failed sample cases, the four model-free regressions and five
+   further model-free integration and provenance checks, and the focused
+   fixture tests. These runs remain pending.
    It now repeats the private saved and draft reopen checks, the signed
    publication race, and the reviewed two-parent merge after a normal
    restart, using the existing model-free fixtures. The earlier

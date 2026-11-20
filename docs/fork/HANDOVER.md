@@ -2725,8 +2725,14 @@ pushes them.
    successful switch followed by rollback must also restore Dolt's
    connection-local branch selection. Celld `61862f2` implements that
    transaction and restores the selected branch on error. All 20
-   non-ignored Dolt cell tests passed. The Ubuntu 22.04 artifact is
-   building, with the real runtime profile queued behind it.
+   non-ignored Dolt cell tests passed. The exact Ubuntu 22.04 artifact
+   passed the 20 ms checkout gate with 10,000 local rows. Each phase
+   measured 200 checkouts, with p95 of 11.49 ms when quiet and 16.56 ms
+   after local writes. The separate trace recorded 112 and 219
+   successful disk syncs. Its SHA-256 is
+   `83fd90a39e266a798a5922e702746addb41f1c55b349072bb8d976c2f9fe7ac4`.
+   See `p5-native-checkout-profile/jammy-transaction-checkout-gate.json`
+   and `jammy-transaction-checkout-sync.json` in the same directory.
    The first full installed retry passed the Host compilation check and
    stopped at the missing `node-pty` host dependency. The repository's
    repair command rebuilt it. The current Host passed 38 artifact
@@ -2893,8 +2899,8 @@ pushes them.
    the verified caller's participant revision. A retained runtime fork
    keeps the original selected revision across repeated reservations.
    All 213 focused runtime and workspace orchestration tests passed.
-   The completed checkout measurements above leave the 20 ms gate open.
-   Four-platform verification and the matching Host pin remain pending.
+   Four-platform verification and the matching Host pin remain pending
+   for the runtime with the verified checkout change.
    The local merged host `29eead0fa` and Base `404f345` passed
    the host type checks, the authority catalog check, 24 host tests,
    four portable type configurations, and 223 focused template tests.

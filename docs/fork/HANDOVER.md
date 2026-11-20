@@ -2427,6 +2427,13 @@ pushes them.
    exercises the signed settings route and checks that it advances main
    while preserving the caller's private revision. See
    `p5-native-workspace-config-final.log`.
+   Base `abca687` reads native invocation evidence and message trails from
+   the conversation tables directly. The test builds only those tables and
+   verifies the original statement and invocation trail. The existing
+   legacy reader shares the same message and trail logic. All 36 projected
+   Base tests passed. The full Base type checks are queued with the paired
+   release. Restricted memory recall still calculates visibility from the
+   legacy workspace history. See `p5-trajectory-evidence-base-final.log`.
    The model-free 10,000-turn benchmark started as
    `st_9e007686d40145a6827546df05aedd9e` under
    `vs-verify-main-fork-benchmark3.service`. It runs the exact paired

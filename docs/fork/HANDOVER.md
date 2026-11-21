@@ -3448,8 +3448,14 @@ pushes them.
    desktop checkout reused a shared dependency tree without the mobile
    workspace links. A dedicated Android checkout passed a frozen offline
    install and resolved the native polyfill from its exact package.
-   Its full smoke retry now builds the native app and prepares the
-   server release from that checkout's own host artifacts.
+   Its full smoke retry built and installed the Android app and
+   prepared all 150 runtimes against that checkout's host artifacts.
+   The CLI paired as the first device. Its System agent attachment
+   then waited for the workspace's history-index read for over ten
+   minutes, before the test sent an invite to the phone. The owned CLI
+   command was stopped and the smoke cleaned up its processes. The
+   Android scope recorded zero OOM kills. Evidence is under
+   `chat-fork-source-rerun/android-test/isolated-retry/`.
    Both desktop rebuild cases passed. The panel persistence test passed
    after each launch got its own prepared-source directory. Host
    `4df4beafb` makes the navigation test wait for the enabled launcher

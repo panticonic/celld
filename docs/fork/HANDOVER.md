@@ -3432,6 +3432,15 @@ pushes them.
    The warm-launch test still reopens the same workspace and checks
    that its existing grant persists. These exact cases are queued on
    the next candidate.
+   The first phone-width Electron case reached the replacement desktop
+   client, whose sidebar and address controls superseded the old shell
+   controls used by the test. Host `55ef27416` drives the current
+   desktop UI and still checks panel selection, creation, terminal and
+   chat sizes, and horizontal overflow. All 18 focused desktop
+   shell checks passed. The six browser cases are queued together.
+   The native Android pairing smoke has a separate disposable emulator
+   and waits for the desktop and installed-workspace checks to release
+   their resources.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

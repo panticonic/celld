@@ -3538,13 +3538,13 @@ pushes them.
    restart, and the signed publication race followed by a reviewed
    two-parent merge. Evidence is in
    `p5-native-root-bootstrap-retry-publication-evidence.log`.
-   After that check, `vs-verify-p6-native-root-shared-history.service`
-   uses the same prepared release to install two fresh workspaces.
-   It checks independently signed group writes, cross-owner write
-   refusal, and publication of the exact reviewed bytes to the other
-   workspace's protected main. The check encodes its SQL with the
-   verified Chronolog package and records its result in
-   `p6-native-root-shared-history-evidence.log`.
+   The two fresh installed workspaces passed the shared history test.
+   The second workspace used the exact approved seed. Two distinct
+   accounts and nodes signed their own group writes, the cross-owner
+   write was refused, and the other workspace's protected main
+   contained the exact file bytes after reviewed publication. The test
+   encodes its SQL with the verified Chronolog package. The result is
+   in `p6-native-root-shared-history-after-suites-evidence.log`.
    The P4 benchmark used its sealed package and had recorded 1,360
    successful turns as of November 20, 20:38 UTC, after completing
    the 65-turn soak. At 20:40 UTC the reserve guard stopped the owned

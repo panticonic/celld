@@ -3517,8 +3517,13 @@ pushes them.
    is queued. All 42 focused checks passed. They cover reopening the
    same slot, switching panels, and leaving an empty binding.
    Host `5381e14e0` waits for the actual conversation to contain the
-   submitted prompt after reopening. All eight browser cases,
-   including promotion to a chat panel, are queued on this candidate.
+   submitted prompt after reopening. The next desktop run reopened the
+   conversation and exposed the agent join refusal. The receiver expects
+   the authenticated code that created the agent. Host `f68556533` routes
+   the initial join through that creator and preserves the initiating
+   account's durable ownership. The focused regression failed before
+   the fix. All 211 runtime and HTTP RPC checks passed afterward. A
+   browser run verifies delivery, reopening, and promotion in one session.
    Desktop startup reached the initial chat and the local test provider
    rejected the host's request to attest its model endpoint because the
    fixture still exported the retired method. Host `524d8413e` updates

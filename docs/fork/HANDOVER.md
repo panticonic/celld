@@ -3304,6 +3304,20 @@ pushes them.
    default Ctrl-B chord and bounds the wait for an orderly exit. All 11
    focused terminal smoke harness tests passed. The older terminal
    attempt was stopped after recording the chrome milestone.
+   The rebuilt `b50fb34` Linux binary passed both the new multi-module
+   regression and the existing worker-loader tail case. On the same
+   release, the image smoke, terminal startup and normal shutdown,
+   headless panel, and all 12 Iroh cases passed. The 43-case Playwright
+   run is active with a single worker. Its first two workflow cases
+   expired while their cold workspace launch was still preparing.
+   Host `62f6fcf95` gives those cases the standard launch-review
+   deadline and enough overall time to run their actual assertions.
+   The raw Testkit connection retry still failed because managed
+   execution exposes no raw WebSocket or fetch. Base `a2de25d`, based
+   on `2738fa4`, uses the runtime's existing stable panel automation
+   session for viewport changes and evaluation. The focused unit and
+   managed reruns plus the two browser retries are queued in
+   `stable-panel-rerun/`.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

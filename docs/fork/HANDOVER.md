@@ -3406,6 +3406,23 @@ pushes them.
    project adoption review while its fixture waited for launch. Host
    `61a4f0d47` resolves the reviewed creation intent before waiting for
    client startup. Both exact cases run again with the chat-fork candidate.
+   The 13-case startup and command-overlay group recorded 10 passes.
+   The browser panel worked with its optional data extension unavailable.
+   The retained desktop shutdown log showed the workspace runtime slot
+   being cleared while its already-admitted startup still needed it.
+   Host `025bc8920` joins startup and closes its runtime before clearing
+   the slots. All 39 focused desktop ownership checks passed. The other
+   two failures concern reopening and promoting a saved Quickfire
+   conversation. The 28 remaining browser cases are running.
+   The Quickfire owner test reproduced a second reopen after an empty
+   index refresh dropping the conversation the current view still had
+   bound. System `18c3af0` keeps that exact live slot across a refresh.
+   All 39 focused Quickfire tests passed. The cross-workspace browser
+   test also waited for its client before resolving the pending creation
+   review. Host `fa7fed95c` handles that review first. The queued
+   `chat-fork-source-rerun/` release includes these pins and runs the
+   transcript, both DX checks, the affected startup check, the full
+   command-overlay flow, and the cross-workspace browser check.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

@@ -3318,6 +3318,24 @@ pushes them.
    session for viewport changes and evaluation. The focused unit and
    managed reruns plus the two browser retries are queued in
    `stable-panel-rerun/`.
+   The interrupted browser run preserved three passes and five failures.
+   The command-overlay test's snapshot showed the shell running behind
+   the first-run reporting dialog while its fixture waited for an
+   obsolete DOM marker. Host `a8dfa104a` uses the canonical launch gate
+   to detect the running shell and attaches late shutdown logs on error.
+   The continuation selects the other 40 cases in groups of 12 and 28,
+   using two build slots with the same system memory reserve.
+   The eval-recovery qualification returned a cell request-limit error
+   while filesystem reads were asking for full status reports. Host
+   `0c873eeb8` and Base `946f0a2` serialize this read per admitted context
+   and fetch only the current semantic state. All 108 focused Host
+   tests passed. The handoff qualification's latest setup failed when
+   it reused a previously interrupted fixture, so it now gets its own
+   fresh instance. System-testing `53f9702` also corrects the projected
+   fixture test's expectation for a cleanup at the exact shared head.
+   Both desktop pairing smokes stopped at System template validation.
+   System `7917fc7` names the two unnamed skill packages. All eight
+   bootable template checkouts passed the same validator after the fix.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

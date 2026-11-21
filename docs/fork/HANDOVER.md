@@ -58,10 +58,13 @@ which allows replacement. System-testing `6371c2b` uses a managed repository
 for that check. The managed rerun confirmed the error and both preserved notes.
 System-testing `8199b42` clarifies that the agent must call the recovery helper
 as part of the scenario. The first bulk run found that the publication case
-could not see its seeded repository. System-testing `13083b6` gives the agent a copy of
-that seeded revision and records the agent's exact publication event for
-teardown. The first bulk instance stopped normally. The rechecks for panel
-lifecycle, occupied move, and fixture publication are in `panel-fix-retry/`.
+could not see its seeded repository. System-testing `13083b6` gives the agent
+a copy of that seeded revision and records the agent's exact publication event
+for teardown. The isolated publication recheck
+`st_079c036513c1409a8a64bfa15a06fd0d` passed with zero tool failures and completed
+fixture cleanup. That brings the exact passing count to six. The rechecks
+for panel lifecycle, occupied move, and fixture publication are in
+`panel-fix-retry/`.
 
 System-testing `94f53e6` includes `dc47068` and lets private fixtures run
 concurrently. Cases that exercise protected main run without concurrent

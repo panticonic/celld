@@ -162,6 +162,26 @@ and uses the published revision to locate task-created workers. All 77
 focused runner and fixture checks passed. Both panel cases join the
 targeted rerun.
 
+System-testing `1369a00` gives the derived panel case a private copy of its
+seeded source and retains its reviewed publication grant. Its 12 focused
+checks passed. The worker case built and committed its worker, then the
+protected-main check found an optional Google Calendar compiler dependency
+in the general catalog. System-testing `7c23c12` removes that dependency and
+the parallel Google handoff dependency. The standalone type-check passed,
+and all 12 calendar and 27 handoff inputs matched their previous versions.
+The full template type-check was stopped by systemd-oomd during the live
+batch and is scheduled to run on its own. System-testing `4d2620a`
+verifies the private package creation and follow-up edit from their exact
+commit evidence, with teardown checking that protected main stayed at its
+original revision. All 46 focused checks passed.
+
+The task-management case found that an atomic panel-and-worker preparation
+failed when two files had identical content. Base `ef9cec1` prepares each
+content hash once while retaining both file placements. The focused
+participant suite passed 13 checks. The targeted live batch includes all
+four cases. Remaining chunked groups use the updated Base and System-testing
+sources; the switchover pins are in `bulk-chunked/pins-after-agent-01`.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

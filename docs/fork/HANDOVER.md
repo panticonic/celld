@@ -3346,6 +3346,11 @@ pushes them.
    conversation. The same behavior reproduced in an isolated panel with
    the transcript configuration. The retained transcript includes the
    panel snapshot, and `stable-panel-rerun/` holds the targeted probes.
+   The fresh handoff qualification passed all eleven of its model-free
+   fixtures in 19 minutes and 6 seconds, run
+   `st_2da90f18ddf7427aa9142a6810fbf184`. The eval-recovery retry includes
+   a fresh run of the exact chat transcript suite before the browser
+   groups.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

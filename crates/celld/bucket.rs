@@ -112,11 +112,11 @@ impl StorageBackend {
     #[doc(hidden)]
     pub fn token(self, e_tag: Option<String>, version: Option<String>) -> anyhow::Result<String> {
         let (token, header) = match self {
-            StorageBackend::S3
-            | StorageBackend::Azure
-            | StorageBackend::Local
-            | StorageBackend::Vibestore => (e_tag, "ETag"),
+            StorageBackend::S3 | StorageBackend::Azure | StorageBackend::Vibestore => {
+                (e_tag, "ETag")
+            }
             StorageBackend::Gcs => (version, "x-goog-generation"),
+            StorageBackend::Local => (version.or(e_tag), "development store sequence"),
         };
         match token {
             Some(token) if !token.is_empty() => Ok(token),
@@ -342,12 +342,10 @@ pub enum BlobRange {
     Suffix(u64),
 }
 
-/// R2's `onlyIf`, split by who can answer it. The etag halves ride down
-/// to the store as If-Match / If-None-Match, so no concurrent write slips
-/// between the check and the read. The upload-time halves are checked
-/// here: R2 compares milliseconds and an HTTP date carries only seconds,
-/// so If-Modified-Since would answer a different question for every
-/// object written in the same second as the bound.
+/// R2's `onlyIf`. Remote stores evaluate the ETag conditions during the
+/// read. The development store evaluates them against the returned snapshot
+/// using R2's ETag syntax. Upload times are checked against that same snapshot
+/// everywhere because HTTP dates lack R2's millisecond precision.
 #[derive(Default, Clone)]
 pub struct BlobConditions {
     pub if_match: Option<String>,
@@ -357,10 +355,7 @@ pub struct BlobConditions {
 }
 
 impl BlobConditions {
-    /// Whether an etag satisfies the halves the store checks. Used on the
-    /// write path, which evaluates the whole condition itself against a
-    /// head rather than sending it, because a write's precondition has to
-    /// be paired with the CAS token of the very version it inspected.
+    /// Check the ETag of the snapshot being read or conditionally replaced.
     fn etag_met(&self, etag: Option<&str>) -> bool {
         let matches = |list: &str| match list.trim() {
             "*" => etag.is_some(),
@@ -1362,6 +1357,7 @@ impl Bucket {
         conditions: &BlobConditions,
     ) -> anyhow::Result<BlobRead> {
         let scoped = self.key(key);
+        let remote_etag = self.backend != StorageBackend::Local;
         let options = GetOptions {
             range: match range {
                 BlobRange::Whole => None,
@@ -1371,8 +1367,10 @@ impl Bucket {
                 }
                 BlobRange::Suffix(length) => Some(GetRange::Suffix(length)),
             },
-            if_match: conditions.if_match.clone(),
-            if_none_match: conditions.if_none_match.clone(),
+            if_match: remote_etag.then(|| conditions.if_match.clone()).flatten(),
+            if_none_match: remote_etag
+                .then(|| conditions.if_none_match.clone())
+                .flatten(),
             ..GetOptions::default()
         };
         let result = match self.store.get_opts(&self.blob_path(key), options).await {
@@ -1403,7 +1401,9 @@ impl Bucket {
         let meta = self.blob_meta(&result.meta, &result.attributes);
         // The upload-time half of `onlyIf` is answered here, against the
         // millisecond the object carries. The body is dropped unread.
-        if !conditions.time_met(meta.uploaded_ms) {
+        if (!remote_etag && !conditions.etag_met(meta.etag.as_deref()))
+            || !conditions.time_met(meta.uploaded_ms)
+        {
             return Ok(BlobRead::Unmet(meta));
         }
         // `range` is the slice this response actually carries, which is

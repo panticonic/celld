@@ -14,6 +14,7 @@ use futures_util::future::BoxFuture;
 use futures_util::stream::{self, BoxStream};
 use futures_util::FutureExt as _;
 use futures_util::StreamExt as _;
+use md5::{Digest as _, Md5};
 use object_store::list::{PaginatedListOptions, PaginatedListResult, PaginatedListStore};
 use object_store::path::Path;
 use object_store::{
@@ -30,6 +31,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 const STORE: &str = "celld development store";
+const CONTENT_ETAG: &str = "content-etag";
 
 #[derive(Clone, Debug)]
 pub(crate) struct LocalStore {
@@ -136,8 +138,9 @@ impl LocalStore {
         key: String,
         body: Bytes,
         options: PutOptions,
+        content_etag: Option<String>,
     ) -> object_store::Result<PutResult> {
-        let attributes = encode_attributes(&options.attributes)?;
+        let attributes = encode_attributes(&options.attributes, content_etag.as_deref())?;
         let modified_ms = crate::asyncrt::wall_ms();
         let mut connection = self.connect()?;
         let transaction = connection
@@ -160,7 +163,7 @@ impl LocalStore {
                 }
             }
         }
-        let etag = transaction
+        let sequence = transaction
             .query_row(
                 "UPDATE store_sequence SET next_etag = next_etag + 1
                  WHERE singleton = 1 RETURNING next_etag - 1",
@@ -177,19 +180,18 @@ impl LocalStore {
                    etag = excluded.etag,
                    modified_ms = excluded.modified_ms,
                    attributes = excluded.attributes",
-                params![key, body.as_ref(), etag, modified_ms, attributes],
+                params![key, body.as_ref(), sequence, modified_ms, attributes],
             )
             .map_err(db_error)?;
         transaction.commit().map_err(db_error)?;
-        Ok(PutResult {
-            e_tag: Some(etag.to_string()),
-            version: None,
-        })
+        let (e_tag, version) = object_identity(sequence, content_etag);
+        Ok(PutResult { e_tag, version })
     }
 
     fn copy_sync(&self, from: &str, to: &str, create: bool) -> object_store::Result<()> {
         let source = self.read(from)?;
         let attributes = decode_attributes(&source.attributes)?;
+        let content_etag = r2_content_etag(to, &source.body);
         self.put_sync(
             to.to_string(),
             source.body.into(),
@@ -202,6 +204,7 @@ impl LocalStore {
                 attributes,
                 ..PutOptions::default()
             },
+            content_etag,
         )?;
         Ok(())
     }
@@ -236,9 +239,12 @@ impl ObjectStore for LocalStore {
         let store = self.clone();
         let key = location.to_string();
         let body: Bytes = payload.into();
-        crate::asyncrt::blocking(move || store.put_sync(key, body, options))
-            .await
-            .map_err(db_error)?
+        crate::asyncrt::blocking(move || {
+            let content_etag = r2_content_etag(&key, &body);
+            store.put_sync(key, body, options, content_etag)
+        })
+        .await
+        .map_err(db_error)?
     }
 
     async fn put_multipart_opts(
@@ -440,16 +446,22 @@ impl MultipartUpload for LocalUpload {
         for part in parts {
             body.extend_from_slice(&part);
         }
-        self.store
-            .put_opts(
-                &self.location,
+        let store = self.store.clone();
+        let key = self.location.to_string();
+        let attributes = self.attributes.clone();
+        crate::asyncrt::blocking(move || {
+            store.put_sync(
+                key,
                 body.into(),
                 PutOptions {
-                    attributes: self.attributes.clone(),
+                    attributes,
                     ..PutOptions::default()
                 },
+                None,
             )
-            .await
+        })
+        .await
+        .map_err(db_error)?
     }
 
     async fn abort(&mut self) -> object_store::Result<()> {
@@ -462,17 +474,56 @@ fn object_meta(object: &StoredObject) -> object_store::Result<ObjectMeta> {
     let modified = SystemTime::UNIX_EPOCH
         .checked_add(Duration::from_millis(object.modified_ms.max(0) as u64))
         .ok_or_else(|| message_error("the object timestamp is outside the system clock range"))?;
+    let content_etag = if object.key.starts_with(crate::r2_store::KEY_PREFIX) {
+        let stored: Vec<StoredAttribute> =
+            serde_json::from_str(&object.attributes).map_err(db_error)?;
+        stored
+            .into_iter()
+            .find(|attribute| attribute.kind == CONTENT_ETAG)
+            .map(|attribute| attribute.value)
+    } else {
+        None
+    };
+    let (e_tag, version) = object_identity(object.etag, content_etag);
     Ok(ObjectMeta {
         location: stored_location(&object.key)?,
         last_modified: modified.into(),
         size: object.size,
-        e_tag: Some(object.etag.to_string()),
-        version: None,
+        e_tag,
+        version,
     })
 }
 
-fn encode_attributes(attributes: &Attributes) -> object_store::Result<String> {
-    let mut stored = Vec::with_capacity(attributes.len());
+fn r2_content_etag(key: &str, body: &[u8]) -> Option<String> {
+    key.starts_with(crate::r2_store::KEY_PREFIX)
+        .then(|| format!("{:x}", Md5::digest(body)))
+}
+
+fn object_identity(
+    sequence: i64,
+    content_etag: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let sequence = sequence.to_string();
+    // Identical bodies have the same R2 ETag, but every write gets its own
+    // sequence so a conditional update cannot overwrite a racing write.
+    match content_etag {
+        Some(etag) => (Some(etag), Some(sequence)),
+        None => (Some(sequence), None),
+    }
+}
+
+fn encode_attributes(
+    attributes: &Attributes,
+    content_etag: Option<&str>,
+) -> object_store::Result<String> {
+    let mut stored = Vec::with_capacity(attributes.len() + usize::from(content_etag.is_some()));
+    if let Some(etag) = content_etag {
+        stored.push(StoredAttribute {
+            kind: CONTENT_ETAG.to_string(),
+            name: None,
+            value: etag.to_string(),
+        });
+    }
     for (attribute, value) in attributes {
         let (kind, name) = match attribute {
             Attribute::ContentDisposition => ("content-disposition", None),
@@ -502,6 +553,7 @@ fn decode_attributes(encoded: &str) -> object_store::Result<Attributes> {
     let mut attributes = Attributes::with_capacity(stored.len());
     for stored in stored {
         let attribute = match stored.kind.as_str() {
+            CONTENT_ETAG => continue,
             "content-disposition" => Attribute::ContentDisposition,
             "content-encoding" => Attribute::ContentEncoding,
             "content-language" => Attribute::ContentLanguage,

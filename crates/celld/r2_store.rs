@@ -41,12 +41,13 @@ const STREAM_PART: usize = 8 << 20;
 /// [`Envelope`]. The bucket stores it as `celld_r2` on Azure, which
 /// refuses a hyphen in a metadata name.
 const ENVELOPE: &str = "celld-r2";
+pub(crate) const KEY_PREFIX: &str = "r2/";
 
 /// The key space one binding owns inside the fleet bucket. `bucket_name`
 /// comes from the deployment manifest, which validates it, so the prefix
 /// cannot escape into the fleet's own keys.
 pub(crate) fn blob_key(bucket_name: &str, key: &str) -> String {
-    format!("r2/{bucket_name}/{key}")
+    format!("{KEY_PREFIX}{bucket_name}/{key}")
 }
 
 /// The fleet bucket, or the error every op answers without one.

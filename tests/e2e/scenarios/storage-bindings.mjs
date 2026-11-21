@@ -39,7 +39,7 @@ const kv = {
 const blob = crypto.randomBytes(300_000);
 const md5 = (b) => crypto.createHash("md5").update(b).digest("hex");
 const getBytes = (path, bytes, ct) =>
-  get(path, { status: 200, bytes, headers: { "content-type": ct, etag: /^"[^"]+"$/ } });
+  get(path, { status: 200, bytes, headers: { "content-type": ct, etag: `"${md5(bytes)}"` } });
 const r2 = {
   example: "r2",
   title: "R2 put/get/delete with content-type, etag and binary bodies; persistence",
@@ -48,13 +48,8 @@ const r2 = {
     get("/o1", { status: 404, text: "Not found." }),
     put("/o1", 204, { body: "object-body", headers: { "content-type": "text/plain" } }),
     getBytes("/o1", Buffer.from("object-body"), "text/plain"),
-    // R2 returns the MD5 of a singlepart object as its etag. celld dev answers
-    // a store-wide counter instead (observed "16", "17", "18"... even for
-    // identical content written twice), so the value is not content-derived.
-    get("/o1", { status: 200, headers: { etag: `"${md5(Buffer.from("object-body"))}"` } }, {
-      name: "etag is the MD5 of the content (R2 contract)",
-      knownFail: "dev-mode R2 etag is a store-wide counter, not the content MD5",
-    }),
+    put("/o1", 204, { body: "object-body", headers: { "content-type": "text/markdown" } }),
+    getBytes("/o1", Buffer.from("object-body"), "text/markdown"),
     put("/bin/blob.dat", 204, { body: blob, headers: { "content-type": "application/x-custom" } }),
     getBytes("/bin/blob.dat", blob, "application/x-custom"),
     put("/o1", 204, { body: "v2", headers: { "content-type": "text/markdown" } }),

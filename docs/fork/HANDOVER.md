@@ -297,6 +297,18 @@ replay of the exact captured live merge passed. The separate diff-only
 case timed out before the child's report. `5a1beab` gives it one precise
 file change and a longer cold-run budget. That case still needs a live pass.
 
+The retained-collaborator run reviewed two different committed events from
+the same child and integrated the second without conflicts. It exhausted
+its scenario budget while generating the final report. System-testing
+`547f1c9` limits the two edits to one file and extends that scenario's
+budget. The undo run restored the original file, committed the counteraction
+and ended with a clean working copy. It had first passed a display label
+along with the exact change reference, which the service correctly rejected.
+`6746193` makes the required reference explicit. The six orchestration and
+retained-evidence checks and 14 focused VCS tests passed. Both cases join the
+second targeted batch, which waits for the first to finish. The full template
+check waits for both batches.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

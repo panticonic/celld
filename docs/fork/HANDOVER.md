@@ -18,6 +18,24 @@ The 65-turn soak passed. The reserve guard stopped the separate
 10,000-turn benchmark after it recorded at least 1,360 successful turns.
 Section 5 tracks the outstanding platform builds and artifact pins.
 
+**Additional test sweep, 2026-11-21.** The rebuilt celld passed all 53 regular
+end-to-end scenarios, including the corrected R2 ETag contract. Pi and OpenCode
+now have opt-in live checks. Pi reached its provider and received HTTP 401.
+OpenCode submitted the prompt and then timed out waiting for its session.
+The same stage timed out under stock workerd. A fresh rerun of
+the three deterministic Testkit suites passed and stopped normally.
+
+The next 100 agentic cases exclude the previous sample. The selection favors
+private copies, reviewed publication, recovery, and build isolation. The first
+pass exposed clean-history comparison, fixture seeding, typed move validation,
+and context retirement issues. Base commits `c88ad54` and `51f79a8` passed 33
+focused tests. System-testing `e000289` routes the two confirmed seeded VCS cases
+through independent copies and removes the catalog's compile-time dependency
+on the Personal browser runtime. All ten browser fixture inputs matched the
+previous revision in a direct comparison. The live retry and remaining cases
+use the exact pins recorded under
+`~/.local/state/celld-p4-compaction/agentic-risk-100-20261121/`.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

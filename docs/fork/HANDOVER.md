@@ -3284,6 +3284,18 @@ pushes them.
    across the original run, targeted retries, and retained replay. The
    installed catalog also confirmed the three deterministic Testkit
    system suites, which are running with the handoff qualification.
+   The first Testkit system run showed that the browser connection
+   opened by its driver closes when that RPC returns, before commands
+   from the next call arrive. Base `4e9afe0` opens raw Testkit connections
+   through the current caller's approved panel handle and keeps them
+   in the scope that uses them. The transcript also exposed a distinct
+   celld failure linking a worker whose entry file and sibling import
+   different names from `node:path`. Celld `b50fb34` joins the import
+   bindings for the full module graph before registering builtins. The
+   new `loader-external-imports` E2E case reproduces the missing export
+   on `61862f2`. The next serial candidate runner is
+   `vs-verify-cutover-panel-fixtures.service`, with logs under
+   `native-mutation-rerun/panel-fixture-rerun/`.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

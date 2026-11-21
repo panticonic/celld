@@ -49,13 +49,16 @@ checks passed. The live retry stopped normally and recorded successful
 cancellation of the tracked eval. The panel lifecycle check separately
 reported an expected unload cancellation as a failure. Base `2bb467c`
 preserves ownership of that cancellation through the RPC error wrappers.
-All 99 focused Base checks passed.
+All 99 focused Base checks passed. The isolated live panel recheck
+`st_e56a3967b1724209afd5877312c13ca6` passed and its instance stopped normally.
 
 The live agentic retry verified both VCS comparison cases, bringing the exact
 passing count to five. The occupied-destination retry used scratch storage,
 which allows replacement. System-testing `6371c2b` uses a managed repository
-for that check. The first bulk run found that the publication case could not
-see its seeded repository. System-testing `13083b6` gives the agent a copy of
+for that check. The managed rerun confirmed the error and both preserved notes.
+System-testing `8199b42` clarifies that the agent must call the recovery helper
+as part of the scenario. The first bulk run found that the publication case
+could not see its seeded repository. System-testing `13083b6` gives the agent a copy of
 that seeded revision and records the agent's exact publication event for
 teardown. The first bulk instance stopped normally. The rechecks for panel
 lifecycle, occupied move, and fixture publication are in `panel-fix-retry/`.
@@ -63,9 +66,13 @@ lifecycle, occupied move, and fixture publication are in `panel-fix-retry/`.
 System-testing `94f53e6` includes `dc47068` and lets private fixtures run
 concurrently. Cases that exercise protected main run without concurrent
 fixture snapshots. The fixture, publication, and scheduler checks passed
-(83 focused tests, then 44 after the scheduler adjustment). The remaining
-93 agentic cases are queued in `bulk-resume/`. The exact result count comes
-from `summarize-sample.py` in the evidence directory.
+(83 focused tests, then 44 after the scheduler adjustment). System-testing
+`572c59e` requires the published panel fork to have an observable publication
+receipt (12 focused tests passed). Commit `e882aff` directs the worker
+environment probe to the fixture's contract before it creates the worker.
+The 93 outstanding cases and the occupied move rerun are queued together in
+`bulk-resume/`. The exact result count comes from `summarize-sample.py` in
+the evidence directory.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded

@@ -273,12 +273,19 @@ verified passes, 32 awaited a passing rerun, and six had no complete outcome.
 
 The final first-run chunk passed four of six cases. All 100 cases reached a
 terminal outcome. The sample has 66 verified passes and 34 queued live
-rechecks. The automation case launched with a cutoff one hour late. Its
-retry supplies the exact New York offset and uses the next New Year so the
-fixture stays valid. The unit-version probe queried panels because the API
-description offered that path for workspace apps. Host `d6265a505` documents
-that the retained-release service supports installed extensions and clients.
-The updated probe reads an installed extension's retained versions.
+rechecks. The automation case launched with a cutoff one hour late.
+System-testing `d580582` supplies the exact New York offset and uses the
+next New Year so the fixture stays valid. The unit-version probe queried
+panels because the API description offered that path for workspace apps.
+Host `d6265a505` documents that retained releases belong to installed
+extensions and clients. The updated probe reads an installed extension's
+retained versions. All 53 focused unit diagnostics checks passed.
+
+The full trace of the documentation publication case also showed a transient
+SQLite busy error while acquiring dependency-content leases. Host
+`fbc638060` retries that transaction once before any file changes. All 46
+focused dependency-content and shared-cache tests passed, including a
+transient writer lock and the existing persistent-lock diagnostics.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded

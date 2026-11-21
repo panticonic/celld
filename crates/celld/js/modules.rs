@@ -621,7 +621,7 @@ pub(super) fn register_stubs(scope: &mut v8::PinScope, config: &WorkerConfig) {
     let registry = modreg(scope);
     registry.modules.lock().unwrap().clear();
     registry.trusted.lock().unwrap().clear();
-    for (spec, names) in &config.main_imports {
+    for (spec, names) in &config.external_imports {
         install_lazy_module(scope, spec);
         // `import * as x` binds the whole namespace, so the stub's exports
         // must be the module's full surface — probed from the backing
@@ -872,38 +872,21 @@ pub(super) fn register_wasm_modules(scope: &mut v8::PinScope, modules: &[(String
 }
 
 /// Register a loaded worker's sibling JS modules (Worker Loader multi-module
-/// bundles), in addition to the builtins `register_stubs` already added for the
-/// main module. Each module is registered under its own name and `./name` so
-/// both bare and relative sibling imports resolve; the whole graph links when
-/// the main module instantiates. Any builtin a sibling imports (and the main
-/// module did not) is stubbed too.
+/// bundles). The builtin exports for the full graph are already registered.
+/// Each module is registered under its own name and `./name` so both bare and
+/// relative sibling imports resolve when the main module instantiates.
 pub(super) fn register_loader_modules(
     scope: &mut v8::PinScope,
     config: &WorkerConfig,
     main: v8::Local<v8::Module>,
 ) {
-    for (_name, _source, imports) in config.es_modules() {
-        for (spec, names) in imports {
-            if modreg(scope).modules.lock().unwrap().contains_key(spec) {
-                continue;
-            }
-            install_lazy_module(scope, spec);
-            let s = if names.contains("*") {
-                full_surface_source(scope, spec, names).unwrap_or_else(|| stub_source(spec, names))
-            } else {
-                stub_source(spec, names)
-            };
-            register_internal_stub(scope, spec, &s);
-        }
-    }
     register_named_module(scope, &config.main_module_name, main, false);
-    for (name, source, _imports) in config.es_modules() {
+    for (name, source) in super::es_module_sources(&config.modules) {
         register_sibling_module(scope, name, source, false);
     }
 }
 
-/// Module resolve callback: serve a registered stub for `cloudflare:*`/`node:*`.
-/// celld bundles are single-file, so anything else is genuinely unresolvable.
+/// Resolve a builtin or sibling through the isolate's module registry.
 pub(super) fn resolve_external<'s>(
     context: v8::Local<'s, v8::Context>,
     specifier: v8::Local<'s, v8::String>,

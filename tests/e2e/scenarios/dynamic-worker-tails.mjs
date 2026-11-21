@@ -7,7 +7,7 @@ const body = { status: 200, text: "Hello from a Dynamic Worker!\n" };
 const tailLine = /cell_console: dynamic-worker-tail: hello from loaded code \{"workerId":"hello-v1","level":"log"\}\s*$/;
 const loadedLine = /cell_console: hello from loaded code\s*$/;
 
-export default {
+const workerTails = {
   example: "dynamic-worker-tails",
   title: "Worker Loader: run loaded code, tail receives its console record with props",
   steps: [
@@ -26,3 +26,16 @@ export default {
     waitLog(tailLine, { timeoutMs: 10000, session: true, why: "tail event after restart", name: "tail works after restart (loader re-runs the factory)" }),
   ],
 };
+
+export default [
+  workerTails,
+  {
+    example: "dynamic-worker-tails",
+    id: "loader-external-imports",
+    fixture: "loader-external-imports",
+    title: "Worker Loader links the different builtin imports of each module",
+    steps: [
+      get("/", { status: 200, json: { filename: "sample.txt", absolute: true } }),
+    ],
+  },
+];

@@ -2106,26 +2106,18 @@ pub struct WorkerConfig {
     /// isolate built from it carries the value as a slot, so its host calls
     /// resolve against the deployment graph it was built with.
     pub generation: crate::generation::GenerationId,
-    /// The external (`node:*`/`cloudflare:*`) imports of `src`.
+    /// The external (`node:*`/`cloudflare:*`) imports of the whole module graph.
     ///
     /// The scan walks the whole bundle, which an esbuild artifact makes
-    /// megabytes, and its answer depends only on `src` — a field nothing
-    /// mutates after construction. It used to run inside `load_config`,
+    /// megabytes, and its answer depends only on the immutable module sources.
+    /// It used to run inside `load_config`,
     /// so a deployment paid it again on every cell wake and on every
     /// stateless pool thread. One `Arc<WorkerConfig>` backs all of those
     /// isolates, so scanning here pays it once instead.
-    main_imports: modules::ExternalImports,
-    /// The same scan for each `ModuleSource::EsModule` sibling, in the order
-    /// `es_module_sources` yields them. Read through
-    /// [`WorkerConfig::es_modules`], which hands a module and its scan out
-    /// together so no caller can pair a module with another module's scan.
-    module_imports: Vec<modules::ExternalImports>,
+    external_imports: modules::ExternalImports,
 }
 
 /// The `ModuleSource::EsModule` siblings of a worker, as (name, source).
-///
-/// The single definition of that order: `WorkerConfig::new` scans in it and
-/// `WorkerConfig::es_modules` zips against it, so the two cannot disagree.
 fn es_module_sources(modules: &[(String, ModuleSource)]) -> impl Iterator<Item = (&str, &str)> {
     modules.iter().filter_map(|(name, source)| match source {
         ModuleSource::EsModule(source) => Some((name.as_str(), source.as_str())),
@@ -2200,10 +2192,12 @@ impl WorkerConfig {
             modules,
             compat,
         } = options;
-        let main_imports = modules::scan_external_imports(&src);
-        let module_imports = es_module_sources(&modules)
-            .map(|(_name, source)| modules::scan_external_imports(source))
-            .collect();
+        let mut external_imports = modules::scan_external_imports(&src);
+        for (_, source) in es_module_sources(&modules) {
+            for (specifier, names) in modules::scan_external_imports(source) {
+                external_imports.entry(specifier).or_default().extend(names);
+            }
+        }
         let declares_queue_consumer = !queue_consumers.is_empty();
         let egress_base = EgressBase::deployed(&script_name);
         let queue_consumers = queue_consumers
@@ -2250,8 +2244,7 @@ impl WorkerConfig {
             class_secrets: Default::default(),
             residency_grant: None,
             generation: 0,
-            main_imports,
-            module_imports,
+            external_imports,
         }
     }
 
@@ -2363,23 +2356,6 @@ impl WorkerConfig {
         self.loader_name = name;
         self
     }
-    /// Every `ModuleSource::EsModule` sibling with its name, its source and
-    /// its scanned external imports.
-    fn es_modules(&self) -> impl Iterator<Item = (&str, &str, &modules::ExternalImports)> {
-        // `zip` would truncate silently if the two ever disagreed, and a
-        // truncated scan means a sibling links against a stub missing its
-        // names. Both are filled from `es_module_sources` in `new`, so a
-        // disagreement is a bug in a future mutator, not a reachable state.
-        debug_assert_eq!(
-            es_module_sources(&self.modules).count(),
-            self.module_imports.len(),
-            "an ES sibling lost its scanned imports",
-        );
-        es_module_sources(&self.modules)
-            .zip(&self.module_imports)
-            .map(|((name, source), imports)| (name, source, imports))
-    }
-
     /// Give this Worker the deployment's cron trigger expressions.
     pub fn with_crons(mut self, crons: Vec<String>) -> Self {
         self.crons = crons;

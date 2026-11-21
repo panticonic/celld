@@ -3470,6 +3470,15 @@ pushes them.
    declarations built, and all 14 focused provider tests passed.
    Host `5ed2f662e` builds the SDK fixtures in a child process before
    launching the desktop. Both website browser cases are queued.
+   The next managed run `st_002aca7c86c54a7f8566c125f6983a61` passed
+   chat transcript, including opening the Dolt fork and returning to
+   its parent, and panel viewport. Panel lifecycle rebuilt its panel
+   and its supervision check caught `RPC call aborted by caller`.
+   A focused fixture reproduced the reported error when closing before
+   a channel subscription acknowledged. Base `b55782a` settles readiness
+   as part of closing and stops the retired opener from reporting a
+   recovery error. All 80 PubSub client tests passed. The three
+   managed Testkit suites will run again on this Base pin.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

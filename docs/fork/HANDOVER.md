@@ -10,9 +10,10 @@ details; this file is authoritative for the overall order and the rules.
 release candidates and test evidence. The fresh-install and
 two-workspace checks passed, including independent account writes and
 reviewed publication into shared history. The 30-case agentic sample is
-verified. Core deterministic cases and both desktop smokes passed.
-The browser and Android retries are still open, and one managed test
-instance exceeded its teardown deadline after its suites passed.
+verified. Core deterministic cases, both desktop smokes, and all 43
+browser cases passed. Android reached the onboarding panel and its
+full smoke is still open. One managed test instance exceeded its
+teardown deadline after its suites passed.
 The 65-turn soak passed. The reserve guard stopped the separate
 10,000-turn benchmark after it recorded at least 1,360 successful turns.
 Section 5 tracks the outstanding platform builds and artifact pins.
@@ -3667,6 +3668,16 @@ pushes them.
    fresh browser scope for its retry. Logs from the isolated attempt
    showed Personal starting near the gate deadline. Host `cfe6252ed`
    gives that cold companion startup its own additional time.
+   That run opened a live shell and saved the expected three panes and
+   focused session. On reload, the terminal rejected its own saved state.
+   Base `93e83f9` normalizes the saved snapshot with the same rules as
+   its reader and keeps the split positions supported by the UI. All
+   30 focused layout and action tests passed. Host `b1aefef2a` retains
+   the exact saved layout in the browser report before reloading.
+   The isolated browser rerun passed layout restoration and the
+   post-reload terminal checks. The aggregate is 43 of 43 passing
+   across the full suite and the targeted reruns. The final terminal
+   report is `profile-rerun/terminal-restore-rerun/retry-terminal-restore.json`.
    The folder checkout browser retry used the exact reviewed Git
    source and entered the newly approved workspace. Host `efb1f209e`
    checks the current launcher copy on that final surface. The rerun

@@ -3458,12 +3458,13 @@ pushes them.
    fixture for both navigation scenarios. The next navigation screenshot
    showed that a partial text match selected a web search. Host
    `a9930611e` selects both installed units by the launcher's exact panel
-   links. The terminal browser
-   fixture stopped at the obsolete launch gate helper.
-   Host `036e42385` reaches the current
-   hosted shell before exercising the terminal's scoped grant and
-   automatic session resumption. Those browser cases are queued for
-   re-verification.
+   links. Host `036e42385` gets the terminal browser fixture through the
+   current launch gate. The rerun opened a usable terminal and missed the
+   approval assertion, which still expected the old shell extension
+   launch. Host `d05c24ff4` leaves the exact terminal-app launch permission
+   unchecked at creation and verifies the interactive approval for the
+   workspace's login shell. That rerun is queued. All 72 focused terminal
+   registry, install review, and authority checks passed.
    The remaining 28 browser cases finished with 6 passes, 17 failures,
    and 5 serial skips. The template-authoring report shows that the
    settings panel opened and the test timed out. Host `aaae362e4`

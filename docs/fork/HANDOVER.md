@@ -3336,6 +3336,8 @@ pushes them.
    Both desktop pairing smokes stopped at System template validation.
    System `7917fc7` names the two unnamed skill packages. All eight
    bootable template checkouts passed the same validator after the fix.
+   All eight passed full validation again on the current candidate. See
+   `template-pairing-rerun/template-validation.tsv`.
    The full Linux E2E rerun on celld `b50fb34` passed 52 of 55 cases.
    The retained R2 ETag mismatch was expected. The Pi and OpenCode cases
    skipped because the live providers needed for those cases were absent.
@@ -3437,20 +3439,26 @@ pushes them.
    controls used by the test. Host `55ef27416` drives the current
    desktop UI and still checks panel selection, creation, terminal and
    chat sizes, and horizontal overflow. All 18 focused desktop
-   shell checks passed. The six browser cases are queued together.
+   shell checks passed. The phone-width sidebar browser case passed.
+   Host `9d7826621` selects the address control for the exact Help panel
+   after the next case found two matching titlebar controls. The remaining
+   phone-width cases are queued with that change.
    The native Android pairing smoke has a separate disposable emulator
    and waits for the desktop and installed-workspace checks to release
    their resources.
-   Both desktop rebuild cases passed. The panel persistence test
-   reproduced the prepared-source error on its second launch and is
-   queued with the same fixture fix. Host `4df4beafb` makes the
+   Both desktop rebuild cases passed. The panel persistence test passed
+   after each launch got its own prepared-source directory. Host
+   `4df4beafb` makes the
    navigation test wait for the enabled launcher control and checks
    pending build state in the exact hosted shell. The 12 focused
    native-mobile app bar, panel tree, and layout tests passed.
    The Server Logs launch reached the launcher inside Personal.
    Server Logs, About Vibestudio, ad blocking, and permissions are
    units of the System template. Host `526b07ac6` opens the System
-   fixture for both navigation scenarios. The terminal browser
+   fixture for both navigation scenarios. The next navigation screenshot
+   showed that a partial text match selected a web search. Host
+   `a9930611e` selects both installed units by the launcher's exact panel
+   links. The terminal browser
    fixture stopped at the obsolete launch gate helper.
    Host `036e42385` reaches the current
    hosted shell before exercising the terminal's scoped grant and

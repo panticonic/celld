@@ -35,6 +35,18 @@ on the Personal browser runtime. All ten browser fixture inputs matched the
 previous revision in a direct comparison. The live retry and remaining cases
 use the exact pins recorded under
 `~/.local/state/celld-p4-compaction/agentic-risk-100-20261121/`.
+The six-case retry passed three, including both eval cases that had failed
+while retiring their working copies. Base `79aa74b` then corrected comparisons
+against an exact older revision and retained typed file-transfer errors. All
+41 focused Base checks passed. System-testing `eb01855` gives 25 additional
+seeded private cases their own copies before the model starts.
+
+The next Testkit run passed all three suites and reproduced the shutdown
+stall on channel recovery. It also found a tracked eval whose host had
+already retired. Host `0383097d9` stops recovery before suspending the
+workspace and closes admissions for retired eval hosts. All 71 focused Host
+checks passed. The live shutdown retry and the 97 outstanding agentic cases
+are recorded in the `shutdown-fix-retry/` subdirectory.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded

@@ -3451,9 +3451,8 @@ pushes them.
    Its full smoke retry is queued after the desktop checks.
    Both desktop rebuild cases passed. The panel persistence test passed
    after each launch got its own prepared-source directory. Host
-   `4df4beafb` makes the
-   navigation test wait for the enabled launcher control and checks
-   pending build state in the exact hosted shell. The 12 focused
+   `4df4beafb` makes the navigation test wait for the enabled launcher
+   control and checks pending build state in the exact hosted shell. The 12 focused
    native-mobile app bar, panel tree, and layout tests passed.
    The Server Logs launch reached the launcher inside Personal.
    Server Logs, About Vibestudio, ad blocking, and permissions are
@@ -3461,13 +3460,19 @@ pushes them.
    fixture for both navigation scenarios. The next navigation screenshot
    showed that a partial text match selected a web search. Host
    `a9930611e` selects both installed units by the launcher's exact panel
-   links. Host `036e42385` gets the terminal browser fixture through the
-   current launch gate. The rerun opened a usable terminal and missed the
+   links. The same-panel navigation test passed through About, ad blocking,
+   and permissions. Server Logs also opened and reached ready. Host
+   `036e42385` gets the terminal browser fixture through the current
+   launch gate. The rerun opened a usable terminal and missed the
    approval assertion, which still expected the old shell extension
    launch. Host `d05c24ff4` leaves the exact terminal-app launch permission
    unchecked at creation and verifies the interactive approval for the
-   workspace's login shell. That rerun is queued. All 72 focused terminal
-   registry, install review, and authority checks passed.
+   workspace's login shell. The next run opened the shell without
+   recording a per-call prompt. Host `586e69c2c` confirms that the
+   intended permission is present in the exact creation review and
+   records whether the later launch gate selected that permission.
+   The case is queued again. All 72 focused terminal registry, install
+   review, and authority checks passed.
    The remaining 28 browser cases finished with 6 passes, 17 failures,
    and 5 serial skips. The template-authoring report shows that the
    settings panel opened and the test timed out. Host `aaae362e4`
@@ -3497,8 +3502,11 @@ pushes them.
    Both preview regression cases failed before the fix. All 61 relay and
    website checks passed after it. The connection case correctly refused
    the call before consent. Host `f4006726f` exposes the structured error
-   code in the test page so the assertion can see it. Both desktop cases
-   are queued against those pins.
+   code in the test page so the assertion can see it. The scripted
+   invention browser rerun passed. It rendered the reviewed artifact,
+   received a real embedded reply, published the revision, and
+   reconnected to the revised invention. The separate website
+   connection case is running.
    The next managed run `st_002aca7c86c54a7f8566c125f6983a61` passed
    chat transcript, including opening the Dolt fork and returning to
    its parent, and panel viewport. Panel lifecycle rebuilt its panel

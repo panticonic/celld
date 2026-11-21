@@ -82,6 +82,28 @@ The occupied move rerun passed, including use of the executable recovery
 helper. The exact result count comes from `summarize-sample.py` in the
 evidence directory.
 
+The first bulk cases exposed two large-history timeouts. Preparing the 36
+revisions consumed most of the ten-minute scenario budget before the agent
+started. System-testing `1904dc7` starts the scenario clock after repository
+fixture preparation and retains preparation in the elapsed result. It passed
+45 focused checks. Commit `e4add41` skips the private ancestry walk during
+teardown when protected main still points at the original event, except where
+the fixture needs exact creation-scope checks or has a publication receipt.
+All 32 fixture checks passed. Commit `9efbc39` asks the revert scenario to
+reread the restored file and verify cleanliness, the evidence required by its
+existing checker.
+
+The edited-import case completed its functional assertions and exposed a
+native provenance bug when tracing a change to a tool invocation. Base
+`3286e20` removes an extra empty field from the internal walk page. The
+public provenance response still includes its own omission field. The
+focused test passes with the host schema applied to both complete and
+missing-metadata invocation pages. System-testing `2d4eef9` asks the
+constraint-inference case to check the record of rejected alternatives. Its
+agent reached the correct conclusion from ordinary reads in the first run.
+The `history-retry/` batch waits for the main run and rechecks these five
+cases using the two updated template branches.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

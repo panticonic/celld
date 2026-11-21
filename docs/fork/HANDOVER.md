@@ -76,9 +76,11 @@ fixture snapshots. The fixture, publication, and scheduler checks passed
 `572c59e` requires the published panel fork to have an observable publication
 receipt (12 focused tests passed). Commit `e882aff` directs the worker
 environment probe to the fixture's contract before it creates the worker.
-The 93 outstanding cases and the occupied move rerun are queued together in
-`bulk-resume/`. The exact result count comes from `summarize-sample.py` in
-the evidence directory.
+The 93 outstanding cases and the occupied move rerun started together in
+`bulk-resume/` as `st_6fac0271b3fb45f584d716788186d723`, with concurrency 3.
+The occupied move rerun passed, including use of the executable recovery
+helper. The exact result count comes from `summarize-sample.py` in the
+evidence directory.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded

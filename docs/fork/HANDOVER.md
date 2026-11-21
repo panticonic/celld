@@ -3279,6 +3279,11 @@ pushes them.
    `vs-verify-cutover-native-mutation-tests.service` on Host `7984307d8`,
    Base `2738fa4`, and System-testing `dc3a2d8`. It retains results
    in the `native-mutation-rerun/` subdirectory.
+   The package built successfully and all four agentic retries passed in
+   `st_8e69b02f7d0846c1a95fa52a04d894c4`. This closes the 30-case sample
+   across the original run, targeted retries, and retained replay. The
+   installed catalog also confirmed the three deterministic Testkit
+   system suites, which are running with the handoff qualification.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

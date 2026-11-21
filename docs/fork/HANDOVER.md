@@ -3522,8 +3522,11 @@ pushes them.
    the authenticated code that created the agent. Host `f68556533` routes
    the initial join through that creator and preserves the initiating
    account's durable ownership. The focused regression failed before
-   the fix. All 211 runtime and HTTP RPC checks passed afterward. A
-   browser run verifies delivery, reopening, and promotion in one session.
+   the fix. All 211 runtime and HTTP RPC checks passed afterward. The four
+   focused browser cases passed in one session, including durable delivery
+   after reopening and promotion into a chat panel with the same history.
+   The four basic overlay interaction cases had passed in the full run.
+   The focused report is in `quickfire-creator-rerun/browser.json`.
    Desktop startup reached the initial chat and the local test provider
    rejected the host's request to attest its model endpoint because the
    fixture still exported the retired method. Host `524d8413e` updates

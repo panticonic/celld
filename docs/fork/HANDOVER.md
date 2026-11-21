@@ -3448,7 +3448,8 @@ pushes them.
    desktop checkout reused a shared dependency tree without the mobile
    workspace links. A dedicated Android checkout passed a frozen offline
    install and resolved the native polyfill from its exact package.
-   Its full smoke retry is queued after the desktop checks.
+   Its full smoke retry now builds the native app and prepares the
+   server release from that checkout's own host artifacts.
    Both desktop rebuild cases passed. The panel persistence test passed
    after each launch got its own prepared-source directory. Host
    `4df4beafb` makes the navigation test wait for the enabled launcher
@@ -3496,8 +3497,11 @@ pushes them.
    install review. The approval card moved to another Electron surface
    while the test followed the old page. Host `879049994` follows the
    exact approval across those surfaces. The desktop pairing retries
-   rejected the package sealed for the earlier Host build. Both smokes
-   will use the release sealed against the queued Host revision.
+   and managed Testkit provisioner rejected the package sealed for the
+   earlier Host build. An initial build in the queued checkout also
+   exposed missing workspace dependency links in the shared install.
+   Its own frozen offline install resolved those links. Both smokes and
+   Testkit will use the release sealed by that checkout.
    The website SDK build rejected the optional native canvas import
    pulled in by its HTML parser. Base `a0309eb` uses LinkeDOM's browser
    entry for the two HTML parsers. The full standalone SDK and its
@@ -3575,15 +3579,23 @@ pushes them.
    its first channel read had no matching invocation yet. Host
    `574b480d2` observes the durable invocation before granting consent
    and still compares its identity with the completed invocation.
-   Both cases are queued on the candidate with the creator fix.
-   All 122 focused filesystem, version-control, and approval fixture
-   checks passed.
+   The next run's screenshot shows the onboarding setup panel and
+   completed reply. Its observer read the four-character chat label
+   in the renderer, which resolved a different conversation. Host
+   `58a72d762` reads the full channel identity from the actual chat
+   panel's runtime state and inspects as that panel. Both cases are
+   queued for the exact channel checks. All 122 focused filesystem,
+   version-control, and approval fixture checks passed.
    The phone-width desktop run passed the sidebar, address bar, new
    root panel, and background panel checks. Terminal stayed in the
    lease stage while the fixture waited without servicing later
    approvals. Host `8c7fe0d6e` drives approvals as the panel becomes
-   ready and captures pending approvals on failure. Terminal and the
-   chat viewport check skipped after it are queued again.
+   ready and captures pending approvals on failure. The second run
+   still showed the child terminal leasing with an empty approval
+   queue. Host `b163bebd7` navigates the existing launcher slot to the
+   terminal and verifies that exact source is ready before checking
+   layout. Terminal and chat run separately so each records its own
+   outcome.
    The geometry check passed on the next desktop run. Three other
    chrome checks reached the hosted shell and timed out. The logs
    showed repeated attempts to read unpinned panel metadata from the

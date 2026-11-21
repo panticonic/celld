@@ -122,6 +122,17 @@ authorized reviewer's own cell through the existing private fork grant.
 The focused Host and Base suites passed 55 and 78 checks. The four
 delegated-work live rechecks are queued in `subagent-retry/`.
 
+The first history rerun `st_54b113d218054906a9a9f6f8c0cfedad` passed edited
+import, edited-file history, walkable causality, and typed infrastructure
+recovery. Its three retained trajectories exposed two other test evidence
+issues and a repository history bug. System-testing `32d980d` accepts the
+exact recorded invocation that authored the revert and joins the cited
+historical work unit through its application to the exact commit. All 14
+focused checks passed. Base `2376a51` includes repository coordinates in a
+rejection walk. Its focused test keeps file lookups precise and excludes
+other repositories. The three named live rechecks join the delegated-work
+batch.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

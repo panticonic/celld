@@ -3711,6 +3711,30 @@ pushes them.
    reply check. Host `c39bd8610` removes the legacy trajectory tables
    from that check and requires stable final output in the rendered
    conversation. All four focused visibility tests passed.
+   Host `e79495fc7` reads the exact completed fixture reply from the
+   Android chat document and checks for active typing. All five
+   focused output checks passed. Its browser client rendered the
+   completed turn, verified separate System and Personal cookies,
+   and reconnected after both app and server restarts with zero
+   panel-asset pipe misses. The chat client opened in a separate task,
+   and the CLI attached to System. The memory guard stopped the run
+   during the final client publication check.
+   Publication also exposed a compiler dependency conflict between
+   the host SDK's own TypeScript and the version its Svelte adapter
+   needs at runtime. Host `9b5986236` keeps the SDK's private compiler
+   out of the imported package's dependency list. Host `3469e1ede`
+   builds the Android smoke's exact local source pins with the
+   authored install graph. This avoids attaching the development
+   test harness to the workspace that publishes the client. All 14
+   compiler-graph, template-selection, and smoke-server tests passed.
+   The next Android run paired and reached Personal, then stopped
+   when the machine reserve fell below 8 GiB. The last client
+   publication and reopen checks remain open. The one-shot
+   `vs-verify-cutover-android-final.service` waits for sustained
+   headroom and records its result in `profile-rerun/android-publish-when-ready/`.
+   The development harness's separate Personal-only browser fixture
+   dependency still requires a valid composition for development
+   workspaces that run that fixture.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed
@@ -3735,6 +3759,10 @@ pushes them.
    and gives the model-free 10,000-turn case a 24-hour timeout. The watcher
    exits if the reserve guard stops its instance. The completed result
    and inspection will be recorded under `p4-current-release-fork-benchmark`.
+   The subsequent queued benchmark was interrupted to give the requested
+   Android smoke the machine. Its partial soak and shutdown evidence is
+   retained under `p4-current-release-interrupted-for-android`. The
+   benchmark queue waits for the one-shot Android retry to retire.
    Host documentation commit `345b70b63` applies the owner's fresh-start
    and normal-restart guidance directly to the provenance acceptance
    matrix and records how the two local Dolt indexes work. The current

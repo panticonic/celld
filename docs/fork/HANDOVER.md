@@ -101,8 +101,26 @@ focused test passes with the host schema applied to both complete and
 missing-metadata invocation pages. System-testing `2d4eef9` asks the
 constraint-inference case to check the record of rejected alternatives. Its
 agent reached the correct conclusion from ordinary reads in the first run.
-The `history-retry/` batch waits for the main run and rechecks these five
-cases using the two updated template branches.
+The `history-retry/` batch rechecks these cases using the updated template
+branches.
+
+The coordinated run stopped normally when the disk fell to 2.3 GiB free.
+Its retained progress contains 23 passing cases across all runs and 12
+terminal failures. Retiring the disposable instance returned about 12 GiB.
+`bulk-chunked/` holds the 65 unverified cases and the targeted multi-turn
+rerun. It uses fresh, smaller groups and checks free disk space between
+groups. System-testing `4942960` asks the persistence case to return both
+eval observations. Commit `fee3255` reads the nested native error envelope
+for the recoverable-infrastructure case. All 14 developer-ergonomics checks
+passed.
+
+The delegated-work cases found that review used the parent's stale projection
+of the child's context. A child had committed a local change that the parent
+could not inspect or integrate. Host `395fe2a27` and Base `66f8274` locate
+the child's recorded authoring cell and copy its exact revision into the
+authorized reviewer's own cell through the existing private fork grant.
+The focused Host and Base suites passed 55 and 78 checks. The four
+delegated-work live rechecks are queued in `subagent-retry/`.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded

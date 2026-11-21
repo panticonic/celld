@@ -3398,6 +3398,14 @@ pushes them.
    source while the existing context admission controls which conversation
    it can open. All six focused panel authority and navigation checks
    passed. The exact live transcript is queued in `chat-fork-source-rerun/`.
+   The desktop rerun recorded a seeded panel in both fresh private
+   workspaces and activated the Personal chat. The first DX case reached
+   the invocation diagnostic after its directory read. Host `d168902c5`
+   removes obsolete command and effect fields from the E2E fixture and
+   uses the current diagnostic types. The second was still waiting for its
+   project adoption review while its fixture waited for launch. Host
+   `61a4f0d47` resolves the reviewed creation intent before waiting for
+   client startup. Both exact cases run again with the chat-fork candidate.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

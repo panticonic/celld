@@ -3509,8 +3509,11 @@ pushes them.
    recovery error. All 80 PubSub client tests passed. On this Base pin,
    the managed rerun again passed chat transcript and panel viewport.
    The lifecycle rebuild completed, and supervision still reported a
-   cancellation as an error. The full console diagnostic is being
-   replayed in an isolated managed instance.
+   cancellation as an error. The isolated replay applied the permitted
+   approvals to a fresh session. All six lifecycle checks passed and
+   supervision recorded no findings. Evidence is in
+   `panel-lifecycle-approved-console-rerun/findings.json`. The exact
+   three-case catalog run is queued against the latest Host pin.
    The desktop directory-read and causal-diagnostics retry passed.
    The screenshot and console-history retry opened its project and
    reached a chat panel that was still joining its conversation when
@@ -3556,8 +3559,16 @@ pushes them.
    test RPC on the real shell transport and removes the Playwright
    binding setup that timed out. A focused probe checked both
    destinations, the exact caller, schema validation, permission
-   failures, and listener cleanup. The three chrome cases are queued
-   again and the geometry pass is recorded.
+   failures, and listener cleanup. The private workspace catalog case
+   passed. The custom chrome case was looking for the Browser Data
+   review after the launch gate had already accepted it. Host
+   `619971c60` checks the recognized deletion permission on the gate
+   itself and uses the workspace rows to verify routing. The file-copy
+   case created a private review context, but the test asked the shell's
+   published catalog to resolve it. Host `12b3c6a46` reads through the
+   destination filesystem with that exact context and verifies the
+   single file's bytes and hash, along with the unchanged protected
+   main. Both browser cases are queued for live verification.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

@@ -3351,6 +3351,15 @@ pushes them.
    `st_2da90f18ddf7427aa9142a6810fbf184`. The eval-recovery retry includes
    a fresh run of the exact chat transcript suite before the browser
    groups.
+   The eval-recovery retry did not report a result before its outer
+   deadline, and the queued chat suite did not run in that fixture.
+   The original opening request was retained and replayed through the
+   CLI. The browser panel joined and displayed it when the channel was
+   initialized before opening the panel. Base `5f7af20` now retains the
+   creation seed before starting the response-owned chat subscription.
+   All 24 connection and ownership checks passed. The exact transcript
+   suite is queued in `stable-panel-rerun/seeded-chat-rerun/` after the
+   current browser groups and the installed two-workspace check.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

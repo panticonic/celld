@@ -3357,9 +3357,18 @@ pushes them.
    CLI. The browser panel joined and displayed it when the channel was
    initialized before opening the panel. Base `5f7af20` now retains the
    creation seed before starting the response-owned chat subscription.
-   All 24 connection and ownership checks passed. The exact transcript
-   suite is queued in `stable-panel-rerun/seeded-chat-rerun/` after the
-   current browser groups and the installed two-workspace check.
+   All 24 connection and ownership checks passed.
+   The browser retry passed the test API startup case and reproduced two
+   feature failures with an empty initial panel tree. The fixture template
+   declared the chat panel and the runtime built its artifact after the
+   panel initialization step had already run. Host `55a1df5b5` makes
+   protected workspace configuration part of required startup so first-run
+   panel initialization can read it. The 18 focused Host startup and
+   reconciliation checks passed. The older browser run was retired,
+   and `semantic-ready-rerun/` packages this Host and Base `5f7af20`
+   together for the original transcript suite, all 43 browser cases, and
+   the two desktop pairing checks. The installed two-workspace check and
+   benchmark wait behind that runner.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

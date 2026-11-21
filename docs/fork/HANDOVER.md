@@ -3377,7 +3377,19 @@ pushes them.
    SQLite storage. System-testing `b33034f` gives that agent the same
    Dolt storage declaration as the product agent. Template validation and
    all three focused worker tests passed. The exact fork suite is queued
-   in `dolt-test-agent-rerun/` after the active browser and pairing groups.
+   on the next full candidate.
+   The config-order correction reached the desktop, where the first two
+   browser cases still found an empty panel list. Both fresh WorkspaceState
+   cells had recorded an empty initialization marker after their revision
+   had advanced during service activation. The focused regression shows
+   that activating a worker before panel initialization causes zero seeds.
+   Host `d73e0ff4b` bases this decision on actual slots and the retained
+   initialization marker. All 129 focused state, startup, and panel
+   reconciliation tests passed, including that regression. The older
+   browser runner was stopped after the two failures. The combined runner
+   at `panel-seeding-rerun/` checks the full product startup and the Dolt
+   test agent together, then runs the 43 browser cases and both desktop
+   pairing checks. The browser reporter records each failure when it occurs.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

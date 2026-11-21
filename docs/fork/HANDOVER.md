@@ -3266,6 +3266,19 @@ pushes them.
    eight tests successfully at the old pin and all eight at the new pin.
    The retained trajectories and focused rerun logs are in the same
    evidence directory.
+   The other five agentic cases passed on the fresh candidate. The run
+   `st_98b43faad0dc4a138d9d5253acdfe337` finished with five passes, four
+   validation failures and zero execution errors, leaving 26 of the
+   original 30 verified after including the directory-removal replay.
+   The two workspace integration qualifications and provenance passed in
+   `st_7d421a00698549bb96353ea4ee88d9e0`. The handoff qualification reached
+   nine of its eleven fixtures before its default ten-minute deadline.
+   System-testing `dc3a2d8` gives that specific qualification 15 minutes.
+   The remaining four agentic cases, handoff qualification, and smoke
+   and E2E runs are assigned to
+   `vs-verify-cutover-native-mutation-tests.service` on Host `7984307d8`,
+   Base `2738fa4`, and System-testing `dc3a2d8`. It retains results
+   in the `native-mutation-rerun/` subdirectory.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

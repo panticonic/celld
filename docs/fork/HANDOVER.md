@@ -3479,6 +3479,13 @@ pushes them.
    as part of closing and stops the retired opener from reporting a
    recovery error. All 80 PubSub client tests passed. The three
    managed Testkit suites will run again on this Base pin.
+   The desktop directory-read and causal-diagnostics retry passed.
+   The screenshot and console-history retry opened its project and
+   reached a chat panel that was still joining its conversation when
+   the case timed out. Host `6e20fc7f4` uses the reviewed launcher
+   caller and a Help panel for the same screenshot, blob round-trip,
+   console history, and focus checks. That case is queued separately.
+   The exact graceful-quit retry passed with no unexpected failures.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

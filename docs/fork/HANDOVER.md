@@ -119,8 +119,14 @@ of the child's context. A child had committed a local change that the parent
 could not inspect or integrate. Host `395fe2a27` and Base `66f8274` locate
 the child's recorded authoring cell and copy its exact revision into the
 authorized reviewer's own cell through the existing private fork grant.
-The focused Host and Base suites passed 55 and 78 checks. The four
-delegated-work live rechecks are queued in `subagent-retry/`.
+The focused Host and Base suites passed 55 and 78 checks. The first
+delegated-work rerun in `subagent-retry/` still read a seeded parent
+revision. Base `ca22043` corrects the lookup to read the context ID from
+the separate field in the stored participant identity. The exact-format
+regression check is among 12 passing participant-history checks. The four
+delegated-work cases are scheduled again in `subagent-author-retry/` after
+the 66-case `bulk-chunked/` sweep. One design synthesis run also timed out
+during recursive cleanup after the model finished.
 
 The first history rerun `st_54b113d218054906a9a9f6f8c0cfedad` passed edited
 import, edited-file history, walkable causality, and typed infrastructure

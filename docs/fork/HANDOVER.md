@@ -203,6 +203,23 @@ after first guessing an invalid sandbox global. System-testing `cde12d7`
 names the installed build service in the prompt and keeps the same
 import-evidence check. Both cases join the live rerun.
 
+The second group finished with eight passes, including React scaffold
+publication, and four failures or errors. The stateless worker scaffold
+built and committed its own source, then exposed compiler errors in the
+installed system-test runner during the publish gate. Base `08d9d75`
+declares the existing CDP viewport reset and exports `RuntimeFs` on the
+worker entry point. System-testing `440bcf3` fixes the strict compiler
+diagnostics in the runner. A focused run of the publication compiler for
+`workers/system-test-runner` with the cached PDF dependencies returned zero
+compiler errors. Its evidence is `system-test-runner-focused-compiler-rerun.log`.
+The stateless worker scaffold is queued for live verification.
+
+The third group passed cross-service calls and text and binary blob
+round-trips. The worker inventory call returned 22 entries and the model
+reported 21. System-testing `3661c8e` asks for the actual returned count.
+The targeted rerun uses groups of six and retires each test instance before
+starting the next.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

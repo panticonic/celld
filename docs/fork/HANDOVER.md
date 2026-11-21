@@ -3255,6 +3255,17 @@ pushes them.
    suites and full browser suite, then checks eval recovery and the
    focused fixtures. Evidence stays under
    `cutover-release-verification/owner-context-rerun/agent-lifetime-rerun/recorded-history-rerun/`.
+   The fresh run isolated a shared failure in the file-search, atomic-patch,
+   and binary round-trip cases. Their edits reached the server with a native
+   causal parent, which the prepared-edit schema rejected. Host
+   `7984307d8` uses the shared causal-parent schema and passed all 80
+   focused history, orchestration, and service tests. The scoped test
+   extension reached its verification command but its child process could
+   not resolve the test adapter. Base `2738fa4` exposes the admitted
+   dependencies to that child. The same nested projection ran three of
+   eight tests successfully at the old pin and all eight at the new pin.
+   The retained trajectories and focused rerun logs are in the same
+   evidence directory.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

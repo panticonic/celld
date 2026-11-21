@@ -3488,12 +3488,22 @@ pushes them.
    The exact graceful-quit retry passed with no unexpected failures.
    The cross-workspace desktop check passed, including selecting two
    workspaces and calling the receiver in the other workspace.
-   The Quickfire rerun passed six cases and still opened the command
-   list when reopening a live conversation. The promotion case lost
-   that prerequisite. The disposable `quickfire-trace-rerun/`
-   candidate records the resolved panel and session list at each open
-   and dismissal. It runs before the rest of the browser retries so
-   those sources can remain pinned while the cause is investigated.
+   The Quickfire rerun passed six cases and reopened the command list
+   while its first prompt was still queued. The trace in
+   `quickfire-live-console-rerun/` records the same panel at dismissal
+   and reopening, with no session yet in the durable list. System
+   `8cb2a45` retains that panel's binding while the first prompt
+   is queued. All 42 focused checks passed. They cover reopening the
+   same slot, switching panels, and leaving an empty binding.
+   Host `5381e14e0` waits for the actual conversation to contain the
+   submitted prompt after reopening. All eight browser cases,
+   including promotion to a chat panel, are queued on this candidate.
+   Desktop startup reached the initial chat and the local test provider
+   rejected the host's request to attest its model endpoint because the
+   fixture still exported the retired method. Host `524d8413e` updates
+   the fixture to the current server-only method. All 11 focused
+   fixture and model-authority checks passed. The onboarding and scoped
+   network browser cases are queued for verification of the live turn.
    The geometry check passed on the next desktop run. Three other
    chrome checks reached the hosted shell and timed out. The logs
    showed repeated attempts to read unpinned panel metadata from the

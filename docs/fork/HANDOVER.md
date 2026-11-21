@@ -245,6 +245,21 @@ the real import schema. The case joins the targeted live rerun.
 At the end of this chunk, 49 cases had verified passes, 21 were awaiting
 a passing rerun, and 30 had no complete outcome.
 
+The fourth chunk completed with three passes and nine failures or errors.
+The server was still retiring disposable contexts after the original
+30-second test RPC timeout. System-testing `e83c316` gives that one
+recursive cleanup RPC 90 seconds. `8b81f27` corrects the corresponding
+types, and the composed system-test worker compiled with zero errors.
+System-testing `26f162a` and `bbaf626` make the named-recipient and
+documentation probes explicit about the actions their validators require.
+The child-steering probe successfully addressed the live child, but the
+child issued hundreds of individual file reads while its parent waited.
+The retry limits the counting assignment to the messaging skill tree,
+while retaining the live correction, exact delivery, and returned counts.
+At the end of this chunk, 52 cases had verified passes, 30 were queued for
+a passing rerun, and 18 had no complete outcome. The fourth instance
+stopped normally and the fifth chunk started.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

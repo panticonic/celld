@@ -45,8 +45,27 @@ The next Testkit run passed all three suites and reproduced the shutdown
 stall on channel recovery. It also found a tracked eval whose host had
 already retired. Host `0383097d9` stops recovery before suspending the
 workspace and closes admissions for retired eval hosts. All 71 focused Host
-checks passed. The live shutdown retry and the 97 outstanding agentic cases
-are recorded in the `shutdown-fix-retry/` subdirectory.
+checks passed. The live retry stopped normally and recorded successful
+cancellation of the tracked eval. The panel lifecycle check separately
+reported an expected unload cancellation as a failure. Base `2bb467c`
+preserves ownership of that cancellation through the RPC error wrappers.
+All 99 focused Base checks passed.
+
+The live agentic retry verified both VCS comparison cases, bringing the exact
+passing count to five. The occupied-destination retry used scratch storage,
+which allows replacement. System-testing `6371c2b` uses a managed repository
+for that check. The first bulk run found that the publication case could not
+see its seeded repository. System-testing `13083b6` gives the agent a copy of
+that seeded revision and records the agent's exact publication event for
+teardown. The first bulk instance stopped normally. The rechecks for panel
+lifecycle, occupied move, and fixture publication are in `panel-fix-retry/`.
+
+System-testing `94f53e6` includes `dc47068` and lets private fixtures run
+concurrently. Cases that exercise protected main run without concurrent
+fixture snapshots. The fixture, publication, and scheduler checks passed
+(83 focused tests, then 44 after the scheduler adjustment). The remaining
+93 agentic cases are queued in `bulk-resume/`. The exact result count comes
+from `summarize-sample.py` in the evidence directory.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded

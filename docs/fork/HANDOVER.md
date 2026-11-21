@@ -3423,6 +3423,15 @@ pushes them.
    `chat-fork-source-rerun/` release includes these pins and runs the
    transcript, both DX checks, the affected startup check, the full
    command-overlay flow, and the cross-workspace browser check.
+   The remaining browser group also found outdated shell setup in the
+   desktop chrome and startup approval scenarios. Host `92affd681` and
+   `dbc5aa6ba` locate the hosted shell directly. Host `816836268`
+   resolves first-run adoption before measuring panel geometry.
+   Host `17bb572f7` uses the shared launch gate for the agent permission
+   scenarios and gives each desktop launch its own prepared sources.
+   The warm-launch test still reopens the same workspace and checks
+   that its existing grant persists. These exact cases are queued on
+   the next candidate.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

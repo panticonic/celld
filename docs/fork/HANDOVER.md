@@ -261,6 +261,16 @@ At the end of this chunk, 52 cases had verified passes, 30 were queued for
 a passing rerun, and 18 had no complete outcome. The fourth instance
 stopped normally and the fifth chunk started.
 
+The fifth chunk passed 10 of 12 cases. The documentation panel case
+built and committed, then ran out of scenario time while its publication
+review was active. System-testing `9f634d9` gives that case 15 minutes.
+The unit inventory case reported the exact 27 running units as live
+executions. `7a3bfee` accepts that wording while still matching the
+native inventory, the inspected unit, and its status. All 62 focused
+documentation and 52 unit diagnostics checks passed. Both cases were
+queued for a live rerun. At the end of the fifth chunk, 62 cases had
+verified passes, 32 awaited a passing rerun, and six had no complete outcome.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

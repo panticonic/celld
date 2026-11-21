@@ -64,7 +64,10 @@ for teardown. The isolated publication recheck
 `st_079c036513c1409a8a64bfa15a06fd0d` passed with zero tool failures and completed
 fixture cleanup. That brings the exact passing count to six. The rechecks
 for panel lifecycle, occupied move, and fixture publication are in
-`panel-fix-retry/`.
+`panel-fix-retry/`. The publication instance later stalled during shutdown
+at startup artifact preparation. After the test result was retained, only
+its disposable workspace process was terminated. The owner then retired
+the instance. This stall remains open separately from eval cancellation.
 
 System-testing `94f53e6` includes `dc47068` and lets private fixtures run
 concurrently. Cases that exercise protected main run without concurrent

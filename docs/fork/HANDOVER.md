@@ -3336,6 +3336,16 @@ pushes them.
    Both desktop pairing smokes stopped at System template validation.
    System `7917fc7` names the two unnamed skill packages. All eight
    bootable template checkouts passed the same validator after the fix.
+   The full Linux E2E rerun on celld `b50fb34` passed 52 of 55 cases.
+   The retained R2 ETag mismatch was expected. The Pi and OpenCode cases
+   skipped because the live providers needed for those cases were absent.
+   The stable release completed all 94 focused Base checks and all 179
+   System-testing fixture checks. The live Testkit run
+   `st_b13ebd49e3f642d5891e6fbf089b0d76` passed panel lifecycle and viewport.
+   The chat transcript suite expired while waiting for the seeded
+   conversation. The same behavior reproduced in an isolated panel with
+   the transcript configuration. The retained transcript includes the
+   panel snapshot, and `stable-panel-rerun/` holds the targeted probes.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

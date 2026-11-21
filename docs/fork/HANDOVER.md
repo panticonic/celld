@@ -3450,12 +3450,26 @@ pushes them.
    The Server Logs launch reached the launcher inside Personal.
    Server Logs, About Vibestudio, ad blocking, and permissions are
    units of the System template. Host `526b07ac6` opens the System
-   fixture for both navigation scenarios. The template-authoring
-   browser case passed. The terminal browser fixture stopped at the
-   obsolete launch gate helper. Host `036e42385` reaches the current
+   fixture for both navigation scenarios. The terminal browser
+   fixture stopped at the obsolete launch gate helper.
+   Host `036e42385` reaches the current
    hosted shell before exercising the terminal's scoped grant and
    automatic session resumption. Those browser cases are queued for
    re-verification.
+   The remaining 28 browser cases finished with 6 passes, 17 failures,
+   and 5 serial skips. The template-authoring report shows that the
+   settings panel opened and the test timed out. Host `aaae362e4`
+   uses that panel's readiness and the current hosted shell in both
+   template flows. The two desktop pairing checks could not open
+   Electron because Xvfb inherited the user's Wayland configuration.
+   Their smoke entry points now select X11. Both template and pairing
+   groups are queued at `template-pairing-rerun/`.
+   The website SDK build rejected the optional native canvas import
+   pulled in by its HTML parser. Base `a0309eb` uses LinkeDOM's browser
+   entry for the two HTML parsers. The full standalone SDK and its
+   declarations built, and all 14 focused provider tests passed.
+   Host `5ed2f662e` builds the SDK fixtures in a child process before
+   launching the desktop. Both website browser cases are queued.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

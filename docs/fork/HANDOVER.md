@@ -3296,6 +3296,14 @@ pushes them.
    on `61862f2`. The next serial candidate runner is
    `vs-verify-cutover-panel-fixtures.service`, with logs under
    `native-mutation-rerun/panel-fixture-rerun/`.
+   The 15-minute handoff run reached its eleventh fixture before timing
+   out, so System-testing `f5fd5bf` budgets 20 minutes for that case.
+   The image-extension smoke passed again, and the terminal smoke
+   rendered its chrome before waiting indefinitely for its obsolete
+   Ctrl-Space chord. Host `974a9971c` sends the installed client's
+   default Ctrl-B chord and bounds the wait for an orderly exit. All 11
+   focused terminal smoke harness tests passed. The older terminal
+   attempt was stopped after recording the chrome milestone.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

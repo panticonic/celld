@@ -3494,6 +3494,17 @@ pushes them.
    candidate records the resolved panel and session list at each open
    and dismissal. It runs before the rest of the browser retries so
    those sources can remain pinned while the cause is investigated.
+   The geometry check passed on the next desktop run. Three other
+   chrome checks reached the hosted shell and timed out. The logs
+   showed repeated attempts to read unpinned panel metadata from the
+   panel's separate working copy. Host `e75e3c13a` resolves unpinned
+   metadata through the reader's scoped source. All 154 focused
+   panel and lifecycle checks passed. Host `497b82b1a` keeps browser
+   test RPC on the real shell transport and removes the Playwright
+   binding setup that timed out. A focused probe checked both
+   destinations, the exact caller, schema validation, permission
+   failures, and listener cleanup. The three chrome cases are queued
+   again and the geometry pass is recorded.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

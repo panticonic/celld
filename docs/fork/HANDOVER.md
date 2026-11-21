@@ -254,8 +254,9 @@ System-testing `26f162a` and `bbaf626` make the named-recipient and
 documentation probes explicit about the actions their validators require.
 The child-steering probe successfully addressed the live child, but the
 child issued hundreds of individual file reads while its parent waited.
-The retry limits the counting assignment to the messaging skill tree,
+System-testing `d80556c` limits the retry to the messaging skill tree,
 while retaining the live correction, exact delivery, and returned counts.
+All 95 focused validators and messaging fixture checks passed.
 At the end of this chunk, 52 cases had verified passes, 30 were queued for
 a passing rerun, and 18 had no complete outcome. The fourth instance
 stopped normally and the fifth chunk started.

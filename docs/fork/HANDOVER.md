@@ -3478,7 +3478,16 @@ pushes them.
    entry for the two HTML parsers. The full standalone SDK and its
    declarations built, and all 14 focused provider tests passed.
    Host `5ed2f662e` builds the SDK fixtures in a child process before
-   launching the desktop. Both website browser cases are queued.
+   launching the desktop. Both browser runs passed the SDK build. The
+   invention case paired, connected, and recorded a reviewed publication
+   to the shared workspace. Its preview was still reading the website's
+   independent working copy. Host `8db7d7031` reads the exact protected
+   main event and publishes revisions under the same approval workflow.
+   Both preview regression cases failed before the fix. All 61 relay and
+   website checks passed after it. The connection case correctly refused
+   the call before consent. Host `f4006726f` exposes the structured error
+   code in the test page so the assertion can see it. Both desktop cases
+   are queued against those pins.
    The next managed run `st_002aca7c86c54a7f8566c125f6983a61` passed
    chat transcript, including opening the Dolt fork and returning to
    its parent, and panel viewport. Panel lifecycle rebuilt its panel

@@ -3441,6 +3441,12 @@ pushes them.
    The native Android pairing smoke has a separate disposable emulator
    and waits for the desktop and installed-workspace checks to release
    their resources.
+   Both desktop rebuild cases passed. The panel persistence test
+   reproduced the prepared-source error on its second launch and is
+   queued with the same fixture fix. Host `4df4beafb` makes the
+   navigation test wait for the enabled launcher control and checks
+   pending build state in the exact hosted shell. The 12 focused
+   native-mobile app bar, panel tree, and layout tests passed.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

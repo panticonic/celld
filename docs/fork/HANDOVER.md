@@ -287,6 +287,16 @@ SQLite busy error while acquiring dependency-content leases. Host
 focused dependency-content and shared-cache tests passed, including a
 transient writer lock and the existing persistent-lock diagnostics.
 
+The targeted live run `st_821c01bf5ff543cc8d5248ce69253caa` passed design
+synthesis. It also showed that inspect and merge can now access the exact
+retained child event. The merge adopted a child-attributed file change and
+advanced the parent's working head with no remaining conflicts. Its count
+of explicit conflict decisions was zero. System-testing `639c962` accepts
+that native adoption proof. The five focused orchestration tests and a
+replay of the exact captured live merge passed. The separate diff-only
+case timed out before the child's report. `5a1beab` gives it one precise
+file change and a longer cold-run budget. That case still needs a live pass.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

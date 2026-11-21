@@ -3429,9 +3429,9 @@ pushes them.
    resolves first-run adoption before measuring panel geometry.
    Host `17bb572f7` uses the shared launch gate for the agent permission
    scenarios and gives each desktop launch its own prepared sources.
-   The warm-launch test still reopens the same workspace and checks
-   that its existing grant persists. These exact cases are queued on
-   the next candidate.
+   The warm-launch test passed on that candidate. It reopened the same
+   workspace with a new prepared source directory, observed no approval
+   prompt, and called the app service through its existing grant.
    The first phone-width Electron case reached the replacement desktop
    client, whose sidebar and address controls superseded the old shell
    controls used by the test. Host `55ef27416` drives the current

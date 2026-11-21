@@ -3390,6 +3390,14 @@ pushes them.
    at `panel-seeding-rerun/` checks the full product startup and the Dolt
    test agent together, then runs the 43 browser cases and both desktop
    pairing checks. The browser reporter records each failure when it occurs.
+   In the combined managed run `st_12356cc7b46e412288997d67c1b28108`, the
+   original transcript again passed and both the channel and its Dolt
+   agent cloned. The fork navigation then tried to build the chat panel
+   from the destination's independently owned working copy. Base
+   `866a653` selects the calling panel's working copy for its executable
+   source while the existing context admission controls which conversation
+   it can open. All six focused panel authority and navigation checks
+   passed. The exact live transcript is queued in `chat-fork-source-rerun/`.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

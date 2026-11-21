@@ -3475,7 +3475,15 @@ pushes them.
    template flows. The two desktop pairing checks could not open
    Electron because Xvfb inherited the user's Wayland configuration.
    Their smoke entry points now select X11. Both template and pairing
-   groups are queued at `template-pairing-rerun/`.
+   groups ran again at `template-pairing-rerun/`. Template authoring
+   passed. The folder-creation case registered a separate workspace and
+   reached a retired fingerprint assertion. Host `ed7a1d2bb` compares
+   the recorded commit with the exact review checkpoint instead. The Iroh
+   smoke reached the current per-pane titlebar, and the website smoke
+   completed consent and connection. Host `36663208d` checks the current
+   pane geometry. Host `7755aa43b` verifies a real SDK read and confirms
+   access is revoked on disconnect. All 26 focused fixture and smoke
+   contract checks passed. The three live retries are queued.
    The website SDK build rejected the optional native canvas import
    pulled in by its HTML parser. Base `a0309eb` uses LinkeDOM's browser
    entry for the two HTML parsers. The full standalone SDK and its
@@ -3498,14 +3506,20 @@ pushes them.
    A focused fixture reproduced the reported error when closing before
    a channel subscription acknowledged. Base `b55782a` settles readiness
    as part of closing and stops the retired opener from reporting a
-   recovery error. All 80 PubSub client tests passed. The three
-   managed Testkit suites will run again on this Base pin.
+   recovery error. All 80 PubSub client tests passed. On this Base pin,
+   the managed rerun again passed chat transcript and panel viewport.
+   The lifecycle rebuild completed, and supervision still reported a
+   cancellation as an error. The full console diagnostic is being
+   replayed in an isolated managed instance.
    The desktop directory-read and causal-diagnostics retry passed.
    The screenshot and console-history retry opened its project and
    reached a chat panel that was still joining its conversation when
    the case timed out. Host `6e20fc7f4` uses the reviewed launcher
    caller and a Help panel for the same screenshot, blob round-trip,
-   console history, and focus checks. That case is queued separately.
+   console history, and focus checks. The rerun reached the approved
+   caller, whose launcher bundle had no dynamic runtime loader.
+   Host `e09ccaa8d` declares the runtime import in the reviewed fixture
+   and queues the same live assertions.
    The exact graceful-quit retry passed with no unexpected failures.
    The cross-workspace desktop check passed, including selecting two
    workspaces and calling the receiver in the other workspace.

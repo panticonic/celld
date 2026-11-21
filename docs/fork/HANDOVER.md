@@ -10,7 +10,7 @@ details; this file is authoritative for the overall order and the rules.
 release candidates and test evidence. The fresh-install and
 two-workspace checks passed, including independent account writes and
 reviewed publication into shared history. The 30-case agentic sample is
-verified. Core deterministic cases and the desktop Iroh smoke passed.
+verified. Core deterministic cases and both desktop smokes passed.
 The browser and Android retries are still open, and one managed test
 instance exceeded its teardown deadline after its suites passed.
 The 65-turn soak passed. The reserve guard stopped the separate
@@ -3599,9 +3599,16 @@ pushes them.
    It also recorded a failed compaction because the scripted HTTP model
    tried to call a tool in the summary request. Host `67130909f`
    answers the tool-free summary request and carries forward completed
-   fixture tool results. The three focused fixture checks passed.
-   All 122 focused
-   filesystem, version-control, and approval fixture checks passed.
+   fixture tool results. Both browser approval cases reached this same
+   fixture failure. The three focused fixture checks passed, along
+   with the earlier 122 filesystem, version-control, and approval checks.
+   The next scoped network case passed and the onboarding journal
+   recorded the finished reply, rendered setup card, and settled work.
+   The onboarding case still timed out in its final chooser interaction.
+   Host `02fa7ee70` clicks the actual workspace link through the native
+   panel and reports overview rendering and chooser opening independently.
+   That isolated retry passed, bringing the latest browser results to
+   42 of 43.
    The phone-width desktop run passed the sidebar, address bar, new
    root panel, and background panel checks. Terminal stayed in the
    lease stage while the fixture waited without servicing later
@@ -3610,8 +3617,8 @@ pushes them.
    still showed the child terminal leasing with an empty approval
    queue. Host `b163bebd7` navigates the existing launcher slot to the
    terminal and verifies that exact source is ready before checking
-   layout. Terminal and chat run separately so each records its own
-   outcome.
+   layout. The terminal and chat viewport cases both passed in separate
+   browser runs.
    The geometry check passed on the next desktop run. Three other
    chrome checks reached the hosted shell and timed out. The logs
    showed repeated attempts to read unpinned panel metadata from the
@@ -3639,28 +3646,60 @@ pushes them.
    the review panel in System while the desktop remained on Personal.
    System `325f806` uses the same workspace switch as the sidebar and
    Host `e6bf35153` asserts the new focus directly after the review click.
+   All 28 focused System shell, settings, and source-copy tests passed.
    The sealed desktop Iroh smoke passed native pairing, panel creation,
    workspace selection, and reconnection after a normal server restart.
    The website desktop smoke connected, read capabilities, and
    disconnected. Its console gate flagged Chromium's exact landing-page
    Web Share capability warning. Host `dd4cfc7bd` exempts that exact
    warning and preserves failures for other features, origins, and
-   error levels. The repository-wide scope in the genuine website
-   consent dialog is checked by Host `20390cb84`.
+   error levels. The full desktop smoke passed on the retry, including
+   the final console check. Host `20390cb84` checks the repository-wide
+   scope in the genuine website consent dialog. The browser case passed
+   consent, file access, and revocation when the document was replaced.
    The terminal browser retry approved the exact command permission and
    exercised a live shell. It then exposed a rejected layout write.
    Base `b11daee` sends a JSON merge patch against the current panel
    state, including removals of optional fields when sessions close.
    All 29 terminal state, action, and panel state RPC checks passed.
+   The next grouped browser run stopped this case in cold workspace
+   startup before the terminal opened. The layout check has a separate
+   fresh browser scope for its retry. Logs from the isolated attempt
+   showed Personal starting near the gate deadline. Host `cfe6252ed`
+   gives that cold companion startup its own additional time.
    The folder checkout browser retry used the exact reviewed Git
    source and entered the newly approved workspace. Host `efb1f209e`
-   checks the current launcher copy on that final surface.
+   checks the current launcher copy on that final surface. The rerun
+   passed. The six-case browser retry passed the copy, scoped network,
+   website connection, and local checkout cases. At this point the
+   latest recorded results were 41 of 43 passing. The onboarding
+   pointer and terminal layout cases have separate reruns.
    Android built and installed the APK and paired the command-line
    device. Its first isolated run stalled while attaching the System
    agent and ended before phone pairing. Host `5af80cd6b` shares the
-   isolated remote server setup with the passing desktop smoke. The
-   targeted retry reuses the verified APK and records CLI pairing and
-   agent attachment independently.
+   isolated remote server setup with the passing desktop smoke. Host
+   `c2264baa2` pairs the phone with the existing account before the CLI
+   attaches an agent for the later development workflow. The targeted
+   retry reused the verified APK, paired the phone, and accepted its
+   launch review. Celld reported insufficient memory headroom while the
+   emulator and server shared a 12 GiB scope. The browser client never
+   reported running, and the scope recorded zero OOM kills. The next
+   retry gives the owned emulator and server separate scopes, with the
+   same machine-wide memory guard. See `profile-rerun/android-smoke.log`
+   and `profile-rerun/android-memory-admission.txt`.
+   With separate scopes, Android paired again and the launch review
+   resolved. The managed React Native build then failed to resolve
+   `@kayahr/text-encoding/no-encodings` in the projected host API.
+   Host `2314f0223` collects the npm dependency closure from the same
+   trusted host manifests that supply the projected source. All 47
+   dependency tests passed, including a host package with no pnpm
+   workspace link and a dependency declared by a nested host package.
+   The Android retry built and started the managed client, connected
+   over Iroh, and rendered the automatic Personal onboarding prompt.
+   The machine-memory reserve guard ended the run during the initial
+   reply check. Host `c39bd8610` removes the legacy trajectory tables
+   from that check and requires stable final output in the rendered
+   conversation. All four focused visibility tests passed.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

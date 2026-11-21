@@ -147,7 +147,20 @@ restored-content read tied to the sole application later committed as the
 undo, with an exact clean-state check. The recall checker accepts a cohort
 record when its cited commit and its import-boundary work unit were both
 inspected. All 14 focused checks passed, including unrelated application
-and commit rejection. Both live cases join `subagent-author-retry/`.
+and commit rejection. The two exact saved trajectories passed with the
+updated checker. Both cases also join `subagent-author-retry/` for live
+reruns.
+
+The first chunked run `st_af852e30dc8e4a23b788e1991c1245b2` passed the
+multi-turn persistence rerun and console streaming. Both panel creation
+cases published and opened their panels. Their fixture checks examined
+the harness copy, which shared a context ID with the agent copy but held
+a different revision. System-testing `1989de8` uses the exact agent
+publication receipt for cleanup regardless of context ID equality.
+`fb64f8d` also resolves this receipt before live inventory validation
+and uses the published revision to locate task-created workers. All 77
+focused runner and fixture checks passed. Both panel cases join the
+targeted rerun.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded

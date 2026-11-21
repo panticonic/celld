@@ -220,6 +220,22 @@ reported 21. System-testing `3661c8e` asks for the actual returned count.
 The targeted rerun uses groups of six and retires each test instance before
 starting the next.
 
+The blob-tree case reached scoped file materialization and failed when the
+runtime tried to append a receipt reserved for the native host. Base
+`49f5bd6` returns the scoped materialization result and records content
+digests only from settled server file reads. The host-only journal guard
+still rejects guest claims. System-testing `69928bb` verifies every
+expected digest under the same materialized directory. The 47 focused
+Base and 49 focused validator checks passed. The blob case joins the
+targeted live rerun.
+
+The durable-agent scaffold built and committed, then exhausted its
+ten-minute scenario budget during the cold publish review. The review was
+cancelled after 269 seconds. System-testing `ca4b8b9` gives that one
+scenario fifteen minutes and limits private-commit fixture validation to
+the private package case. The package scaffold passed its live build,
+publication and cleanup.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

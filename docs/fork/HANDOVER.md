@@ -139,6 +139,16 @@ rejection walk. Its focused test keeps file lookups precise and excludes
 other repositories. The three named live rechecks join the delegated-work
 batch.
 
+The delegated-work batch verified the repository rejection fix in
+`provenance-recovers-an-unstated-constraint`, bringing the tally to 28 passing
+cases. Its undo and historical-recall cases completed the requested work
+and exposed two more evidence checks. System-testing `19fc0ae` accepts a
+restored-content read tied to the sole application later committed as the
+undo, with an exact clean-state check. The recall checker accepts a cohort
+record when its cited commit and its import-boundary work unit were both
+inspected. All 14 focused checks passed, including unrelated application
+and commit rejection. Both live cases join `subagent-author-retry/`.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

@@ -3443,9 +3443,12 @@ pushes them.
    Host `9d7826621` selects the address control for the exact Help panel
    after the next case found two matching titlebar controls. The remaining
    phone-width cases are queued with that change.
-   The native Android pairing smoke has a separate disposable emulator
-   and waits for the desktop and installed-workspace checks to release
-   their resources.
+   The native Android pairing smoke booted its isolated emulator, then
+   Metro stopped at a missing React Native workspace package link. The
+   desktop checkout reused a shared dependency tree without the mobile
+   workspace links. A dedicated Android checkout passed a frozen offline
+   install and resolved the native polyfill from its exact package.
+   Its full smoke retry is queued after the desktop checks.
    Both desktop rebuild cases passed. The panel persistence test passed
    after each launch got its own prepared-source directory. Host
    `4df4beafb` makes the

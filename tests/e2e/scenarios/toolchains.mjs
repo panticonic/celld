@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { get, post, restart, crash, restore, run, M } from "../lib/dsl.mjs";
 import { Skip, preparePython, prepareWasm, npmInstall } from "../lib/tools.mjs";
 
@@ -171,14 +173,56 @@ const sandbox = {
 const pi = {
   example: "pi",
   title: "PiHarness agent loop in a DO",
-  skip: "needs `npm install --legacy-peer-deps` of a preview build of Cloudflare Agents PR 2197 (can expire) and a live OpenAI-compatible model endpoint with an API key; answers are non-deterministic",
-  steps: [],
+  async setup(t) {
+    const endpoint = process.env.CELLD_E2E_PI_ENDPOINT;
+    const model = process.env.CELLD_E2E_PI_MODEL;
+    const key = process.env.CELLD_E2E_PI_API_KEY;
+    if (!endpoint || !model || !key) {
+      t.skip("configure CELLD_E2E_PI_ENDPOINT, CELLD_E2E_PI_MODEL and CELLD_E2E_PI_API_KEY for the live Pi test");
+    }
+    await npmInstall(t.workdir, ["--legacy-peer-deps"]);
+    const vars = path.join(t.workdir, ".dev.vars");
+    t.onCleanup(() => fs.rmSync(vars, { force: true }));
+    fs.writeFileSync(vars, [
+      `PI_ENDPOINT=${JSON.stringify(endpoint)}`,
+      `PI_MODEL=${JSON.stringify(model)}`,
+      `OPENROUTER_API_KEY=${JSON.stringify(key)}`,
+    ].join("\n") + "\n", { mode: 0o600 });
+  },
+  steps: [
+    run("Pi completes a live model turn", async (t) => {
+      const response = await t.fetch("/", { timeoutMs: 120_000 });
+      const providerStatus = /^\d{3}\b/.exec(response.json?.errors?.[0])?.[0];
+      const providerDetail = providerStatus ? ` (provider HTTP ${providerStatus})` : "";
+      t.assert(response.status === 200, `Pi returned HTTP ${response.status}${providerDetail}`);
+      t.expect(response, { status: 200, json: M.partial({ status: "completed", errors: [] }) });
+    }),
+    run("the assistant replied and its transcript survives restart", async (t) => {
+      const expected = await t.fetch("/messages");
+      t.expect(expected, { status: 200 });
+      t.assert(expected.json?.some((message) => message.role === "assistant"), "transcript contains an assistant reply");
+      await t.celld.stop();
+      await t.celld.start();
+      t.expect(await t.fetch("/messages"), { status: 200, json: expected.json });
+    }),
+  ],
 };
 const opencode = {
   example: "opencode",
   title: "OpenCode Workerd SDK in a DO",
-  skip: "needs a live model provider on the internet (free model resolved at run time); the reply is non-deterministic and the SDK needs network access",
-  steps: [],
+  async setup(t) {
+    if (process.env.CELLD_E2E_OPENCODE_LIVE !== "1") {
+      t.skip("set CELLD_E2E_OPENCODE_LIVE=1 to use OpenCode's live provider");
+    }
+    await npmInstall(t.workdir);
+  },
+  steps: [
+    get("/", { status: 200, json: M.partial({
+      ok: true,
+      model: M.partial({ providerID: M.re(/\S/), modelID: M.re(/\S/) }),
+      reply: M.re(/\S/),
+    }) }, { timeoutMs: 120_000 }),
+  ],
 };
 
 export default [python, wasm, container, sandbox, pi, opencode];

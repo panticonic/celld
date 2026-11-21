@@ -21,6 +21,11 @@ tests/e2e/run --selftest                             # the harness's own tests
 tests/e2e/run --json results.json --jobs 8 --keep
 ```
 
+Set `CELLD_E2E_PI_ENDPOINT`, `CELLD_E2E_PI_MODEL`, and
+`CELLD_E2E_PI_API_KEY` to run the live Pi case with `tests/e2e/run pi`.
+OpenCode resolves its own provider when enabled with
+`CELLD_E2E_OPENCODE_LIVE=1 tests/e2e/run opencode`.
+
 Requirements: Node 22 (no npm dependencies) and `esbuild`. The runner takes
 esbuild from `CELLD_ESBUILD`, then `PATH`, then a globally installed
 `wrangler`/`esbuild` (`npm root -g`). `CELLD_BIN` defaults to

@@ -3235,11 +3235,26 @@ pushes them.
    published event from canonical Dolt history for that trusted client.
    All 52 focused Host service and history tests passed. The browser
    suite will rerun in full on those revisions.
-   `vs-verify-cutover-agent-lifetime-tests.service` queues a fresh package,
-   nine fresh runs for the sample cases still failing, four model-free regressions and five
-   further model-free integration and provenance checks, the two corrected
-   integration entry points, and the focused fixture tests. These runs
-   remain pending.
+   `vs-verify-cutover-agent-lifetime-tests.service` packaged Host
+   `161c49cde`, Base `6e17323`, and System-testing `2dc8b38`.
+   The four core model-free cases passed on those pins. Three expanded
+   integration cases tried to compare a source already in their target's
+   history, and one provenance case read from the wrong fixture owner.
+   System-testing `73b969d` verifies the committed and working integration
+   decisions and runs model-free provenance reads from the fixture owner.
+   The focused integration oracle passed. An additional eval-recovery
+   case stalled after its deadline with many requests contending for the
+   same filesystem scope. Host `967ca1413` reuses the admitted owner
+   until retirement and reads the current revision for subsequent
+   operation effects. All 108 focused filesystem and orchestration tests
+   passed. The owned stalled instance was stopped through its normal
+   management command.
+   `vs-verify-cutover-recorded-history-tests.service` now runs the nine
+   remaining agentic results on a fresh package, repeats the four
+   affected model-free integration cases, runs the smoke and transport
+   suites and full browser suite, then checks eval recovery and the
+   focused fixtures. Evidence stays under
+   `cutover-release-verification/owner-context-rerun/agent-lifetime-rerun/recorded-history-rerun/`.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

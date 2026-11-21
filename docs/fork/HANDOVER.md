@@ -3486,6 +3486,14 @@ pushes them.
    caller and a Help panel for the same screenshot, blob round-trip,
    console history, and focus checks. That case is queued separately.
    The exact graceful-quit retry passed with no unexpected failures.
+   The cross-workspace desktop check passed, including selecting two
+   workspaces and calling the receiver in the other workspace.
+   The Quickfire rerun passed six cases and still opened the command
+   list when reopening a live conversation. The promotion case lost
+   that prerequisite. The disposable `quickfire-trace-rerun/`
+   candidate records the resolved panel and session list at each open
+   and dismissal. It runs before the rest of the browser retries so
+   those sources can remain pinned while the cause is investigated.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

@@ -191,6 +191,18 @@ five passes and seven failures or errors, and stopped normally.
 The tally is 33 verified passes, 13 cases awaiting a passing rerun, and
 54 cases with no complete outcome. The second chunk is starting.
 
+The second chunk's workerd worker test hit the same private panel
+activation error and joins the Host `aca766f2d` rerun. Its type-check
+extension failed because it assembled a path from the logical context ID
+instead of using the participant projection returned by the filesystem.
+System `7bf3337` uses the actual projection for source and dependency
+reads. All 14 focused extension checks passed, including a projection
+path that differs from the logical context path. Subsequent chunks use
+that System revision. The package-import case completed the real import
+after first guessing an invalid sandbox global. System-testing `cde12d7`
+names the installed build service in the prompt and keeps the same
+import-evidence check. Both cases join the live rerun.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

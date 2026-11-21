@@ -6,17 +6,16 @@ work lives, what is done and how it was verified, and what is left, in order.
 The detailed per-stream handoffs it points to are authoritative for their own
 details; this file is authoritative for the overall order and the rules.
 
-**Current release status, 2026-11-20.** Section 5 records the latest
-release candidates and gates. The 65-turn soak passed. The 10,000-turn
-benchmark had recorded 1,360 successful turns when it was last sampled.
-The machine-memory guard later stopped that instance. The fresh-install
-and two-workspace checks are queued and waiting for memory headroom.
-Celld `61862f2` has a verified Ubuntu x64 build. Its
-Linux ARM64, macOS ARM64 and Windows x64 builds and the matching
-Vibestudio artifact pins are pending. GitHub has no workflow run for that
-commit. The Ubuntu 22.04 Linux ARM64 toolchain probe passed and a local
-build is queued after the installation checks. A Windows x64 release
-linker probe passed and a cross-build is queued after the benchmark.
+**Current release status, 2026-11-21.** Section 5 records the latest
+release candidates and test evidence. The fresh-install and
+two-workspace checks passed, including independent account writes and
+reviewed publication into shared history. The 30-case agentic sample is
+verified. Core deterministic cases and the desktop Iroh smoke passed.
+The browser and Android retries are still open, and one managed test
+instance exceeded its teardown deadline after its suites passed.
+The 65-turn soak passed. The reserve guard stopped the separate
+10,000-turn benchmark after it recorded at least 1,360 successful turns.
+Section 5 tracks the outstanding platform builds and artifact pins.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
@@ -3542,7 +3541,13 @@ pushes them.
    approvals to a fresh session. All six lifecycle checks passed and
    supervision recorded no findings. Evidence is in
    `panel-lifecycle-approved-console-rerun/findings.json`. The exact
-   three-case catalog run is queued against the latest Host pin.
+   catalog run `st_526b0240f58e4650b960c5dcf1a76e42` passed all three
+   suites on Host `b163bebd7` with zero unexpected tool failures.
+   The managed instance then exceeded its teardown deadline while a
+   channel durable-work adoption call remained in flight. The runner
+   retired its own scope. The deterministic result and shutdown have
+   separate evidence in `sealed-desktop-sdk-rerun/testkit-result.log`
+   and `sealed-desktop-sdk-rerun/testkit.log`.
    The desktop directory-read and causal-diagnostics retry passed.
    The screenshot and console-history retry opened its project and
    reached a chat panel that was still joining its conversation when
@@ -3589,9 +3594,14 @@ pushes them.
    completed reply. Its observer read the four-character chat label
    in the renderer, which resolved a different conversation. Host
    `58a72d762` reads the full channel identity from the actual chat
-   panel's runtime state and inspects as that panel. Both cases are
-   queued for the exact channel checks. All 122 focused filesystem,
-   version-control, and approval fixture checks passed.
+   panel's runtime state and inspects as that panel. The exact-channel
+   onboarding retry found the prompt and the completed skill read.
+   It also recorded a failed compaction because the scripted HTTP model
+   tried to call a tool in the summary request. Host `67130909f`
+   answers the tool-free summary request and carries forward completed
+   fixture tool results. The three focused fixture checks passed.
+   All 122 focused
+   filesystem, version-control, and approval fixture checks passed.
    The phone-width desktop run passed the sidebar, address bar, new
    root panel, and background panel checks. Terminal stayed in the
    lease stage while the fixture waited without servicing later
@@ -3617,15 +3627,40 @@ pushes them.
    `a2c83fdbe` verifies that the hosted chrome mounts, reuses its
    native surface, and routes through the workspace rows. The separate
    approval queue and unit admission suites cover that Browser Data
-   permission, and all 84 checks passed. The file-copy case created
+   permission, and all 84 checks passed. The custom chrome browser
+   rerun passed. The file-copy case created
    a private review context and the shell's published catalog refused
    to resolve it. Host `12b3c6a46` reads through the destination
    filesystem. The next run confirmed the private working head and
    received an unknown-context error from the filesystem before that
    context hosted a panel. Host `8a43133e3` opens the real review panel
    and waits for that exact context before verifying the single file's
-   bytes and hash and the unchanged protected main. Both cases are
-   queued for live verification.
+   bytes and hash and the unchanged protected main. The next run opened
+   the review panel in System while the desktop remained on Personal.
+   System `325f806` uses the same workspace switch as the sidebar and
+   Host `e6bf35153` asserts the new focus directly after the review click.
+   The sealed desktop Iroh smoke passed native pairing, panel creation,
+   workspace selection, and reconnection after a normal server restart.
+   The website desktop smoke connected, read capabilities, and
+   disconnected. Its console gate flagged Chromium's exact landing-page
+   Web Share capability warning. Host `dd4cfc7bd` exempts that exact
+   warning and preserves failures for other features, origins, and
+   error levels. The repository-wide scope in the genuine website
+   consent dialog is checked by Host `20390cb84`.
+   The terminal browser retry approved the exact command permission and
+   exercised a live shell. It then exposed a rejected layout write.
+   Base `b11daee` sends a JSON merge patch against the current panel
+   state, including removals of optional fields when sessions close.
+   All 29 terminal state, action, and panel state RPC checks passed.
+   The folder checkout browser retry used the exact reviewed Git
+   source and entered the newly approved workspace. Host `efb1f209e`
+   checks the current launcher copy on that final surface.
+   Android built and installed the APK and paired the command-line
+   device. Its first isolated run stalled while attaching the System
+   agent and ended before phone pairing. Host `5af80cd6b` shares the
+   isolated remote server setup with the passing desktop smoke. The
+   targeted retry reuses the verified APK and records CLI pairing and
+   agent attachment independently.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

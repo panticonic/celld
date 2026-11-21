@@ -3471,8 +3471,11 @@ pushes them.
    recording a per-call prompt. Host `586e69c2c` confirms that the
    intended permission is present in the exact creation review and
    records whether the later launch gate selected that permission.
-   The case is queued again. All 72 focused terminal registry, install
-   review, and authority checks passed.
+   The stricter fixture showed that the private workspace review had
+   already settled. Host `86877879f` starts the terminal in a newly
+   added project, where the fixture can leave the exact launch
+   permission unchecked in a fresh review. All 72 focused terminal
+   registry, install review, and authority checks passed.
    The remaining 28 browser cases finished with 6 passes, 17 failures,
    and 5 serial skips. The template-authoring report shows that the
    settings panel opened and the test timed out. Host `aaae362e4`
@@ -3488,7 +3491,13 @@ pushes them.
    completed consent and connection. Host `36663208d` checks the current
    pane geometry. Host `7755aa43b` verifies a real SDK read and confirms
    access is revoked on disconnect. All 26 focused fixture and smoke
-   contract checks passed. The three live retries are queued.
+   contract checks passed. The folder retry proved the descriptor
+   recorded the exact dirty checkout and reached the new project's
+   install review. The approval card moved to another Electron surface
+   while the test followed the old page. Host `879049994` follows the
+   exact approval across those surfaces. The desktop pairing retries
+   rejected the package sealed for the earlier Host build. Both smokes
+   will use the release sealed against the queued Host revision.
    The website SDK build rejected the optional native canvas import
    pulled in by its HTML parser. Base `a0309eb` uses LinkeDOM's browser
    entry for the two HTML parsers. The full standalone SDK and its
@@ -3505,8 +3514,10 @@ pushes them.
    code in the test page so the assertion can see it. The scripted
    invention browser rerun passed. It rendered the reviewed artifact,
    received a real embedded reply, published the revision, and
-   reconnected to the revised invention. The separate website
-   connection case is running.
+   reconnected to the revised invention. The separate connection
+   case reached the exact pending approval behind the first-run
+   reporting dialog. Host `3f85bb14f` dismisses that dialog and uses
+   the shared approval driver to open the exact request.
    The next managed run `st_002aca7c86c54a7f8566c125f6983a61` passed
    chat transcript, including opening the Dolt fork and returning to
    its parent, and panel viewport. Panel lifecycle rebuilt its panel
@@ -3529,8 +3540,9 @@ pushes them.
    caller and a Help panel for the same screenshot, blob round-trip,
    console history, and focus checks. The rerun reached the approved
    caller, whose launcher bundle had no dynamic runtime loader.
-   Host `e09ccaa8d` declares the runtime import in the reviewed fixture
-   and queues the same live assertions.
+   Host `e09ccaa8d` declares the runtime import in the reviewed fixture.
+   The next Electron run passed the screenshot, blob round-trip,
+   console history, and focus assertions.
    The exact graceful-quit retry passed with no unexpected failures.
    The cross-workspace desktop check passed, including selecting two
    workspaces and calling the receiver in the other workspace.
@@ -3582,15 +3594,20 @@ pushes them.
    binding setup that timed out. A focused probe checked both
    destinations, the exact caller, schema validation, permission
    failures, and listener cleanup. The private workspace catalog case
-   passed. The custom chrome case was looking for the Browser Data
-   review after the launch gate had already accepted it. Host
-   `619971c60` checks the recognized deletion permission on the gate
-   itself and uses the workspace rows to verify routing. The file-copy
-   case created a private review context, but the test asked the shell's
-   published catalog to resolve it. Host `12b3c6a46` reads through the
-   destination filesystem with that exact context and verifies the
-   single file's bytes and hash, along with the unchanged protected
-   main. Both browser cases are queued for live verification.
+   passed. The custom chrome case was looking for a Browser Data
+   permission that the shell launch review did not offer. Host
+   `a2c83fdbe` verifies that the hosted chrome mounts, reuses its
+   native surface, and routes through the workspace rows. The separate
+   approval queue and unit admission suites cover that Browser Data
+   permission, and all 84 checks passed. The file-copy case created
+   a private review context and the shell's published catalog refused
+   to resolve it. Host `12b3c6a46` reads through the destination
+   filesystem. The next run confirmed the private working head and
+   received an unknown-context error from the filesystem before that
+   context hosted a panel. Host `8a43133e3` opens the real review panel
+   and waits for that exact context before verifying the single file's
+   bytes and hash and the unchanged protected main. Both cases are
+   queued for live verification.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

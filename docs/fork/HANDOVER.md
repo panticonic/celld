@@ -236,6 +236,15 @@ scenario fifteen minutes and limits private-commit fixture validation to
 the private package case. The package scaffold passed its live build,
 publication and cleanup.
 
+The third chunk completed with eight passes and four failures or errors.
+The terminal-app repair failed during fixture setup because its repository
+used the obsolete `apps/` section. System-testing `870300a` uses
+`terminal-apps/`, its current package name and manifest, and the existing
+terminal-app skill. All 39 focused checks passed, including validation by
+the real import schema. The case joins the targeted live rerun.
+At the end of this chunk, 49 cases had verified passes, 21 were awaiting
+a passing rerun, and 30 had no complete outcome.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

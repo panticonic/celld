@@ -182,6 +182,15 @@ participant suite passed 13 checks. The targeted live batch includes all
 four cases. Remaining chunked groups use the updated Base and System-testing
 sources; the switchover pins are in `bulk-chunked/pins-after-agent-01`.
 
+The To-Do case could not start a private preview because asynchronous
+panel activation dropped the verified source caller. Host `aca766f2d` keeps
+that caller for live `ctx:` and `state:` handoffs. Activation still checks
+ownership and the admitted history. All 223 focused Host tests passed.
+The To-Do case joins the live rerun. The first chunked group finished with
+five passes and seven failures or errors, and stopped normally.
+The tally is 33 verified passes, 13 cases awaiting a passing rerun, and
+54 cases with no complete outcome. The second chunk is starting.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

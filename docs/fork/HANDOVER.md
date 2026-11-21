@@ -3549,7 +3549,21 @@ pushes them.
    fixture still exported the retired method. Host `524d8413e` updates
    the fixture to the current server-only method. All 11 focused
    fixture and model-authority checks passed. The onboarding and scoped
-   network browser cases are queued for verification of the live turn.
+   network browser cases ran on the package that preceded the agent
+   creator fix. The first created the chat agent and did not observe its
+   first turn. The second displayed the exact network approval, and
+   its first channel read had no matching invocation yet. Host
+   `574b480d2` observes the durable invocation before granting consent
+   and still compares its identity with the completed invocation.
+   Both cases are queued on the candidate with the creator fix.
+   All 122 focused filesystem, version-control, and approval fixture
+   checks passed.
+   The phone-width desktop run passed the sidebar, address bar, new
+   root panel, and background panel checks. Terminal stayed in the
+   lease stage while the fixture waited without servicing later
+   approvals. Host `8c7fe0d6e` drives approvals as the panel becomes
+   ready and captures pending approvals on failure. Terminal and the
+   chat viewport check skipped after it are queued again.
    The geometry check passed on the next desktop run. Three other
    chrome checks reached the hosted shell and timed out. The logs
    showed repeated attempts to read unpinned panel metadata from the

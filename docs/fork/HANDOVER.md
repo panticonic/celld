@@ -3369,6 +3369,15 @@ pushes them.
    together for the original transcript suite, all 43 browser cases, and
    the two desktop pairing checks. The installed two-workspace check and
    benchmark wait behind that runner.
+   The rebuilt managed workspace passed its preflight and both live panel
+   suites. In `st_59914271717148ae82f5f2312dc56d50`, the transcript
+   displayed the original opening request, finished the eval bead, and
+   rendered the deterministic reply. Its second case reached the fork
+   action and found that the fixture agent still declared the default
+   SQLite storage. System-testing `b33034f` gives that agent the same
+   Dolt storage declaration as the product agent. Template validation and
+   all three focused worker tests passed. The exact fork suite is queued
+   in `dolt-test-agent-rerun/` after the active browser and pairing groups.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

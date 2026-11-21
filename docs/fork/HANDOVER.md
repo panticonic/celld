@@ -3447,6 +3447,15 @@ pushes them.
    navigation test wait for the enabled launcher control and checks
    pending build state in the exact hosted shell. The 12 focused
    native-mobile app bar, panel tree, and layout tests passed.
+   The Server Logs launch reached the launcher inside Personal.
+   Server Logs, About Vibestudio, ad blocking, and permissions are
+   units of the System template. Host `526b07ac6` opens the System
+   fixture for both navigation scenarios. The template-authoring
+   browser case passed. The terminal browser fixture stopped at the
+   obsolete launch gate helper. Host `036e42385` reaches the current
+   hosted shell before exercising the terminal's scoped grant and
+   automatic session resumption. Those browser cases are queued for
+   re-verification.
    The fresh-install retry passed the direct CLI provenance and private
    visibility checks, the saved and draft reopen checks after a normal
    restart, and the signed publication race followed by a reviewed

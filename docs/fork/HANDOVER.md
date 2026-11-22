@@ -338,7 +338,11 @@ workflow's caller. System-testing `8552fc5` names the three assigned service
 protocols and uses the public mobile data contracts in the test fixture.
 The composed worker passed its scoped compiler and static service
 declaration check with zero errors. All three focused mobile checks passed.
-The full publication check is still queued for the worker case.
+The task-management case also built and launched before publication hit
+the same gate. Both cases are queued on the revised templates. The second
+targeted group stopped normally after three passes. The sample now has
+70 live passes and one additional pass on captured evidence. The third
+targeted group has started.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded

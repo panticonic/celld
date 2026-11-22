@@ -469,6 +469,19 @@ checks passed. The live version case waits in `fourth-retry/` behind the third
 batch. The full template compiler waits for both. The sample has 94 live passes
 and one verified captured merge, with five scenarios awaiting a passing run.
 
+The third retry `st_fcb68f3152734b6fa6a7ce269c289c2a` passed the retained
+collaborator follow-up. It launched exactly one child, inspected the initial
+result, contacted the original run, inspected the changed work, and merged
+once. The blob-tree retry exposed a separate product failure. The returned
+tree was readable only by its original eval invocation. Host `455350097`
+lets the same admitted notebook read uploads across calls. The exact upload
+proof used for history imports is still checked per tool task. The regression
+test verifies that a child, another context and a new authority session do
+not acquire the earlier read. All 82 Host and 49 semantic checks passed.
+System-testing `7927658` requests creation and readback in separate evals.
+The live blob case is queued alongside the version probe. There are 95 live
+passes and one verified captured merge, with four live cases still open.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

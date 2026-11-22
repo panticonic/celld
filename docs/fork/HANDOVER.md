@@ -391,6 +391,18 @@ managed fifth instance stopped normally after the recorded results were
 saved, and the steering case is queued with the new validator. The
 sample has 83 live passes and one revalidated captured merge.
 
+The sixth targeted group `st_ad29ae7e07ee4c5d8f6e4d2a9e715a37` passed the
+documented panel workflow, including real publication and opening.
+Its unit-list case reused inventory for details, its automation launched
+twice after miscalculating the first cutoff, and its release lookup first
+tried an undeclared eval global before completing the correct lookup.
+System-testing `082c1e3`, `ca0e95f`, and `b3ec71d` clarify those exact
+requirements. Base `cfcbd4e` documents the build namespace and correct
+release kinds. All 53 focused diagnostics tests passed. The group stopped
+normally. There are 84 live passes and one separately validated captured
+merge. The exact remaining 15 named cases are now running in
+`second-retry/`, with the full template check following them.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

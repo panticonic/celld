@@ -374,6 +374,14 @@ containment checks. All nine adapter tests passed, including execution of
 a terminal-app test in the child process. The live repair joins the second
 targeted queue. The sample reached 79 live passes plus the captured merge.
 
+The fifth targeted group `st_5faf174b3f3a40909c84ae34567cc32c` passed
+automatic title, message update and clear, sandbox VCS guidance, and panel
+source listing. The message publication produced a real custom message
+after recovering from a worker-only import. Base `2dd235b` documents the
+sandbox chat API separately from installed worker linting, and
+System-testing `1492e6d` requests a self-contained renderer. All 49 focused
+validators passed. The strict live message publication is queued again.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

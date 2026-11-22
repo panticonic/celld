@@ -512,6 +512,30 @@ record. All 83 Host checks passed. The strict blob case is queued in
 `fifth-retry/`, with the full template check following it. The sample has
 97 live passes and one verified captured merge. Two cases remain.
 
+**Pause for machine restart, 2026-11-22 05:48 CET.** The fourth retry finished
+and its disposable workspace and temporary registry stopped normally.
+Task management cleared all 31 build checks and published three changed
+repositories in `workspace-event:d4c6a7489dfdaa32f8b495440a5ca18c1e17a8f7eae0f2246a4ad89063663bf6`.
+Its strict test still failed. One patch named the same worker file twice and
+a later browser check expected text absent from the rendered page. The
+exact retained trace is
+`fourth-retry/agent-01/trajectory-task-management-build-launch-debug.log`
+under the 100-case evidence root. Inspect those two calls before retrying.
+The verified total remains 98 of 100, with 97 live passes and one captured
+merge replay. All 100 have a terminal result. The other outstanding live
+case is the blob-tree check against Host `293351b1b`.
+
+The fifth retry and the standalone template compiler were stopped while
+they were waiting, before starting any workspace or registry. To resume
+when instructed, use `fifth-retry/run.sh` under the evidence root and the
+same one-workspace memory scheduling. The script currently lists the
+blob-tree retry. Add the task-management retry once its two tool failures
+have been addressed. The template compiler script is
+`run-template-typecheck-after-final-retries.sh`. The waiting Android smoke
+and fork benchmark launchers were also stopped. There is no active
+verification instance, temporary registry, or Android emulator from this
+campaign. The source changes and test evidence are on disk.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

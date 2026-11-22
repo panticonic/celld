@@ -492,6 +492,15 @@ authority matcher to the captured repair records confirms that the old
 manifest fails all three and the updated manifest covers all three.
 The fresh task-management retry is queued with these declarations.
 
+The third retry passed the To-Do case through live preview, interaction,
+publication and fixture retirement. Its batch stopped normally. The sample
+has 96 live passes and one verified captured merge. The three remaining
+cases are running in `fourth-retry/` with the private notebook readback
+repair, the documented release lookup, and all three provider declarations.
+The tally includes 44 scenarios that had a failed or errored attempt,
+including infrastructure and validation failures. Forty-one of those are now
+verified. The full template check remains serialized after the live retries.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

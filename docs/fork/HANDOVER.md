@@ -382,6 +382,15 @@ sandbox chat API separately from installed worker linting, and
 System-testing `1492e6d` requests a self-contained renderer. All 49 focused
 validators passed. The strict live message publication is queued again.
 
+The steering rerun reached validation after the child completed. The
+model-based report judge stayed active for over ten minutes without a
+verdict. System-testing `1a90a56` checks exactly one labeled Markdown
+file count and one labeled line count directly and still requires an exact
+delivery to the child. All 93 focused scenario validators passed. The
+managed fifth instance stopped normally after the recorded results were
+saved, and the steering case is queued with the new validator. The
+sample has 83 live passes and one revalidated captured merge.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

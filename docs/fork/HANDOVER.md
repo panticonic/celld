@@ -501,6 +501,17 @@ The tally includes 44 scenarios that had a failed or errored attempt,
 including infrastructure and validation failures. Forty-one of those are now
 verified. The full template check remains serialized after the live retries.
 
+The fourth retry `st_be1c7345c37c45fb9ba040e0383e2905` passed the live
+extension version lookup. It also proved that the cross-call blob check
+was exercising an embedded agent notebook. The earlier repair recognized
+the separate session host and missed that path. Host `293351b1b` recognizes
+a dynamic-code admission controlled by the same active runtime in its
+exact context. It binds upload reads to the exact notebook executor too.
+The test refuses another executor, controller, context, and missing host
+record. All 83 Host checks passed. The strict blob case is queued in
+`fifth-retry/`, with the full template check following it. The sample has
+97 live passes and one verified captured merge. Two cases remain.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

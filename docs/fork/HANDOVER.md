@@ -353,6 +353,11 @@ publication was still pending at the scenario deadline. System-testing
 `e64099e` gives this case 15 minutes. All 13 focused lifecycle tests
 passed and the full live case is queued again.
 
+The third targeted group completed with five passes. The stateless-worker
+scaffold passed the actual protected publication check with the corrected
+service declarations. The sample reached 75 live passes and one passed
+revalidation of a captured run.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

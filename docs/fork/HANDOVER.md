@@ -366,6 +366,14 @@ one invocation all succeeded. System-testing `6b62143` makes that scope
 explicit. All 49 focused validators passed and the strict live check
 is queued again.
 
+The fourth group passed the durable agent scaffold, address enumeration,
+named-recipient lookup, and conversation title. The terminal app repair
+built, but the native test adapter rejected the canonical `terminal-apps/`
+path. Base `8aad6ce` allows that unit section while retaining the path
+containment checks. All nine adapter tests passed, including execution of
+a terminal-app test in the child process. The live repair joins the second
+targeted queue. The sample reached 79 live passes plus the captured merge.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

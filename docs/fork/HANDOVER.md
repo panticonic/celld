@@ -419,6 +419,21 @@ add coverage for omitted refs. The worker creation case also passed its
 real publication gate. There are 89 live passes and one revalidated merge,
 with ten cases still needing a pass.
 
+The next group `st_aa8275a82c314e50a5d1c2fee781e328` passed custom-message
+publication and live child steering. The child reported 3 Markdown files
+and 292 lines, matching the fixture. The blob-tree case used the full
+upload receipt where a tree hash was required, then omitted the direct
+blob read on recovery. System-testing `74d62a1` requests both facts;
+all 49 focused validators passed. The live blob recheck joins `third-retry/`.
+
+The local staged-package registry crashed after an interrupted upstream
+body left response headers already sent. That interrupted dependency
+preparation during task-management publication. Pi `fa7daec9e` reads the
+upstream body before sending headers and closes an already-started
+response on error. The local test returned 502 for an interrupted body
+and then served healthy upstream and staged package requests. The registry
+was restarted for the active batch.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

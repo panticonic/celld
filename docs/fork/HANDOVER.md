@@ -412,6 +412,13 @@ and one integration after them. All six focused orchestration and captured
 merge checks passed. The exact case is in `third-retry/` after the current
 batches. The full template check waits for that retry as well.
 
+The second retry's first group finished with five passes. The retained
+panel trace shows a private preview using an explicit working-context ref,
+then publication, then an open from protected main. The focused Base tests
+add coverage for omitted refs. The worker creation case also passed its
+real publication gate. There are 89 live passes and one revalidated merge,
+with ten cases still needing a pass.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

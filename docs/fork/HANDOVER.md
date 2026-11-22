@@ -458,7 +458,16 @@ item, both filters, persistence after reload, responsive layout, deletion,
 and the exact protected-main publication. System-testing `98f5594` clarifies
 the post-action count and checked-item proof. All 13 project-lifecycle
 validators passed. The fresh To-Do run is also queued in `third-retry/`.
-The recorded sample is still 91 live passes and one revalidated captured merge.
+The remaining terminal-app case passed in a fresh agent run. It tested and
+built the repaired terminal app, then confirmed the exact clean local event.
+The second retry's final group `st_6bcdef49d4d84ad3af0667236a14ba00` passed
+live unit inspection and the one native calendar launch. The extension
+version case then recovered through the typed RPC descriptor after attempting
+an unavailable eval facade method. Base `8cc4295` documents the working call.
+System-testing `2fb5bde` names that method in the scenario and all 53 focused
+checks passed. The live version case waits in `fourth-retry/` behind the third
+batch. The full template compiler waits for both. The sample has 94 live passes
+and one verified captured merge, with five scenarios awaiting a passing run.
 
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded

@@ -329,6 +329,17 @@ protected main. System-testing `ec1efc4` requests a private preview in
 that case before publication and passed all 13 focused lifecycle checks.
 The live panel case joins the second rerun group.
 
+The panel fork and existing-project publication also passed live. The
+stateless worker built and committed, but protected publication included
+the installed system-test runner in its checks. That runner carried a
+generic architecture service lookup and mobile source imported for types.
+Base `4808f92` moves the exact provider lookup to the architecture
+workflow's caller. System-testing `8552fc5` names the three assigned service
+protocols and uses the public mobile data contracts in the test fixture.
+The composed worker passed its scoped compiler and static service
+declaration check with zero errors. All three focused mobile checks passed.
+The full publication check is still queued for the worker case.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

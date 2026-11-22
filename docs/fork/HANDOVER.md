@@ -358,6 +358,14 @@ scaffold passed the actual protected publication check with the corrected
 service declarations. The sample reached 75 live passes and one passed
 revalidation of a captured run.
 
+The fourth targeted group `st_43d11d8f8f7149afa07ca32914c0048c` exercised
+the blob-tree change. Reading a raw upload from another eval returned no
+tree because upload authority is bound to the original invocation.
+Creating, listing, diffing, materializing, and reading back the tree in
+one invocation all succeeded. System-testing `6b62143` makes that scope
+explicit. All 49 focused validators passed and the strict live check
+is queued again.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

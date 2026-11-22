@@ -344,6 +344,15 @@ targeted group stopped normally after three passes. The sample now has
 70 live passes and one additional pass on captured evidence. The third
 targeted group has started.
 
+The third targeted run `st_18c6e2ba1f82422c82f14aea8a9e8cbe` passed the
+installed typecheck extension, package import, worker RPC, and workerd
+worker suite. The To-Do panel now opened, accepted edits and completed its
+UI checks. One assertion targeted a button where the rendered element was
+a checkbox. The agent verified the checkbox and continued, then its
+publication was still pending at the scenario deadline. System-testing
+`e64099e` gives this case 15 minutes. All 13 focused lifecycle tests
+passed and the full live case is queued again.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

@@ -403,6 +403,15 @@ normally. There are 84 live passes and one separately validated captured
 merge. The exact remaining 15 named cases are now running in
 `second-retry/`, with the full template check following them.
 
+The second retry `st_79627a01bc3d4b8ba46289faddee7a3d` passed the child's
+private diff, the exact undo, and the historical recall with the cited
+commit opened. The retained-collaborator case launched a replacement child
+and merged before completing the intended follow-up. System-testing
+`af35534` asks for delivery to the original run address, both reviews,
+and one integration after them. All six focused orchestration and captured
+merge checks passed. The exact case is in `third-retry/` after the current
+batches. The full template check waits for that retry as well.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

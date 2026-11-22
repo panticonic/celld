@@ -434,6 +434,32 @@ response on error. The local test returned 502 for an interrupted body
 and then served healthy upstream and staged package requests. The registry
 was restarted for the active batch.
 
+The task-management agent built and opened its panel and worker. Its publish
+completed all 31 affected build checks and was refused. Exact candidate
+validation records show obsolete eval imports, generated program declaration
+resolution, a cross-repository performance type import, and untyped delivery
+evidence. The original worker bundle also reproduced two undeclared effects
+from the inherited conversation lifecycle. Host `593f372eb` recognizes the
+generated declarations in partial checkouts. Base `5d297c1` preserves the
+typed publication refusal and shows the first twenty diagnostics to the agent.
+System `727cfe6` declares the shared performance type dependency.
+System-testing `f095cce` uses admitted native eval runs and their receipts,
+validates delivered events, and declares the two reviewed fixture effects.
+All three implicated units passed focused compilation, including authority
+analysis with the original sealed worker module inventory. The 23 Host
+compiler and diagnostic tests, 46 native eval contract tests, and 23 Base
+VCS tool tests passed. The fresh task-management publication is queued in
+`third-retry/`.
+
+The To-Do agent built, repaired, refreshed, and published successfully. Its
+test still failed because one interaction expected the previous remaining
+count after completing the task. The trace subsequently showed the checked
+item, both filters, persistence after reload, responsive layout, deletion,
+and the exact protected-main publication. System-testing `98f5594` clarifies
+the post-action count and checked-item proof. All 13 project-lifecycle
+validators passed. The fresh To-Do run is also queued in `third-retry/`.
+The recorded sample is still 91 live passes and one revalidated captured merge.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

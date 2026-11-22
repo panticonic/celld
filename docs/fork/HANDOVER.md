@@ -482,6 +482,16 @@ System-testing `7927658` requests creation and readback in separate evals.
 The live blob case is queued alongside the version probe. There are 95 live
 passes and one verified captured merge, with four live cases still open.
 
+The third task-management retry completed the 31-project check and reduced
+the refusal to three provider declarations owned by the System-testing
+fixture. The native VCS tool displayed all three diagnostics and retained
+their structured repair data. System-testing `05e408e` declares the exact
+workspace-source and missions providers, and the channel provider's bounded
+object scope, for the package that resolves them. Applying the production
+authority matcher to the captured repair records confirms that the old
+manifest fails all three and the updated manifest covers all three.
+The fresh task-management retry is queued with these declarations.
+
 **Continuation, 2026-11-17.** P4 verification resumed in the feature worktrees.
 Host `feat/dolt-p0` runtime changes are at `763409214`; Base P4 is `66683ea` (bounded
 compaction inspection) and Base P2 is `66683ea` (promoted after the real-agent gate). System-testing P4 and P2 are `b64e74c` (65 real turns, normal fork and clean cleanup verified). Read "P4 continuation (2026-11-17)" in

@@ -6,6 +6,33 @@ work lives, what is done and how it was verified, and what is left, in order.
 The detailed per-stream handoffs it points to are authoritative for their own
 details; this file is authoritative for the overall order and the rules.
 
+**Main branch integration, 2026-11-24.** The owner authorized pushing the
+reviewed changes to `main`. The fork runtime checkpoint `5abb8f7` is on
+`panticonic/celld` main. Pi `2bbe8dee` is on `werg/pi-harness` main with
+37 focused storage tests passing. Chronolog `b9d4ac0` is on
+`werg/chronolog-db` main with 405 focused tests passing. Its cleanly built
+celld SDK also passed the host's archive verification. The independent
+Personal planning fixture fix `23b1cae` is on Personal main.
+
+The remaining integrations are committed locally under
+`~/.local/state/native-main-publish-20261123/`. The Vibestudio host
+`26ed43957` passed 36 focused history-read and runtime-cleanup tests.
+Its typecheck still reports current main's test evidence hooks and tests
+that need to move to the celld runtime and native execution code. The
+builtin catalog and runtime authority review also need verification on
+the merged host.
+
+The template merges there are Base `c5d4df9`, System `ba53257`,
+System-testing `9d69893`, Examples `703d565`, News `52ef9d7`,
+Google Workspace `310109f`, and Personal `610fe85`. The complete
+Vibestudio cutover needs an installable Pi `1.2.0-vibestudio.4-dolt.5`
+package set. The npm registry returned 404 for that version and npm
+authentication returned 401 on this machine. The host currently uses
+local Pi archives and System-testing needs the new host and Base APIs.
+Git pushes do not supply these artifacts. The paused verification
+checkpoint is still 98 of 100 agentic cases verified. The two open
+cases are task management and cross-eval blob transfer.
+
 **Current release status, 2026-11-21.** Section 5 records the latest
 release candidates and test evidence. The fresh-install and
 two-workspace checks passed, including independent account writes and

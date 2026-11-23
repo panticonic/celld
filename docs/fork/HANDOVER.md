@@ -9,29 +9,38 @@ details; this file is authoritative for the overall order and the rules.
 **Main branch integration, 2026-11-24.** The owner authorized pushing the
 reviewed changes to `main`. The fork runtime checkpoint `5abb8f7` is on
 `panticonic/celld` main. Pi `2bbe8dee` is on `werg/pi-harness` main with
-37 focused storage tests passing. Chronolog `b9d4ac0` is on
-`werg/chronolog-db` main with 405 focused tests passing. Its cleanly built
-celld SDK also passed the host's archive verification. The independent
-Personal planning fixture fix `23b1cae` is on Personal main.
+37 focused storage tests passing. The five Pi packages at
+`1.2.0-vibestudio.4-dolt.5` are public on npm under `vibestudio-dolt`.
+Their registry integrity hashes matched the archives, and a clean
+install loaded the native storage entry point.
 
-The remaining integrations are committed locally under
-`~/.local/state/native-main-publish-20261123/`. The Vibestudio host
-`26ed43957` passed 36 focused history-read and runtime-cleanup tests.
-Its typecheck still reports current main's test evidence hooks and tests
-that need to move to the celld runtime and native execution code. The
-builtin catalog and runtime authority review also need verification on
-the merged host.
+Chronolog's port passed 405 focused tests at `b9d4ac0`. Its main
+advanced to `47f9efe` so the celld SDK can be built independently of
+the WASM and native addon release tests. The dedicated run `45289726721`
+succeeded and its SDK passed Vibestudio's staging verification. The
+Vibestudio repository variables pin that run, source and archive hash.
 
-The template merges there are Base `c5d4df9`, System `ba53257`,
-System-testing `9d69893`, Examples `703d565`, News `52ef9d7`,
-Google Workspace `310109f`, and Personal `610fe85`. The complete
-Vibestudio cutover needs an installable Pi `1.2.0-vibestudio.4-dolt.5`
-package set. The npm registry returned 404 for that version and npm
-authentication returned 401 on this machine. The host currently uses
-local Pi archives and System-testing needs the new host and Base APIs.
-Git pushes do not supply these artifacts. The paused verification
-checkpoint is still 98 of 100 agentic cases verified. The two open
-cases are task management and cross-eval blob transfer.
+The Vibestudio host `8f82a1b93` and all seven template integrations
+are on remote main. Base is `e3a2859`, System is `ba53257`,
+System-testing is `9d69893`, Examples is `703d565`, News is `52ef9d7`,
+Google Workspace is `f112909`, and Personal is `02352ba`. The host
+now pins new workspaces to the exact Base, Personal, and System
+commits. A clean checkout of all three pins succeeded.
+
+The host passed typechecking, its frozen lockfile check, 145 focused
+tests, 35 workspace bootstrap tests, and an isolated Linux startup
+with all seven doctor checks passing. The dependency audit passed
+for eight configured templates and thirteen composed graphs. Base
+passed 77 focused checks across two runs, System passed 31, Google
+Workspace passed 56, and System-testing passed 102. The test campaign
+archives a retired celld object's own database streams, including its
+facets, before erasing it. The focused archive check passed with the
+real celld binary. Integration worktrees and logs are under
+`~/.local/state/native-main-publish-20261123/`.
+
+The paused verification checkpoint is still 98 of 100 agentic cases
+verified. The two open cases are task management and cross-eval blob
+transfer.
 
 **Current release status, 2026-11-21.** Section 5 records the latest
 release candidates and test evidence. The fresh-install and
